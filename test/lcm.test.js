@@ -156,13 +156,16 @@ test("effectiveMaxTokens delegates to the resolved budget", () => {
 
 // ── instruction ────────────────────────────────────────────────────────────
 
-test("buildInstruction states the budget and the verbatim-anchor rule", () => {
+test("buildInstruction states the budget and an enumerated anchor section", () => {
   const text = buildInstruction(4800, 40000, 0);
   assert.match(text, /40000 tokens/);
   assert.match(text, /4800 tokens/);
   assert.match(text, /8\.3:1/);
-  assert.match(text, /逐字保留/);
-  assert.match(text, /## 关键事实（逐字保留）/);
+  // The anti-loss clause is an enumeration instruction, not a prose request.
+  assert.match(text, /## 逐字锚点/);
+  assert.match(text, /每行一条，原样抄写/);
+  assert.match(text, /只要出现过就列出来/);
+  assert.match(text, /预算不够时先压前面几节/);
   assert.match(text, /no prior checkpoint/);
 });
 
