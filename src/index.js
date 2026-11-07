@@ -14,6 +14,7 @@
  * @module dsh-compaction-lcm
  */
 import z from "@deepseek-ai/schemastery";
+import { appendFileSync } from "node:fs";
 import { CompactionEngine, ManualCompactionError } from "@deepseek-ai/dsh-compaction";
 import { CONTEXT_WINDOW_EXCEEDED_CODE } from "@deepseek-ai/dsh-llm";
 import { assertNever } from "@deepseek-ai/dsh-util-values";
@@ -91,14 +92,14 @@ function engineDebug(config, line) {
   if (config.debug !== true) return;
   const text = `[dsh-compaction-lcm] engine: ${line}`;
   try {
-    if (typeof config.debugSink === "function") config.debugSink(text);
-  } catch {
-    /* a failing debug sink must never break the engine */
-  }
-  try {
     console.error(text);
   } catch {
     /* stderr may be unavailable in embedded contexts */
+  }
+  try {
+    appendFileSync(config.debugLogPath, `${text}\n`, "utf8");
+  } catch {
+    /* a failing debug log must never break the engine */
   }
 }
 

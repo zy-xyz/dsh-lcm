@@ -29,7 +29,10 @@
     "./command": {
       "default": "./src/command.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./config": {
+      "default": "./src/config.js"
+    }
   },
   "files": [
     "src",
