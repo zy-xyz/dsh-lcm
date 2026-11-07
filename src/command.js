@@ -22,10 +22,11 @@ export function resolveConfig(config = {}) {
   const maxRecallTokens = config.maxRecallTokens ?? DEFAULT_MAX_RECALL_TOKENS;
   const maxSearchHits = config.maxSearchHits ?? DEFAULT_MAX_SEARCH_HITS;
   const legacyNames = config.legacyNames ?? true;
+  const rank = config.rank ?? "seq";
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("CommandRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("CommandRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("CommandRecallConfig: legacyNames must be a boolean");
-  return { maxRecallTokens, maxSearchHits, legacyNames };
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank };
 }
 
 /** Execute one grep-based recall request against the calling agent's session. */

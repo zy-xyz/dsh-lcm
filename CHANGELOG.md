@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.6 — 2026-11-07
+
+Retrieval quality measured on production data — and a relevance ranking that lost.
+
+### Added
+
+- `bench/retrieval.mjs`: the hard half of recoverability. §7 of the report shows a
+  known seq comes back byte-exactly; this shows whether the agent can *find* that
+  seq from a string it remembers. Labels are the anchors a real production
+  summary dropped; metrics are recall@5/10 and MRR; no model is called.
+- `searchSession(..., { rank })` with three orders: `seq` (default), `score`
+  (match count), `density` (length-normalised). Exposed as the `rank` key on the
+  tool and command rows.
+- `test/search-rank.test.js` pins each ordering so a future change cannot
+  silently flip the default.
+
+### Measured (21 anchors from a real 436k-token compaction)
+
+| order | recall@5 | recall@10 | MRR |
+|---|---|---|---|
+| **seq (default)** | **0.905** | **0.952** | 0.335 |
+| score | 0.762 | 0.810 | 0.332 |
+| density | 0.857 | 0.952 | **0.414** |
+
+A second log (22 anchors): recall@5 0.955, recall@10 1.000.
+
+**The relevance ranking lost.** Raw match count favours long log dumps, not the
+answer; length-normalised density improves MRR but still trails on recall@5. The
+default stays chronological, and the report records the negative result rather
+than shipping a worse order that looked smarter.
+
+### Notes
+
+- recall@1 is 0 under every order: the top hit is always an event outside the
+  compacted span (the checkpoint itself contains the string), so @1 is not a
+  usable discriminator here. Look at @5 and MRR.
+- 54 tests.
+
+## 0.2.5 — 2026-11-07
 ## 0.2.5 — 2026-11-07
 
 The original backend's names are kept, not replaced.

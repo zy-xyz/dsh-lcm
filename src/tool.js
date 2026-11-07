@@ -31,10 +31,11 @@ export function resolveConfig(config = {}) {
   const maxRecallTokens = config.maxRecallTokens ?? DEFAULT_MAX_RECALL_TOKENS;
   const maxSearchHits = config.maxSearchHits ?? DEFAULT_MAX_SEARCH_HITS;
   const legacyNames = config.legacyNames ?? true;
+  const rank = config.rank ?? "seq";
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("ToolRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("ToolRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("ToolRecallConfig: legacyNames must be a boolean");
-  return { maxRecallTokens, maxSearchHits, legacyNames };
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank };
 }
 
 const RECALL_DESCRIPTION = "Restore the exact original content of earlier events in THIS conversation by a typed reference. type=\"seq\" with a seq selection id (\"3-7,15\", \"seq 12\", \"seqs 3-7\" — the checkpoint marker forms) restores those events; type=\"result\" with the \"result N\" pointer from a tool-call one-liner (\"result 3\" or \"3\") restores that tool result; type=\"checkpoint\" with an ordinal (\"1\" = oldest, as in a \"[checkpoint N]\" elision line) or a \"seq N\" pointer restores that full checkpoint. The durable log is append-only, so recalled content is always the original tokens. To find events by keyword or regex instead, use the search tool.";
