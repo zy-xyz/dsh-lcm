@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.9 — 2026-11-07
+
+Benchmarks no longer go through the agent's MCP transport, and the "equal budget"
+claim is now honest about which routes enforce it.
+
+### Added
+
+- `bench/llm.mjs`: direct OpenAI-compatible client with a caller-owned deadline
+  (the MCP path capped calls at ~60s, which is why the anchor-enumeration arm had
+  zero data) and credentials from the environment or `~/.dsh/.credentials.yaml`.
+- `bench/ab-one.mjs`: one arm-rep runner, ability to run **uncapped** (`none`).
+
+### Measured
+
+`max_tokens` is enforced per **route**, not per transport — same request, cap 40:
+`best`(glm-5.3) 40, `balanced-lite`(agnes-3.0-flash) 40,
+`deepseek-v4-flash-auto` **654**.
+
+Uncapped comparison on corpus s (14 anchors):
+
+| arm | hits | mean | tokens | anchors/1k |
+|---|---|---|---|---|
+| basic | 5,5,5,5,5 | 5.0 | 2700 | 1.85 |
+| lcm | 5,5,5,5 | 5.0 | **2182** | **2.29** |
+
+Same fidelity, ~19% fewer output tokens. With a hard 516-token generation cap:
+basic 2.5 vs lcm 3.5 — higher fidelity at the same cost.
+
+Neither direction is worse than the built-in backend. Numbers are on
+`balanced-lite` and must not be compared across the `deepseek` tables.
+
+## 0.2.8 — 2026-11-07
 ## 0.2.8 — 2026-11-07
 
 The retrieval ranking conclusion was inverted by an instrument bug. Corrected, and
