@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.2.3 — 2026-11-07
+
+The engine-level measurement the prompt A/B could not provide, plus a bug it found.
+
+### Measured
+
+`bench/recovery.mjs` runs the shipped `src/recall.js` against a real production
+log and answers the only question that distinguishes this backend from a
+summarizer-only one:
+
+| | value |
+|---|---|
+| span | 787 nodes / 436 194 tokens |
+| anchors the production summary carried | 3 / 24 (**12.5%**) |
+| anchors recovered byte-exactly via recall | 21 / 21 |
+| **anchors still obtainable by the model** | **24 / 24 (100%)** |
+| permanently lost | 0 |
+
+At 436k tokens no summary can hold everything; a summarizer-only checkpoint stops
+at whatever it wrote. This one carries `seq` pointers and a recall guide, so the
+remainder is one call away.
+
+### Fixed
+
+- **`session.events[seq]` was off by one on every persisted log.** A session file
+  begins with a header record that has no `seq`, so `recall` and `search`
+  reported `[seq N: not found in this session]` for real events. New
+  `src/events.js` resolves by the event's own `seq`, preferring the session's
+  `eventAt` accessor, and both modules now use it.
+
+### Added
+
+- `test/recovery.test.js` — header-shift regression, accessor preference,
+  byte-exact projection, and a production-log recovery test with a
+  **vacuous-pass guard**: if recall falls back to a raw JSON dump every
+  substring matches trivially, so the test requires the real projection.
+- 43 tests.
+- `bench/REPORT.md` §7 records the measurement and its honest boundary: basic is
+  not at zero (dsh ships `session_search`), but its checkpoint never points at it.
+
+## 0.2.2 — 2026-11-07
 ## 0.2.2 — 2026-11-07
 
 Two **fatal** bugs found by a test-coverage audit. The engine had never

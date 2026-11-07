@@ -20,17 +20,34 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 38 tests, identical defaults and budget math |
+| configuration is a drop-in superset of basic | **verified** — 43 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
-| this summary is better than basic's | **not established** — see below; the numbers point the other way |
+| **a dropped fact stays recoverable** | **verified on production data** — see below |
+| this summary is *denser* than basic's | **not established** — 3-arm ablation splits by corpus |
 | lcm is cheaper | **retracted** — it writes ~38% more on the span where it scores higher |
 
-**The 3-arm ablation (§ bench/REPORT.md) does not favour this engine.** On corpus c2
-it retains more verbatim anchors (51% vs 38%) while spending 38% more output
-tokens; on corpus s it retains *fewer* (32% vs 36%). The one `basic + anchor-clause`
-sample beat both. Whatever the anchor clause buys, it looks like a property of the
-prompt, not of the backend — so **basic remains the default engine** and this
-package stays an opt-in alternative.
+### The measured difference that is not a prompt trick
+
+On the real 436 194-token production span (`bench/recovery.mjs`):
+
+| | value |
+|---|---|
+| anchors the production summary actually carried | **3 / 24 (12.5%)** |
+| anchors recovered byte-exactly through `lcm_expand` | 21 / 21 |
+| **anchors the model can still obtain** | **24 / 24 (100%)** |
+| permanently lost | **0** |
+
+At that size **no summary can hold everything** — that is a capacity ceiling, not a
+model failure. A summarizer-only checkpoint stops at 12.5% because nothing in it
+tells the model the rest exists. This one carries `seq` pointers and a recall guide,
+so the rest is one call away.
+
+Precisely stated: *discoverable* recoverability goes from 12.5% to 100%. Basic is not
+at zero — `session_search` exists — but its checkpoint never points at it.
+
+Because the summary-density claim does not hold (corpus c2 favours this engine by
++12.5pp at +38% output tokens; corpus s reverses it), **basic remains the default
+engine** and this package stays an opt-in alternative.
 
 The honest structural claim, which needs no benchmark: **the checkpoint is a view
 over a log that keeps everything.** A summary that drops a path is recoverable

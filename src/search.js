@@ -13,6 +13,7 @@
  * @module dsh-compaction-lcm/search
  */
 import { estimateEntryTokens, sanitize, truncateTokens } from "./compiler.js";
+import { resolveEventAt } from "./events.js";
 import { projectMessageText } from "./recall.js";
 
 /** Default cap on the number of matching events shown in one result. */
@@ -61,7 +62,7 @@ export function searchSession(session, patternSource, config) {
   let budget = maxTokens;
   let truncated = false;
   for (let seq = 0; seq < events.length; seq += 1) {
-    const event = events[seq];
+    const event = resolveEventAt(session, seq);
     if (event === undefined || event.seq !== seq) continue;
     const message = typeof session.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
     const body = message !== null

@@ -77,3 +77,55 @@ node bench/span.mjs <session.v4.jsonl.zstd> [--max-tokens 8000|--last 120|--rang
 
 原始行数据：`/tmp/ablate.jsonl`（c2）与 `/tmp/ablate2.jsonl`（s）—— 已随本次提交固化到
 `bench/results/ablation-20261107.json`。
+## 7. 引擎级实测（唯一能支撑"换"的那类证据）
+
+前面全部是 prompt 级指标。这一节是真的跑代码、真的对真实生产日志量的。
+
+用 `bench/recovery.mjs` + 仓库里真实发货的 `src/recall.js`，对 `d45c83f5` 的**真实生产压缩跨度**：
+
+| 指标 | 值 |
+|---|---|
+| 跨度 | **787 节点 / 436 194 token** |
+| 生产摘要实际携带的锚点 | **3 / 24（12.5%）** |
+| 通过 recall 找回的锚点 | **21 / 21** |
+| **模型可获得的锚点合计** | **24 / 24（100%）** |
+| 彻底丢失 | **0** |
+
+复现：
+
+```bash
+node bench/recovery.mjs <session.v4.jsonl.zstd>
+```
+
+### 为什么这条比前面的 prompt 对比重要
+
+436k token 的跨度上，**任何摘要都装不下全部锚点** —— 生产摘要只留下 12.5%。
+这不是模型不够好，是摘要本身的容量天花板。
+
+- **摘要型 backend**：checkpoint 里有多少就是多少，12.5% 之后剩下的没了（模型侧没有指针）
+- **本 backend**：checkpoint 里同样只有一部分，但每个 checkpoint 都带 `seq` 指针和
+  RECALL 指南，`lcm_expand` 能把原文逐字取回 → 100%
+
+**这才是架构差异，且不依赖任何 prompt 技巧。**
+
+### 与此同时发现的真 bug
+
+写这个测量时发现 `recall.js` 用 `session.events[seq]` 直接下标。持久化日志的**第一条是
+没有 `seq` 的 header 记录**，于是每个 seq 都错位一格，每次 recall 都返回
+`[seq N: not found in this session]`。
+
+修复：新增 `src/events.js` 的 `resolveEventAt()`，优先用 session 自己的
+`eventAt`，否则按事件自身的 `seq` 建索引（缓存）。`recall.js` / `search.js` 全部改用它。
+
+回归测试在 `test/recovery.test.js`，其中包括一条**防空过**断言：若 recall 走了
+raw-JSON fallback，子串永远能命中，测试就失去意义 —— 所以强制要求走 projection。
+
+### 诚实的边界
+
+basic 在大跨度上不是"0"：dsh 有 `session_search` 系列工具，模型**如果自己想起来去搜**
+也能找回。差别在于：
+
+- 本 backend 的 checkpoint **主动告诉模型怎么找**（RECALL 指南 + 每个条目的 `seq`）
+- basic 的 checkpoint **什么也不说**，找回全靠模型自己想到
+
+所以准确的表述是「**可发现的可恢复性** 12.5% → 100%」，而不是「basic 完全找不回」。
