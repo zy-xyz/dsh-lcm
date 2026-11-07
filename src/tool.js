@@ -21,7 +21,8 @@
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { DEFAULT_MAX_RECALL_TOKENS, recallSession, resolveRecallReference } from "./recall.js";
-import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, searchSession } from "./search.js";
+import { DEFAULT_MAX_SEARCH_HITS, HYBRID_RANK_MODES, InvalidSearchPatternError, RANK_MODES, searchSessionHybrid } from "./search.js";
+import { resolveVectorConfig } from "./vectors.js";
 
 export const name = "tool-lcm-expand";
 export const inject = ["tools"];
@@ -35,7 +36,12 @@ export function resolveConfig(config = {}) {
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("ToolRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("ToolRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("ToolRecallConfig: legacyNames must be a boolean");
-  return { maxRecallTokens, maxSearchHits, legacyNames, rank };
+  if (typeof rank !== "string" || !RANK_MODES.includes(rank) && !HYBRID_RANK_MODES.includes(rank)) {
+    throw new Error("ToolRecallConfig: rank must be one of " + [...RANK_MODES, ...HYBRID_RANK_MODES].join(", ") + " (vector/hybrid need vectorEnabled)");
+  }
+  // The vector keys ride along so the search handler can read them; they are
+  // inert unless `vectorEnabled` is true and `rank` names a vector mode.
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank, ...resolveVectorConfig(config) };
 }
 
 const RECALL_DESCRIPTION = "Restore the exact original content of earlier events in THIS conversation by a typed reference. type=\"seq\" with a seq selection id (\"3-7,15\", \"seq 12\", \"seqs 3-7\" — the checkpoint marker forms) restores those events; type=\"result\" with the \"result N\" pointer from a tool-call one-liner (\"result 3\" or \"3\") restores that tool result; type=\"checkpoint\" with an ordinal (\"1\" = oldest, as in a \"[checkpoint N]\" elision line) or a \"seq N\" pointer restores that full checkpoint. The durable log is append-only, so recalled content is always the original tokens. To find events by keyword or regex instead, use the search tool.";
@@ -141,12 +147,14 @@ export function defineSearchTool(resolved, toolName = "lcm_search") {
       }
     },
     output: SEARCH_OUTPUT,
-    execute(args, exec) {
+    async execute(args, exec) {
       const agent = exec.agent;
       if (agent === undefined) throw new HarnessError("search requires a calling agent with a session", "RECALL_AGENT_REQUIRED");
       let result;
       try {
-        result = searchSession(agent.session, args.pattern, resolved);
+        // Hybrid collapses to the lexical search, byte for byte, whenever the
+        // vector layer is off (the default) or `rank` names a lexical mode.
+        result = await searchSessionHybrid(agent.session, args.pattern, resolved, exec.signal);
       } catch (error) {
         if (error instanceof InvalidSearchPatternError) throw new HarnessError(error.message, "SEARCH_INVALID_PATTERN", { cause: error });
         throw error;

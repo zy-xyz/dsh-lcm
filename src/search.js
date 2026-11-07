@@ -1,20 +1,28 @@
 /**
- * Keyword/regex search over the durable session log for `dsh-lcm`.
+ * Keyword/regex search over the durable session log for dsh-lcm.
  *
  * The retrieval counterpart of compaction: the append-only session log is the
  * full transcript, so this module scans every event's projected content and
- * returns the matching events with their `(seq N)` pointers. An agent (or the
- * `/recall` command) can then call recall with any pointer to restore the exact
+ * returns the matching events with their (seq N) pointers. An agent (or the
+ * /recall command) can then call recall with any pointer to restore the exact
  * original tokens.
  *
  * Nothing is modified, nothing is elided — only the rendered hit lines are
- * bounded, by the shared `maxRecallTokens` budget and a per-hit line cap.
+ * bounded, by the shared maxRecallTokens budget and a per-hit line cap.
+ *
+ * Two entry points share one collection step:
+ *
+ *   - searchSession — lexical only, synchronous, the default;
+ *   - searchSessionHybrid — lexical, then optionally the semantic route from
+ *     ./vectors.js (order changed, output shape unchanged). With
+ *     vectorEnabled: false it *is* searchSession.
  *
  * @module dsh-lcm/search
  */
 import { estimateEntryTokens, sanitize, truncateTokens } from "./compiler.js";
 import { resolveEventAt } from "./events.js";
 import { projectMessageText } from "./recall.js";
+import { RRF_K, hybridRank, rankByVector, resolveVectorConfig } from "./vectors.js";
 
 /** Default cap on the number of matching events shown in one result. */
 export const DEFAULT_MAX_SEARCH_HITS = 50;
@@ -24,14 +32,27 @@ export const MAX_LINES_PER_HIT = 10;
 /**
  * How one result set is ordered.
  *
- * `density` is the default because it won on production data: measured against
+ * density is the default because it won on production data: measured against
  * the anchors real summaries had dropped, length-normalised density beat plain
  * chronological order on recall@1 (0.71 vs 0.38), MRR (0.79 vs 0.58) and
  * NDCG@10 (0.83 vs 0.67), with recall@5 tied. An earlier measurement said the
  * opposite; that instrument had an off-by-one in the rank it recorded, and the
- * correction is recorded in bench/REPORT.md §14.
+ * correction is recorded in bench/REPORT.md section 14.
  */
 export const RANK_MODES = Object.freeze(["seq", "score", "density"]);
+
+/**
+ * Ranks that need the optional vector layer.
+ *
+ * Kept out of RANK_MODES on purpose: those three are pure lexical orderings
+ * that searchSession implements synchronously, and folding an asynchronous
+ * rank into that contract would make every caller pay for a feature it never
+ * asked for.
+ */
+export const HYBRID_RANK_MODES = Object.freeze(["vector", "hybrid"]);
+
+/** The lexical ordering the hybrid routes start from (the measured default). */
+const LEXICAL_BASE_RANK = "density";
 
 /** A search pattern that cannot be compiled into a regular expression. */
 export class InvalidSearchPatternError extends Error {
@@ -96,12 +117,35 @@ function densityOf(candidate, lastSeq) {
   return (candidate.count * 1000) / size + recency * 0.001;
 }
 
-/** One search hit: the durable seq, its kind, and the rendered matched lines. */
-export function searchSession(session, patternSource, config) {
-  const pattern = compileSearchPattern(patternSource);
-  const maxHits = config.maxSearchHits;
-  const maxTokens = config.maxRecallTokens;
-  const rankMode = config.rank ?? "density";
+/**
+ * Project one event into the text a search (or an embedding) sees.
+ *
+ * Both routes read the event through this, so a vector hit and a lexical hit
+ * are hits on the same bytes: deriveEventMessage is the session's own
+ * projection, and the raw-event fallback is the one lexical search always used.
+ * @param session - session-shaped value.
+ * @param event - one resolved event.
+ * @returns the rendered body and the kind label shown in a hit header.
+ */
+function eventBody(session, event) {
+  const message = typeof session.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
+  return {
+    body: message !== null
+      ? projectMessageText(message)
+      : "[" + event.type + "]\n" + JSON.stringify(event.data ?? null),
+    kind: message !== null ? message.role : event.type
+  };
+}
+
+/**
+ * Collect and order the lexical hits for one pattern. Not exported: the hit
+ * set is an internal step that both entry points share.
+ * @param session - session-shaped value with events.
+ * @param pattern - compiled search pattern.
+ * @param rankMode - one of RANK_MODES; unknown values keep log order.
+ * @returns the ordered candidates, the match population, and the last seq.
+ */
+function collectHits(session, pattern, rankMode) {
   const events = session.events;
   const collected = [];
   let totalMatches = 0;
@@ -110,10 +154,7 @@ export function searchSession(session, patternSource, config) {
     const event = resolveEventAt(session, seq);
     if (event === undefined || event.seq !== seq) continue;
     lastSeq = seq;
-    const message = typeof session.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
-    const body = message !== null
-      ? projectMessageText(message)
-      : "[" + event.type + "]\n" + JSON.stringify(event.data ?? null);
+    const { body, kind } = eventBody(session, event);
     const lines = body.split("\n");
     const matched = [];
     for (let index = 0; index < lines.length; index += 1) {
@@ -123,7 +164,7 @@ export function searchSession(session, patternSource, config) {
     totalMatches += 1;
     collected.push({
       seq,
-      kind: message !== null ? message.role : event.type,
+      kind,
       matched,
       count: matched.length,
       estimate: estimateEntryTokens(body)
@@ -134,27 +175,60 @@ export function searchSession(session, patternSource, config) {
   } else if (rankMode === "density") {
     collected.sort((a, b) => densityOf(b, lastSeq) - densityOf(a, lastSeq) || b.seq - a.seq);
   }
+  return { collected, totalMatches, lastSeq };
+}
+
+/**
+ * Render ordered candidates into hits under the shared hit and token budgets.
+ * @param candidates - ordered candidates with seq, kind and matched lines.
+ * @param maxHits - per-result hit cap.
+ * @param maxTokens - per-result token budget.
+ * @returns the rendered hits and whether anything was cut.
+ */
+function renderHits(candidates, maxHits, maxTokens) {
   const hits = [];
   let budget = maxTokens;
   let truncated = false;
-  for (const candidate of collected) {
+  for (const candidate of candidates) {
     if (hits.length >= maxHits || budget <= 0) {
       truncated = true;
       continue;
     }
-    const header = "[seq " + candidate.seq + ": " + candidate.kind + "]";
+    const header = "[seq " + candidate.seq + ": " + candidate.kind + "]" + (candidate.headerSuffix ?? "");
     const shown = candidate.matched.slice(0, MAX_LINES_PER_HIT);
     const more = candidate.matched.length - shown.length;
     const block = [
       header,
       ...shown.map((match) => "  " + match.line + ": " + match.text),
-      ...(more > 0 ? ["  ...(" + more + " more matching lines in this event)"] : [])
+      ...(more > 0 ? [candidate.moreNote ?? "  ...(" + more + " more matching lines in this event)"] : [])
     ].join("\n");
     const kept = truncateTokens(block, budget, "search budget");
     budget -= estimateEntryTokens(kept.text);
     if (kept.truncated) truncated = true;
     hits.push({ seq: candidate.seq, kind: candidate.kind, text: kept.text });
   }
+  return { hits, truncated };
+}
+
+/** Total priced tokens of one hit set. */
+function tokensOf(hits) {
+  return hits.reduce((total, hit) => total + estimateEntryTokens(hit.text), 0);
+}
+
+/**
+ * Search one session with the lexical ranking only.
+ * @param session - session-shaped value with events.
+ * @param patternSource - keyword or regular expression.
+ * @param config - maxSearchHits, maxRecallTokens and rank.
+ * @returns the ordered hit set and its rendered text.
+ */
+export function searchSession(session, patternSource, config) {
+  const pattern = compileSearchPattern(patternSource);
+  const maxHits = config.maxSearchHits;
+  const maxTokens = config.maxRecallTokens;
+  const rankMode = config.rank ?? "density";
+  const { collected, totalMatches } = collectHits(session, pattern, rankMode);
+  const { hits, truncated } = renderHits(collected, maxHits, maxTokens);
   const omitted = totalMatches - hits.length;
   const lines = [
     '[search "' + pattern.source + '": ' + totalMatches + " matching event(s)]",
@@ -173,7 +247,153 @@ export function searchSession(session, patternSource, config) {
     omitted,
     truncated,
     rank: rankMode,
-    tokens: hits.reduce((total, hit) => total + estimateEntryTokens(hit.text), 0),
+    tokens: tokensOf(hits),
     text
   };
+}
+
+/**
+ * Search one session with the lexical ranking, plus the optional semantic one.
+ *
+ * rank decides the route, and only these values consult the vector layer:
+ *
+ *   - "vector" — rank the session's events by cosine similarity to the pattern
+ *     text, which is read as a question rather than as a regex. There is no
+ *     matching population on this route, so totalMatches is hits.length and the
+ *     result carries mode: "vector" to make that unambiguous.
+ *   - "hybrid" — the lexical ranking and the vector ranking fused with RRF, both
+ *     routes keeping their own ranks. totalMatches keeps its lexical meaning
+ *     (how many events matched the pattern) and mode: "hybrid" marks the order.
+ *
+ * Every other rank value, and every configuration with vectorEnabled: false,
+ * delegates to searchSession unchanged: no request, no extra cost, and output
+ * that is byte-for-byte the lexical result.
+ *
+ * An unreachable or failing backend never fails the call: the lexical result is
+ * returned with a notice field and the same sentence appended to its text.
+ *
+ * @param session - session-shaped value with events.
+ * @param patternSource - keyword, regex, or natural-language question.
+ * @param config - maxSearchHits, maxRecallTokens, rank and the vector keys.
+ * @param signal - optional caller abort signal for the embedding request.
+ * @returns the shape searchSession returns, plus mode or notice when set.
+ */
+export async function searchSessionHybrid(session, patternSource, config, signal) {
+  const rankMode = config.rank ?? "density";
+  const vectorConfig = resolveVectorConfig(config);
+  if (!vectorConfig.enabled || !HYBRID_RANK_MODES.includes(rankMode)) {
+    // A mode that asked for vectors while the layer is off still gets a sane
+    // lexical order rather than the unsorted log order an unknown rank yields.
+    const lexicalRank = HYBRID_RANK_MODES.includes(rankMode) ? LEXICAL_BASE_RANK : rankMode;
+    return searchSession(session, patternSource, { ...config, rank: lexicalRank });
+  }
+  const pattern = compileSearchPattern(patternSource);
+  const lexical = collectHits(session, pattern, LEXICAL_BASE_RANK);
+  const items = collectVectorItems(session);
+  let ranked;
+  try {
+    // In vector mode every candidate is ranked and top-K is the answer; in
+    // hybrid mode the vector route contributes its top-K ranks only.
+    ranked = await rankByVector(vectorConfig, items, pattern.source, signal);
+  } catch (error) {
+    return degradeToLexical(session, patternSource, config, error);
+  }
+  const scores = new Map(ranked.map((entry) => [entry.seq, entry.score]));
+  const lexicalBySeq = new Map(lexical.collected.map((candidate) => [candidate.seq, candidate]));
+  const order = rankMode === "vector"
+    ? ranked.map((entry) => entry.seq)
+    : hybridRank(vectorConfig, lexical.collected, ranked, RRF_K).map((entry) => entry.seq);
+  const candidates = [];
+  for (const seq of order) {
+    const suffix = scores.has(seq) ? " (cosine " + scores.get(seq).toFixed(3) + ")" : "";
+    const known = lexicalBySeq.get(seq);
+    if (known !== undefined) {
+      candidates.push({ ...known, headerSuffix: suffix });
+      continue;
+    }
+    const candidate = bodyHeadCandidate(session, seq);
+    if (candidate !== null) candidates.push({ ...candidate, headerSuffix: suffix });
+  }
+  const { hits, truncated } = renderHits(candidates, config.maxSearchHits, config.maxRecallTokens);
+  const tokens = tokensOf(hits);
+  if (rankMode === "vector") {
+    const lines = [
+      '[vector "' + pattern.source + '": ' + hits.length + " event(s) by cosine similarity (top " + vectorConfig.topK + ")]",
+      ...hits.map((hit) => hit.text),
+      ...(truncated ? ["[search budget exhausted; some hits were cut]"] : [])
+    ];
+    if (hits.length > 0) {
+      lines.push("[use recall with a (seq N) pointer to restore any hit's full original content]");
+    }
+    return {
+      pattern: pattern.source,
+      // No matching population exists on this route; the hits are the answer.
+      totalMatches: hits.length,
+      hits,
+      omitted: 0,
+      truncated,
+      rank: rankMode,
+      tokens,
+      text: lines.join("\n\n"),
+      mode: "vector"
+    };
+  }
+  const shownLexical = hits.filter((hit) => lexicalBySeq.has(hit.seq)).length;
+  const omitted = Math.max(0, lexical.totalMatches - shownLexical);
+  const lines = [
+    '[hybrid "' + pattern.source + '": ' + lexical.totalMatches + " lexical match(es) + " + ranked.length + " vector candidate(s), RRF k=" + RRF_K + "]",
+    ...hits.map((hit) => hit.text),
+    ...(omitted > 0 ? ["[" + omitted + " more matching event(s) omitted — narrow the pattern or use recall]"] : []),
+    ...(truncated ? ["[search budget exhausted; some hits were cut]"] : [])
+  ];
+  if (hits.length > 0) {
+    lines.push("[use recall with a (seq N) pointer to restore any hit's full original content]");
+  }
+  return {
+    pattern: pattern.source,
+    totalMatches: lexical.totalMatches,
+    hits,
+    omitted,
+    truncated,
+    rank: rankMode,
+    tokens,
+    text: lines.join("\n\n"),
+    mode: "hybrid"
+  };
+}
+
+/** Every renderable event of one session, as embedding candidates. */
+function collectVectorItems(session) {
+  const events = Array.isArray(session.events) ? session.events : [];
+  const items = [];
+  for (const event of events) {
+    if (!Number.isSafeInteger(event?.seq)) continue;
+    const { body } = eventBody(session, event);
+    if (body.length === 0) continue;
+    items.push({ seq: event.seq, text: body });
+  }
+  return items;
+}
+
+/** A vector-only hit: the head of an event the pattern never matched. */
+function bodyHeadCandidate(session, seq) {
+  const event = resolveEventAt(session, seq);
+  if (event === undefined) return null;
+  const { body, kind } = eventBody(session, event);
+  const lines = body.split("\n");
+  const shown = Math.min(lines.length, MAX_LINES_PER_HIT);
+  return {
+    seq,
+    kind,
+    matched: lines.slice(0, shown).map((text, index) => ({ line: index + 1, text: sanitize(text) })),
+    moreNote: lines.length > shown ? "  ...(" + (lines.length - shown) + " more line(s) in this event)" : undefined
+  };
+}
+
+/** Return the lexical ranking unchanged, with one notice about the backend. */
+function degradeToLexical(session, patternSource, config, error) {
+  const reason = error instanceof Error ? error.message : String(error);
+  const notice = "vector backend unreachable: " + reason + "; fell back to lexical";
+  const result = searchSession(session, patternSource, { ...config, rank: LEXICAL_BASE_RANK });
+  return { ...result, notice, text: result.text + "\n\n[" + notice + "]" };
 }

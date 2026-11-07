@@ -20,6 +20,9 @@
     "./search": {
       "default": "./src/search.js"
     },
+    "./vectors": {
+      "default": "./src/vectors.js"
+    },
     "./summarize": {
       "default": "./src/summarize.js"
     },
@@ -40,7 +43,7 @@
     "README.md"
   ],
   "scripts": {
-    "check": "node --check src/index.js && node --check src/summarize.js && node --check src/region.js && node --check src/compiler.js && node --check src/tool.js && node --check src/command.js && node --check src/recall.js && node --check src/search.js",
+    "check": "node --check src/index.js && node --check src/summarize.js && node --check src/region.js && node --check src/compiler.js && node --check src/tool.js && node --check src/command.js && node --check src/recall.js && node --check src/search.js && node --check src/vectors.js",
     "test": "node --test"
   },
   "engines": {

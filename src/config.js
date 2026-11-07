@@ -23,6 +23,15 @@
  * @module dsh-lcm/config
  */
 import { deepFreeze } from "@deepseek-ai/dsh-util-values";
+import {
+  DEFAULT_VECTOR_BASE_URL,
+  DEFAULT_VECTOR_CACHE_DIR,
+  DEFAULT_VECTOR_DIM,
+  DEFAULT_VECTOR_ENABLED,
+  DEFAULT_VECTOR_MODEL,
+  DEFAULT_VECTOR_TIMEOUT_MS,
+  DEFAULT_VECTOR_TOPK
+} from "./vectors.js";
 
 // ── defaults (basic-compatible values are marked) ──────────────────────────
 
@@ -52,8 +61,27 @@ const POLICY_KEYS = [
   "maxOverflowRetries"
 ];
 
-/** LCM-only tuning keys. Top-level only; not valid inside modelPolicies. */
-const LCM_KEYS = ["summaryRatio", "summaryFloorTokens", "checkpointCap", "debug", "debugLogPath"];
+/**
+ * LCM-only tuning keys. Top-level only; not valid inside modelPolicies.
+ *
+ * The seven `vector*` keys configure the optional semantic recall layer
+ * (`./vectors.js`). They default to off, so resolving a configuration that
+ * never mentions them changes no behavior.
+ */
+const LCM_KEYS = [
+  "summaryRatio",
+  "summaryFloorTokens",
+  "checkpointCap",
+  "debug",
+  "debugLogPath",
+  "vectorEnabled",
+  "vectorBaseUrl",
+  "vectorModel",
+  "vectorDim",
+  "vectorTopK",
+  "vectorTimeoutMs",
+  "vectorCacheDir"
+];
 
 /** Complete public top-level key set. */
 const CONFIG_KEYS = new Set([...POLICY_KEYS, ...LCM_KEYS, "modelPolicies", "auto"]);
@@ -135,7 +163,15 @@ export function resolveConfig(config = {}) {
     summaryFloorTokens: config.summaryFloorTokens ?? DEFAULT_SUMMARY_FLOOR_TOKENS,
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
     debug,
-    debugLogPath
+    debugLogPath,
+    // ── optional vector recall (inert unless vectorEnabled) ──
+    vectorEnabled: config.vectorEnabled ?? DEFAULT_VECTOR_ENABLED,
+    vectorBaseUrl: config.vectorBaseUrl ?? DEFAULT_VECTOR_BASE_URL,
+    vectorModel: config.vectorModel ?? DEFAULT_VECTOR_MODEL,
+    vectorDim: config.vectorDim ?? DEFAULT_VECTOR_DIM,
+    vectorTopK: config.vectorTopK ?? DEFAULT_VECTOR_TOPK,
+    vectorTimeoutMs: config.vectorTimeoutMs ?? DEFAULT_VECTOR_TIMEOUT_MS,
+    vectorCacheDir: config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR
   });
 }
 
@@ -296,6 +332,13 @@ function validatePolicy(config, name) {
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.debug !== undefined && typeof config.debug !== "boolean") throw new Error(`${name}.debug must be a boolean`);
   if (config.debugLogPath !== undefined && typeof config.debugLogPath !== "string") throw new Error(`${name}.debugLogPath must be a string`);
+  if (config.vectorEnabled !== undefined && typeof config.vectorEnabled !== "boolean") throw new Error(`${name}.vectorEnabled must be a boolean`);
+  if (config.vectorBaseUrl !== undefined) assertNonEmptyString(`${name}.vectorBaseUrl`, config.vectorBaseUrl);
+  if (config.vectorModel !== undefined) assertNonEmptyString(`${name}.vectorModel`, config.vectorModel);
+  if (config.vectorDim !== undefined) assertPositiveInteger(`${name}.vectorDim`, config.vectorDim);
+  if (config.vectorTopK !== undefined) assertPositiveInteger(`${name}.vectorTopK`, config.vectorTopK);
+  if (config.vectorTimeoutMs !== undefined) assertPositiveInteger(`${name}.vectorTimeoutMs`, config.vectorTimeoutMs);
+  if (config.vectorCacheDir !== undefined) assertNonEmptyString(`${name}.vectorCacheDir`, config.vectorCacheDir);
 }
 
 /** Require one scope to omit, clear, or replace the summarization target as a pair. */
