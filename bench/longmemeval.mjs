@@ -61,7 +61,16 @@ const printJson = argv.includes("--json");
 const cacheDir = path.resolve(REPO, String(opt("cache-dir", path.join("bench", ".embed-cache"))));
 const stamp = new Date();
 const ymd = String(stamp.getUTCFullYear()) + String(stamp.getUTCMonth() + 1).padStart(2, "0") + String(stamp.getUTCDate()).padStart(2, "0");
-const outBase = path.resolve(REPO, String(opt("out", path.join("bench", "results", "longmemeval-" + ymd))));
+// The output name carries the run's scope. Without it a 3-question validation run
+// overwrote the committed 500-question results, silently replacing a full run
+// with a sample - which is exactly the kind of thing nobody notices in review.
+const sampleRawForName = opt("sample", null);
+const scope =
+  sampleRawForName !== null ? "-sample" + sampleRawForName : limitRaw !== null ? "-limit" + limitRaw : "";
+const outBase = path.resolve(
+  REPO,
+  String(opt("out", path.join("bench", "results", "longmemeval-" + ymd + scope)))
+);
 
 const RANK_MODES = rankArg === "all"
   ? [...LEXICAL_RANKS]
