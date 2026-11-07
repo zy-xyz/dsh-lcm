@@ -19,9 +19,8 @@
  *
  * @module dsh-lcm/search
  */
-import { estimateEntryTokens, sanitize, truncateTokens } from "./compiler.js";
+import { estimateEntryTokens, renderEventBody, sanitize, truncateTokens } from "./compiler.js";
 import { resolveEventAt } from "./events.js";
-import { projectMessageText } from "./recall.js";
 import { RRF_K, hybridRank, rankByVector, resolveVectorConfig } from "./vectors.js";
 
 /** Default cap on the number of matching events shown in one result. */
@@ -128,13 +127,7 @@ function densityOf(candidate, lastSeq) {
  * @returns the rendered body and the kind label shown in a hit header.
  */
 function eventBody(session, event) {
-  const message = typeof session.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
-  return {
-    body: message !== null
-      ? projectMessageText(message)
-      : "[" + event.type + "]\n" + JSON.stringify(event.data ?? null),
-    kind: message !== null ? message.role : event.type
-  };
+  return renderEventBody(session, event);
 }
 
 /**

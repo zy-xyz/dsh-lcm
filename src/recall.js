@@ -14,7 +14,7 @@
  *
  * @module dsh-lcm/recall
  */
-import { estimateEntryTokens, isCheckpointSource, projectToolResultText, sanitize, truncateTokens } from "./compiler.js";
+import { estimateEntryTokens, isCheckpointSource, projectMessageText, truncateTokens } from "./compiler.js";
 import { resolveEventAt } from "./events.js";
 
 /** Default total budget for one recall operation, in density-aware tokens. */
@@ -60,42 +60,8 @@ export function parseSeqSpec(input) {
   return { selections, errors };
 }
 
-/**
- * Project one derived message into plain text, keeping everything: text,
- * reasoning, raw tool-call arguments, and nested tool-result content.
- * Recall is the lossless layer, so nothing is elided here except media,
- * which renders as labels (their bytes live in the attachment service).
- * @param message - derived message (`Session.deriveEventMessage` output).
- * @returns full plain-text projection.
- */
-export function projectMessageText(message) {
-  const parts = [];
-  for (const block of message.content) {
-    switch (block.type) {
-      case "text":
-        if (block.text !== undefined && block.text.length > 0) parts.push(sanitize(block.text));
-        break;
-      case "reasoning":
-        if (block.text !== undefined && block.text.length > 0) parts.push(`[reasoning]\n${sanitize(block.text)}`);
-        break;
-      case "tool-call":
-        parts.push(`[tool-call ${block.name ?? "unknown"}]\n${sanitize(block.arguments ?? "")}`);
-        break;
-      case "tool-result":
-        parts.push(`[tool-result]\n${projectToolResultText(block.content ?? [])}`);
-        break;
-      case "image":
-        parts.push("[image]");
-        break;
-      case "document":
-        parts.push("[document]");
-        break;
-      default:
-        parts.push(`[${String(block.type)}]`);
-    }
-  }
-  return parts.join("\n");
-}
+/** Re-exported so existing importers keep working; the definition is in compiler.js. */
+export { projectMessageText } from "./compiler.js";
 
 /**
  * Expand ordered selections into a deduplicated ordered seq list.

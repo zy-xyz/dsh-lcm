@@ -209,6 +209,68 @@ export function isCheckpointSource(source) {
   return source !== undefined && source !== null && source.kind === "compact-checkpoint";
 }
 
+
+// ── event rendering ────────────────────────────────────────────────────────
+
+/**
+ * Project one derived message into plain text, keeping everything: text,
+ * reasoning, raw tool-call arguments, and nested tool-result content.
+ *
+ * This is the single definition of the bytes of an event. Search matches lines
+ * of it, recall restores it, and anchor attribution looks anchors up in it — so
+ * all three must use this one function. When search and attribution rendered
+ * events separately, an anchor could be attributed against different bytes than
+ * search would match, producing a pointer into the wrong event.
+ * @param message - derived message (Session.deriveEventMessage output).
+ * @returns full plain-text projection.
+ */
+export function projectMessageText(message) {
+  const parts = [];
+  for (const block of message.content) {
+    switch (block.type) {
+      case "text":
+        if (block.text !== undefined && block.text.length > 0) parts.push(sanitize(block.text));
+        break;
+      case "reasoning":
+        if (block.text !== undefined && block.text.length > 0) parts.push("[reasoning]\n" + sanitize(block.text));
+        break;
+      case "tool-call":
+        parts.push("[tool-call " + (block.name ?? "unknown") + "]\n" + sanitize(block.arguments ?? ""));
+        break;
+      case "tool-result":
+        parts.push("[tool-result]\n" + projectToolResultText(block.content ?? []));
+        break;
+      case "image":
+        parts.push("[image]");
+        break;
+      case "document":
+        parts.push("[document]");
+        break;
+      default:
+        parts.push("[" + String(block.type) + "]");
+    }
+  }
+  return parts.join("\n");
+}
+
+/**
+ * Render one event the way the model saw it and the way every reader sees it.
+ *
+ * Raw events that derive no message fall back to a labelled JSON dump, which is
+ * also what search and recall fall back to — the fallback has to be shared too,
+ * or the three readers disagree exactly on the events nobody looks at.
+ * @param session - session-shaped value supplying deriveEventMessage.
+ * @param event - the event to render.
+ * @returns the rendered body and the kind label search reports.
+ */
+export function renderEventBody(session, event) {
+  const message = typeof session?.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
+  if (message !== null && message !== undefined) {
+    return { body: projectMessageText(message), kind: message.role };
+  }
+  return { body: "[" + event.type + "]\n" + JSON.stringify(event.data ?? null), kind: event.type };
+}
+
 // ── checkpoint framing ─────────────────────────────────────────────────────
 
 /**

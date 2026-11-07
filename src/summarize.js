@@ -20,7 +20,7 @@
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { resolveEventAt } from "./events.js";
-import { projectMessageText } from "./recall.js";
+import { renderEventBody } from "./compiler.js";
 
 /**
  * Section skeleton the summary must follow.
@@ -237,9 +237,9 @@ const HEADING_RE = /^#{1,6}\s/u;
 function spanBody(session, seq) {
   const event = resolveEventAt(session, seq);
   if (event === undefined) return undefined;
-  const message = typeof session.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
-  if (message !== null) return projectMessageText(message);
-  return "[" + event.type + "]\n" + JSON.stringify(event.data ?? null);
+  // Same renderer search uses, so an attributed pointer names the event that
+  // lcm_search would have found for the same anchor.
+  return renderEventBody(session, event).body;
 }
 
 /**
