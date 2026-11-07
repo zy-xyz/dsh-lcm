@@ -1,5 +1,5 @@
 /**
- * Same-session recall core for `dsh-compaction-lcm`.
+ * Same-session recall core for `dsh-lcm`.
  *
  * The lossless counterpart of the compaction step: checkpoints
  * mark every elision with a `(seq N)` / `(seqs A-B)` pointer into the durable
@@ -12,7 +12,7 @@
  * value with `events` and `deriveEventMessage`, so it is unit-testable without
  * a running harness.
  *
- * @module dsh-compaction-lcm/recall
+ * @module dsh-lcm/recall
  */
 import { estimateEntryTokens, isCheckpointSource, projectToolResultText, sanitize, truncateTokens } from "./compiler.js";
 import { resolveEventAt } from "./events.js";

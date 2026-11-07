@@ -7,8 +7,8 @@
 团队模式、领导者不做执行。优雅实现 / 上传 GitHub / **不能比原版 lcm 更差** / **不能比 dsh 自带压缩更差** / 遵循验收标准。
 
 ## 仓库
-https://github.com/zy-xyz/dsh-compaction-lcm ｜ 版本 **0.2.9** ｜ **57 测试全绿**
-本地：`/home/agent/workspaces/lcmx-study/dsh-compaction-lcm`
+https://github.com/zy-xyz/dsh-lcm ｜ 版本 **0.2.9** ｜ **57 测试全绿**
+本地：`/home/agent/workspaces/lcmx-study/dsh-lcm`
 验收标准：`/home/agent/workspaces/lcmx-study/ACCEPTANCE-dsh-lcm.md`（19 ✅ / 5 ❌）
 
 ## 一句话现状

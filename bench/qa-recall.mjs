@@ -41,12 +41,14 @@ const prompt = "You are given a record of a work session.\n\n=== RECORD ===\n" +
   "\n\n=== TASK ===\nList the exact literal values that appear in the record, grouped by kind:\n" + asks +
   "\n\nRules: copy verbatim, do not translate, do not summarise, one value per line. If a kind has none, write \"(none)\".\nStart each group with \"## <kind>\".";
 
-const out = await complete({ prompt, model: "balanced-lite", maxTokens: 1500, timeoutMs: 300000 });
+const MAX = Number(process.env.MAX_TOKENS || 1500);
+const out = await complete({ prompt, model: "balanced-lite", maxTokens: MAX, timeoutMs: 300000 });
 const content = out.content;
 const hit = anchors.filter((a) => content.includes(a.value));
 const missed = anchors.filter((a) => !content.includes(a.value)).map((a) => a.value.slice(0, 30));
 const row = { arm: label, ctxChars: context.length, hit: hit.length, total: anchors.length,
-  rate: +(hit.length / anchors.length).toFixed(3), completionTokens: out.usage.completion_tokens };
+  rate: +(hit.length / anchors.length).toFixed(3), completionTokens: out.usage.completion_tokens,
+  finish_reason: out.finishReason ?? "unknown" };
 fs.writeFileSync("/tmp/recall-" + label + ".txt", content);
 fs.appendFileSync("/tmp/qa-recall.jsonl", JSON.stringify(row) + "\n");
 console.log(JSON.stringify({ ...row, missed }, null, 1));

@@ -1,5 +1,5 @@
 /**
- * Keyword/regex search over the durable session log for `dsh-compaction-lcm`.
+ * Keyword/regex search over the durable session log for `dsh-lcm`.
  *
  * The retrieval counterpart of compaction: the append-only session log is the
  * full transcript, so this module scans every event's projected content and
@@ -10,7 +10,7 @@
  * Nothing is modified, nothing is elided — only the rendered hit lines are
  * bounded, by the shared `maxRecallTokens` budget and a per-hit line cap.
  *
- * @module dsh-compaction-lcm/search
+ * @module dsh-lcm/search
  */
 import { estimateEntryTokens, sanitize, truncateTokens } from "./compiler.js";
 import { resolveEventAt } from "./events.js";

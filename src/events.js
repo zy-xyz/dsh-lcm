@@ -8,7 +8,7 @@
  * pointed at. This module resolves by the event's own `seq`, preferring the
  * session's own accessor.
  *
- * @module dsh-compaction-lcm/events
+ * @module dsh-lcm/events
  */
 
 /** Cache of seq → event maps, keyed by the events array identity. */

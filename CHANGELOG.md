@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.3.0 — 2026-11-07
+
+Renamed to **`dsh-lcm`**, and the verdict is now backed by the only fidelity
+instrument that survived audit. Cost is out of scope by instruction.
+
+### Changed
+
+- Package/dir/repo name `dsh-compaction-lcm` → **`dsh-lcm`**. Row ids unchanged
+  (`compaction-lcm`, `tool-lcm-expand`, `command-lcm-search`), so an existing
+  profile patch keeps matching.
+- `test/compose.test.js` selected the engine row by matching `/compaction/`
+  against the package name. After the rename that matched **nothing**, and the
+  "exactly one engine is active" assertion passed with `0 !== 1` semantics
+  inverted — it was asserting a zero-length list had length one. Now it matches
+  the row's `name + id`.
+
+### Measured
+
+Type-grouped verbatim recall (`bench/qa-recall.mjs`), output ceiling 8 000 so
+every arm reaches `stop` naturally:
+
+| corpus | span | basic | lcm | ceiling |
+|---|---|---|---|---|
+| `s` | 4 302 tok | 2/14 = 14.3% | **7/14 = 50.0%** | not measured |
+| `c2` | 8 065 tok | 4/24 = 16.7% | **15/24 = 62.5%** | **20/24 = 83.3%** |
+
+lcm reaches **75%** of the model's own reuse ceiling on the same text; basic
+reaches 20%.
+
+### Fixed
+
+- `src/summarize.js` said "最后一节「逐字锚点」…先压前面几节" while the skeleton
+  had already moved the anchor list to the **first** section. The instruction
+  contradicted itself; only the wording was wrong, but it told the model to
+  sacrifice exactly the section that carries fidelity.
+- A "narration sections ≤ 20 lines" cap was added, measured, and **reverted**:
+  it dropped corpus `s` from 7/14 to 3/14 anchors because the model read the cap
+  as a cap on the whole reply. `test/lcm.test.js` now asserts the cap's absence.
+
+### Recorded instrument facts (do not re-learn these)
+
+- The same prompt re-run returns **byte-identical** output (gateway cache).
+  Three reps of one arm are N=1, not N=3.
+- Anchor hits are **not monotonic in the output ceiling**: the `c2` full-span arm
+  scored 10/24 at 1 500, 4/24 at 3 000, 20/24 at 8 000. Only same-ceiling
+  comparisons and `stop`-naturally absolutes mean anything.
+- `lcm` degenerated into a repeated-phrase loop twice at the 8 000 ceiling
+  (`finish_reason=error`). Re-running the same arm gave a clean sample with the
+  same hit count, so a single call is never a result.
+
 ## 0.2.9 — 2026-11-07
 
 Benchmarks no longer go through the agent's MCP transport, and the "equal budget"
@@ -31,7 +81,6 @@ basic 2.5 vs lcm 3.5 — higher fidelity at the same cost.
 Neither direction is worse than the built-in backend. Numbers are on
 `balanced-lite` and must not be compared across the `deepseek` tables.
 
-## 0.2.8 — 2026-11-07
 ## 0.2.8 — 2026-11-07
 
 The retrieval ranking conclusion was inverted by an instrument bug. Corrected, and

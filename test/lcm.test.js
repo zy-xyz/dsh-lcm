@@ -165,7 +165,15 @@ test("buildInstruction states the budget and an enumerated anchor section", () =
   assert.match(text, /## 逐字锚点/);
   assert.match(text, /每行一条，原样抄写/);
   assert.match(text, /只要出现过就列出来/);
-  assert.match(text, /预算不够时先压前面几节/);
+  assert.match(text, /预算不够时先压后面四节/);
+  // Anchors come FIRST, and no line of the instruction may call them last: that
+  // contradiction survived a skeleton reorder once and cost nothing but confusion.
+  assert.match(text, /第一节「逐字锚点」/);
+  assert.doesNotMatch(text, /最后一节/);
+  // No line ceiling on the narrative sections. One was tried to cut cost and
+  // measured a fidelity loss on corpus s (7/14 -> 3/14): the model reads a line
+  // cap as a cap on the whole reply and trims the anchor list with it.
+  assert.doesNotMatch(text, /不超过 \d+ 行/);
   assert.match(text, /no prior checkpoint/);
 });
 

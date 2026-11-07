@@ -1,6 +1,6 @@
 /**
  * Surface retention selection and the shared log-recorded compaction
- * transaction for `dsh-compaction-lcm`.
+ * transaction for `dsh-lcm`.
  *
  * This module ports the durable protocol of `@deepseek-ai/dsh-compaction-basic`
  * verbatim — lock entry assertions, `compaction/start|summary|end` bracketing,
@@ -13,7 +13,7 @@
  * structured checkpoint (see summarize.js). It descends from
  * `dsh-compaction-instant`'s deterministic compiler, which made no model call.
  *
- * @module dsh-compaction-lcm/region
+ * @module dsh-lcm/region
  */
 import { CompactionId, ManualCompactionError, compactCheckpointSource, toolPairingBalancedAfter, toolPairingBalancedBefore } from "@deepseek-ai/dsh-compaction";
 import { createUserMessage, errorChain } from "@deepseek-ai/dsh-llm";

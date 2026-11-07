@@ -1,0 +1,42 @@
+{
+  "date": "2026-11-07",
+  "span": "/tmp/c2.json",
+  "canaries": 24,
+  "max_tokens": 3000,
+  "prev_max_tokens": 1500,
+  "rows": [
+    {
+      "arm": "basic-3000",
+      "ctxChars": 5283,
+      "hit": 4,
+      "total": 24,
+      "rate": 0.167,
+      "completionTokens": 928,
+      "finish_reason": "stop",
+      "maxTokens": 3000,
+      "model": "balanced-lite"
+    },
+    {
+      "arm": "lcm-3000",
+      "ctxChars": 8175,
+      "hit": 16,
+      "total": 24,
+      "rate": 0.667,
+      "completionTokens": 1977,
+      "finish_reason": "stop",
+      "maxTokens": 3000,
+      "model": "balanced-lite"
+    },
+    {
+      "arm": "full-3000",
+      "ctxChars": 32259,
+      "hit": 4,
+      "total": 24,
+      "rate": 0.167,
+      "completionTokens": 3000,
+      "finish_reason": "length",
+      "maxTokens": 3000,
+      "model": "balanced-lite"
+    }
+  ]
+}

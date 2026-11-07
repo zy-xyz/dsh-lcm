@@ -1,4 +1,4 @@
-# dsh-compaction-lcm bundle patch.
+# dsh-lcm bundle patch.
 #
 # Installing this package with `dsh plugin add` makes it a profile layer
 # automatically (package.json declares `dsh.bundle`). This patch disables the
@@ -12,8 +12,8 @@
   disabled: true
 - insert:
     - id: compaction-lcm
-      name: dsh-compaction-lcm
+      name: dsh-lcm
     - id: tool-lcm-expand
-      name: dsh-compaction-lcm/tool
+      name: dsh-lcm/tool
     - id: command-lcm-search
-      name: dsh-compaction-lcm/command
+      name: dsh-lcm/command

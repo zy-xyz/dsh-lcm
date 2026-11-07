@@ -11,7 +11,7 @@
  *
  * The log is the truth; the checkpoint is a view over it.
  *
- * @module dsh-compaction-lcm
+ * @module dsh-lcm
  */
 import z from "@deepseek-ai/schemastery";
 import { appendFileSync } from "node:fs";
@@ -101,7 +101,7 @@ const modelPolicy = z.object({
  */
 function engineDebug(config, line) {
   if (config.debug !== true) return;
-  const text = `[dsh-compaction-lcm] engine: ${line}`;
+  const text = `[dsh-lcm] engine: ${line}`;
   try {
     console.error(text);
   } catch {
@@ -244,7 +244,7 @@ export class LcmCompactionEngine extends CompactionEngine {
   /**
    * Summarize one priced region with a model call.
    *
-   * This is the sole delta over `dsh-compaction-lcm`: where the instant
+   * This is the sole delta over `dsh-lcm`: where the instant
    * backend runs a deterministic verbatim compiler, this backend asks the model
    * for a structured summary. Everything around it — range selection, the
    * durable transaction, the shrink guarantee, the `seq N` pointers and the

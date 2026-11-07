@@ -1,7 +1,7 @@
 /**
- * LLM leaf summarizer for `dsh-compaction-lcm`.
+ * LLM leaf summarizer for `dsh-lcm`.
  *
- * This is the replacement step `dsh-compaction-lcm` uses: a model-written
+ * This is the replacement step `dsh-lcm` uses: a model-written
  * summary, descended from `dsh-compaction-instant`'s deterministic compiler
  * (zero model calls, verbatim excerpts) — the LCM paper's "recursive context compression" leaf step. The summary is
  * NOT the only copy: every shadowed node stays in the append-only session log,
@@ -16,7 +16,7 @@
  *     (paths, commands, error strings, ids) — the single largest source of
  *     post-compaction failure in summarisation backends
  *
- * @module dsh-compaction-lcm/summarize
+ * @module dsh-lcm/summarize
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { resolveEventAt } from "./events.js";
@@ -50,8 +50,8 @@ export const SUMMARY_SKELETON = [
  * anchors, the enumerated rule retains materially more at the same budget.
  */
 const ANCHOR_RULE = [
-  "最后一节「逐字锚点」不是散文，是一张清单：把这整段里出现过的所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值，**每行一条，原样抄写**。",
-  "不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。这一节宁长勿短；预算不够时先压前面几节，不要压这一节。"
+  "第一节「逐字锚点」不是散文，是一张清单：把这整段里出现过的所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值，**每行一条，原样抄写**。",
+  "不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。这一节宁长勿短；预算不够时先压后面四节，不要压这一节。"
 ].join("");
 
 /**

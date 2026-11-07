@@ -1,0 +1,26 @@
+
+
+=== INSTRUCTION ===
+You are condensing an earlier span of THIS conversation so the agent can keep working.
+
+The span you are given is 8065 tokens. Produce at most 967 tokens (about 8.3:1).
+The full original text is preserved in the append-only log and remains retrievable by the agent, so you may compress hard — but anything the agent will need *verbatim* must survive here.
+
+Write exactly these sections, in this order:
+  ## 目标与约束
+  ## 已完成
+  ## 未决问题
+  ## 下一步
+  ## 逐字锚点
+
+最后一节「逐字锚点」不是散文，是一张清单：把这整段里出现过的所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值，**每行一条，原样抄写**。不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。这一节宁长勿短；预算不够时先压前面几节，不要压这一节。
+
+上面四个叙述性小节各自最多几句话；它们的职责是让人读懂状态，「逐字锚点」才负责不丢东西。
+
+Rules:
+- Do not address the user. Do not say what you are doing. Output the sections only.
+- Do not invent facts. If something is uncertain, write it as uncertain.
+- Do not restate tool output that was pure noise (progress bars, repeated listings); keep its conclusion.
+- This span contains no prior checkpoint.
+
+Format the result as plain Markdown. Do not wrap it in a code fence.

@@ -8,7 +8,7 @@
 
 ## 0. 一句话结论
 
-当前**能**证明的是四件事：配置面与 basic 对等（单测级）、事务的 surfaceOp 形状与失败闭合正确（测试级）、给定 seq 能逐字取回（真实生产日志级）、给定一个字符串能定位到事件（真实生产日志级，但指标仪器有一处索引偏差，结论偏保守）。
+当前**能**证明的是四件事：配置面与 basic 对等（单测级）、事务的 surfaceOp 形状与失败闭合正确（测试级）、给定 seq 能逐字取回（真实生产日志级）、给定一个字符串能定位到事件，且长度归一的 density 排序比时间序更准（真实生产日志级；早先的指标仪器有一处 rank 偏移，已修，结论随之反转，见 §6.1 与 §6.3）。
 
 当前**不能**证明的是四件事：摘要比 basic 更好、成本更低（已撤回）、引擎在运行中的 dsh 里跑过一次、可以上生产。
 
@@ -22,7 +22,7 @@
 | ② | 事务正确 | 压缩真的能 commit 吗 | **已证（测试级）**；运行时未证 | `src/region.js` · `test/region.test.js` |
 | ③ | 摘要质量 | 摘要比 basic 更好吗 | **未证**，且方向不稳定 | `bench/REPORT.md` §3–§4 |
 | ④ | 可恢复性 | 被摘要丢掉的原文还能拿回来吗 | **已证（生产日志级）** | `bench/recovery.mjs` · `test/recovery.test.js` |
-| ⑤ | 检索可达性 | 只记得字符串，能不能找到 | **已证**，但口径要按 §6.3 重读 | `bench/retrieval.mjs` · `bench/REPORT.md` §14 |
+| ⑤ | 检索可达性 | 只记得字符串，能不能找到 | **已证**；仪器已修，方向为 density 优于 seq，复核见 §6.4 | `bench/retrieval.mjs` · `bench/results/retrieval-20261107.json` |
 | ⑥ | 运行中的引擎（G0） | 它真的被加载、真的压过一次吗 | **未做（有意）** | `ACCEPTANCE-dsh-lcm.md` G0 |
 | ⑦ | 生产切换 | 能不能改默认引擎 | **未证 / 明确不做** | `ACCEPTANCE-dsh-lcm.md` §0 · `bench/REPORT.md` §0/§5 |
 
@@ -133,8 +133,11 @@
 
 ### 6.1 它能证明什么
 
-- **从一个字符串出发，时间序排序能定位到含该锚点的事件。** 21 条被生产摘要丢掉的锚点：seq 排序 recall@5 0.905 / @10 0.952 / MRR 0.335（`bench/REPORT.md:149-154`）；第二份日志 22 条：@5 0.955 / @10 1.000 / MRR 0.426（`bench/REPORT.md:156`）。
-- **"相关性排序"输了，且这是可记录的负结果。** score（命中行数）@5 0.762、density（长度归一）@5 0.857 但 MRR 0.414（`bench/REPORT.md:153-154`、`bench/REPORT.md:158-165`）；默认因此保持 `seq`（`src/search.js:34`、`src/search.js:104`），并被测试钉住（`test/search-rank.test.js:33-61`，尤其 `:53-57`）。
+- **从一个字符串出发，长度归一的密度排序（density）能定位到含该锚点的事件，而且比时间序更准。** 三份真实压缩日志、21/22/24 条被生产摘要丢掉的锚点，gold 取"任一包含者"（`bench/results/retrieval-20261107.json`；`instrument.note` 自陈 `rank recorded once (hitIndex+1)`、`no model called`）：log1（`d45c83f5`）density recall@1 0.714 / @5 0.952 / @10 0.952 / MRR 0.793 / NDCG@10 0.832；log2（`65bd8898`）0.727 / 0.955 / 1.000 / 0.840 / 0.880；log3（`d7951a68`）0.750 / 1.000 / 1.000 / 0.861 / 0.897。recall@50 三份依次 0.952 / 1.000 / 1.000（报告 §14 只收了日志 1/2，第三份只在这个 JSON 里）。
+- **时间序（seq）在同一个仪器下明显更弱，弱在 @1 与位次加权，不在"能不能找到"。** log1 seq 0.381 / 0.952 / 0.952 / MRR 0.581 / NDCG 0.673；log2 0.682 / 0.955 / 1.000 / 0.802 / 0.851；log3 0.083 / 0.917 / 0.917 / 0.502 / 0.609（@50 0.958，即 24 条里 23 条）。@5 在 log1、log2 上是打平的（0.952 / 0.955），差别集中在第一条命中是不是它。
+- **score（命中行数）是三者里最弱的一档，被 density 与 seq 夹在中间。** log1 0.524 / 0.762 / 0.810 / MRR 0.614 / NDCG 0.654；log2 0.773 / 0.909 / 1.000 / 0.831 / 0.871；log3 0.667 / 0.833 / 0.917 / 0.727 / 0.767。跨日志均值把三种排序排清楚了：density 0.730 / 0.969 / – / 0.831 / 0.870，seq 0.382 / 0.941 / – / 0.628 / 0.711，score 0.655 / 0.835 / – / 0.724 / 0.764。
+- **显著性只支撑"两份站得住、一份持平"，不是"三份都赢"。** 按 recall@1 的命中翻转做配对检验（density 独有命中 vs seq 独有命中，精确二项双侧）：log1 9:2，p=0.065，属于边缘；log2 6:5，p=1.0，持平（density 的 @1 只多一条，按 MRR 算是略偏小胜）；log3 18:2，p=0.0004，站得住。能说的就是"log1/log3 上 density 优于 seq，log2 上两者分不开"。
+- **默认排序因此就是 density**（`src/search.js:104` 的 `const rankMode = config.rank ?? "density"`；三个模式的枚举在 `src/search.js:34`），并被测试钉住（`test/search-rank.test.js:33-61`，尤其 `:53-57`）。
 - **三种排序不改变命中集合本身。** `test/search-rank.test.js:59-61`。
 - **本节不调模型**（`bench/retrieval.mjs:10-13`），所以是纯排序质量，不是"模型会不会搜"。
 
@@ -142,23 +145,26 @@
 
 - **不能证明自然语言查询可用。** 查询是锚点本身、转义成字面正则（`bench/retrieval.mjs:81-82,94`）；自然语言显著更难，报告明说未测（`bench/REPORT.md:171`）。
 - **不能证明 agentic 二次展开下的表现。** 结论限"只读一次 payload"的调用形态（`bench/REPORT.md:165`）。
-- **不是 held-out。** 标签来自两次真实压缩的"被丢锚点"（`bench/REPORT.md:141-145`、`bench/REPORT.md:169`）。
-- **不能证明生产可用性：@1 与 MRR 的口径被仪器带偏（见 §6.3）。**
+- **不是 held-out。** 标签来自三次真实压缩的"被丢锚点"（`bench/REPORT.md:141-145`、`bench/REPORT.md:169`）。
+- **不能证明生产可用性：样本仍只是三份真实日志、67 条锚点。** §6.3 的旧仪器偏差已修，绝对值现在可以直接读、不必再 +1 复算，但优势的量级有限——log1 的 @1 领先只是 p=0.065 的边缘，log2 上两模式持平，撑不起"换个默认排序就更好用"的产品结论。
 
-### 6.3 必须一起读的仪器偏差（本文件新增，已复算）
+### 6.3 【已撤回】旧仪器偏差与由它得出的三条后果
 
-- **偏差本身**：`bench/retrieval.mjs:100` 已把 `hitIndex` 换成 1-based（`rank = hitIndex + 1`），`:105` 落盘时又 `+1`，于是存的是 `index + 2`。所有 `at(k)`（`:110`）与 MRR（`:111`）都基于这个偏移值。
-- **后果一**：报告里"recall@1 在所有模式下都是 0"（`bench/REPORT.md:170`）不是数据性质，而是**构造性质**——最小可能值是 2。归因（"首个命中总在跨度外"）不成立：实测 21 条里 **8 条的 gold 就是首个命中**（index 0）。
-- **后果二**：报告数字整体保守一格。用同一批 rows 复算真实 1-based 指标为 recall@1 0.381 / @5 0.952 / @10 0.952 / MRR **0.581**（报告 0.337）；`bench/REPORT.md:149-154` 的 "recall@5 0.905" 实际对应"前 4 位命中"。
-- **后果三**：`bench/retrieval.mjs:112` 的 `ndcgAt10` 与 `recall@10` 恒等（实际输出 0.952 / 0.952）——它算的是 `1/log2(2)=1` 乘以 `rank<=10`，不是 NDCG。报告没有引用这个数（`bench/REPORT.md:149-156` 只列 recall 与 MRR），但脚本会输出，别当成第二个指标。
-- **方向结论不受影响**：三个模式在同一偏差下比较，seq 仍优于 score/density（`bench/REPORT.md:153-154`）。受影响的是绝对值，不是排序结论。
-- **口径提醒**：本节所有数字来自**未发布的脚本**——`package.json:37-41` 的 `files` 只含 `src`、`cordis.patch.yml`、`README.md`，`bench/` 与 `test/` 不随包发布。外部读者只能在本仓库里复现。
+**本节作为结论整体作废，只作留档。** 0.2.8 之前的 `bench/retrieval.mjs` 先在 `rank = hitIndex + 1` 记一次，落盘前又加了一次 1，存下来的是 `index + 2`（最小可能值 2）。后果是 **recall@1 恒为 0**、**NDCG@10 恒等于 recall@10**。据此写下的"三条后果"现在全部不成立，逐条对账：
+
+- 后果一（旧文："recall@1 恒 0 是构造性质，'首个命中总在跨度外'的归因不成立"）——归因不成立这一点仍然对，但"@1 恒 0"本身是仪器造成的：修好后 seq 在三份日志上分别是 0.381 / 0.682 / 0.083，density 是 0.714 / 0.727 / 0.750，@1 不再是死指标。
+- 后果二（旧文："报告数字整体保守一格，复算 1-based 得 recall@1 0.381 / MRR 0.581"）——不再需要任何复算。`bench/retrieval.mjs:105-106` 现在只记一次 `rank = hitIndex + 1`，`bench/results/retrieval-20261107.json` 里的数字就是真值，"给报告 +1"这个补偿动作随偏差一起删掉了。
+- 后果三（旧文："`ndcgAt10` 与 `recall@10` 恒等，不是第二个指标"）——`bench/retrieval.mjs:92-95` 已改成真 NDCG（`1/log2(rank+1)`，落在 k 外记 0），两个指标现在分离：log1 的 density NDCG@10 0.832、recall@10 0.952。
+
+**被推翻的不只是绝对值，还有方向。** `rank = index + 2` 恰好抹掉了 density 的主要收益点（把 gold 顶到第 1 位），所以旧数字下的"相关性重排不如时间序"是偏差产物，不是数据性质。修好后 density 在 @1、MRR、NDCG 上三份全胜，默认排序已在 0.2.8 由 `seq` 改成 `density`（`src/search.js:104`）；本文件原先那句"默认因此保持 `seq`"与"相关性排序输了"已随之删除。
+
+- **口径提醒（仍然有效）**：§6.1 的数字全部来自**未发布的脚本**——`package.json:37-41` 的 `files` 只含 `src`、`cordis.patch.yml`、`README.md`，`bench/` 与 `test/` 不随包发布。外部读者只能在本仓库里复现。
 
 ### 6.4 现状与证据
 
-状态：**已证（排序方向 + 可达性量级）**；绝对值按 §6.3 重读。验收单 `ACCEPTANCE-dsh-lcm.md:29`（G2.8 PASS）、`ACCEPTANCE-dsh-lcm.md:30`（G2.8b 负结果已记录）。
+状态：**已证（排序方向 + 可达性量级）**，且方向与 0.2.8 之前相反——density 优于 seq；绝对值按 §6.1 直读（仪器修正见 §6.3）。验收单 `ACCEPTANCE-dsh-lcm.md:29`（G2.8 PASS）；`ACCEPTANCE-dsh-lcm.md:30`（G2.8b）记录的那条负结果，内容已随仪器修正反转。
 
-证据文件：`bench/retrieval.mjs:91-132`、`bench/REPORT.md:135-171`、`test/search-rank.test.js:33-61`、`src/search.js:100-179`。
+证据文件：`bench/retrieval.mjs:91-132`、`bench/results/retrieval-20261107.json`（三份日志逐模式的原始输出）、`bench/retrieval.mjs:92-95,105-106`（真 NDCG 与单次 rank 记录）、`test/search-rank.test.js:33-61`、`src/search.js:100-179`。
 
 ---
 
@@ -166,7 +172,7 @@
 
 ### 7.1 它能证明什么
 
-- **组合层面只有一个 active compaction 引擎，且是本 backend。** `test/compose.test.js:42-65`：用 boot 的同一纯函数 `composeEntries` 叠 bundle patch，断言 active 引擎数 = 1、`name === "dsh-compaction-lcm"`、`compaction-basic` 被 disabled、`/compact` 保留、`tool-lcm-expand`/`command-lcm-search` 挂载。对应验收 G0.1 PASS（`ACCEPTANCE-dsh-lcm.md:15`）。
+- **组合层面只有一个 active compaction 引擎，且是本 backend。** `test/compose.test.js:42-65`：用 boot 的同一纯函数 `composeEntries` 叠 bundle patch，断言 active 引擎数 = 1、`name === "dsh-lcm"`、`compaction-basic` 被 disabled、`/compact` 保留、`tool-lcm-expand`/`command-lcm-search` 挂载。对应验收 G0.1 PASS（`ACCEPTANCE-dsh-lcm.md:15`）。
 - **patch 的内容就是这些行**：`cordis.patch.yml:11-19`（disable basic、insert 引擎 / tool / command）。
 
 ### 7.2 它不能证明什么
@@ -231,26 +237,20 @@
 
 ## 10. 复核命令与本次实测记录
 
-在 `dsh-compaction-lcm/` 下执行，全部只读：
+在 `dsh-lcm/` 下执行，全部只读：
 
 ```bash
 node --test
 # 本次结果：tests 57 / pass 57 / fail 0 / skipped 0 / duration ≈ 0.7s
 
-node bench/retrieval.mjs "$HOME/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd"
-# 本次结果：droppedAnchors 21, recall {at1:0, at5:0.905, at10:0.952, at50:0.952}, mrr 0.337, ndcgAt10 0.952
-# 注：ndcgAt10 与 at10 数值相同，即 §6.3 的退化；at1 恒 0 即 §6.3 的构造偏移
+node bench/retrieval.mjs "$HOME/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd" --rank density
+# 本次结果：droppedAnchors 21, evaluated 21, recall {at1:0.714, at5:0.952, at10:0.952, at50:0.952}, mrr 0.793, ndcgAt10 0.832
+# 注：ndcgAt10 0.832 与 at10 0.952 已经分离——旧仪器"NDCG 恒等于 recall@10"的退化随 §6.3 的偏差一起作废
 ```
 
-复算（同一批 21 条 gold 的 0-based 命中位置，重算 1-based 指标）：
+三份日志逐模式的原始输出在 `bench/results/retrieval-20261107.json`（`instrument.note`：`rank recorded once (hitIndex+1)`、`no model called`；`git.rev` / `instrument.sha256_16` 可核对脚本版本）。本文件 §6.1 的数字全部取自它，不再做 0-based 手工复算——那个"+1 补偿"本身就是旧偏差的一半，已经删了。
 
-```
-hitIndex(0-based): [2,0,2,4,3,1,2,0,2,2,3,0,0,0,0,2,1,0,-1,0,1]
-min index = 0，其中 8 条为 0（gold 就是首个命中）
-→ recall@1 0.381 / @3 0.810 / @5 0.952 / @10 0.952 / MRR 0.581
-```
-
-结论：`bench/REPORT.md:149-156` 的绝对值整体保守一格，方向结论不变；`bench/REPORT.md:170` 的边界解释不成立（见 §6.3）。
+结论：检索这一门的绝对值以 §6.1 为准，方向是 **density 优于 seq**，与 0.2.8 之前写下的"相关性排序输了"完全相反（撤回记录见 §6.3）；显著性只到"log1/log3 站得住、log2 持平"。
 
 ---
 
@@ -267,7 +267,7 @@ min index = 0，其中 8 条为 0（gold 就是首个命中）
 | `ACCEPTANCE-dsh-lcm.md:134-135` | 已修 | G2.5 / G2.6 改为不达标结论，与同文件 `:26-27` 一致；全文不再以 1.02× / +22.5pp 作为通过证据 |
 | `CHANGELOG.md` 各版本标题 | 已修 | 重复标题行删除，每个版本只出现一次，倒序 |
 
-仍遗留两处，均不在"注释/文档可改"范围内：
+仍遗留一处，不在"注释/文档可改"范围内：
 
 - `src/index.js:174` 的运行期日志字符串仍写 "with the instant compiler"——属于可执行代码，本轮只改注释。
-- §6 的 recall@1/@5 数字来自 0.2.8 之前的 rank 记录偏差（`rank = hitIndex + 2`）；0.2.8 修正后默认排序改为 `density`（见 `CHANGELOG.md` 0.2.8）。§6 的绝对值需要按新仪器重出，不属于文档改写。
+- §6 的检索数字已按 0.2.8 修好后的仪器重出，正文即真值（原始输出 `bench/results/retrieval-20261107.json`，三份日志）；默认排序是 `density`（`src/search.js:104`，见 `CHANGELOG.md` 0.2.8）。

@@ -1,5 +1,5 @@
 /**
- * Text primitives for `dsh-compaction-lcm`.
+ * Text primitives for `dsh-lcm`.
  *
  * Everything here is deterministic and dependency-free (no cordis, no dsh
  * imports) so it can be unit-tested and reused outside a running harness:
@@ -13,7 +13,7 @@
  * here: this backend summarizes with a model, so it needs measurement and
  * framing, not a verbatim compiler.
  *
- * @module dsh-compaction-lcm/compiler
+ * @module dsh-lcm/compiler
  */
 
 // ── tokenizer ──────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # SECURITY — 数据流、信任边界与部署加固
 
-> 适用范围：`dsh-compaction-lcm` 0.2.6（`package.json:3`）。
+> 适用范围：`dsh-lcm` 0.2.6（`package.json:3`）。
 > 本文只描述**代码里真实存在的行为**，每条带 `文件:行号`。没有写"将来可能"的东西；没有写"为了安全所以"这类空话。
 > 判定方法可复现：§8 给出读代码 + grep 的完整口径，任何人都能重跑一遍否定或补全本文。
 
@@ -57,7 +57,7 @@
 - 开关：`debug: true` 或环境变量 `DSH_COMPACTION_DEBUG=1`（`src/config.js:115-116`；示例配置 `config.example.yaml:74-75` 默认 `false`）。
 - 路径：`config.debugLogPath` ?? `${DSH_HOME}/compaction-debug.log` ?? `/tmp/dsh-compaction-debug.log`（`src/config.js:117-120`）。
 - 写入：`appendFileSync(config.debugLogPath, text+"\n", "utf8")`（`src/index.js:111`），失败被吞（`src/index.js:112-114`）。
-- **内容实际是什么**（重要，别被"明文日志"误导）：三行模板 `[dsh-compaction-lcm] engine: ...`，分别是构造（rev / debugLog / summaryRatio / cap，`src/index.js:150`）、摘要开始（节点数 / seq 范围 / shadowedTokens / budget，`src/index.js:262-265`）、摘要结束（输出 tokens / 压缩比，`src/index.js:278`）。**只有编号与计数，没有会话正文。**
+- **内容实际是什么**（重要，别被"明文日志"误导）：三行模板 `[dsh-lcm] engine: ...`，分别是构造（rev / debugLog / summaryRatio / cap，`src/index.js:150`）、摘要开始（节点数 / seq 范围 / shadowedTokens / budget，`src/index.js:262-265`）、摘要结束（输出 tokens / 压缩比，`src/index.js:278`）。**只有编号与计数，没有会话正文。**
 - **真实风险不在内容，在路径**：`debugLogPath` 只校验"是字符串"（`src/config.js:298`），不校验位置；`appendFileSync` 未指定 `mode`（`src/index.js:111`），落在 `/tmp` 时权限由进程 umask 决定，同机其他用户可能读到这些元数据（谁在何时压了多少 token）。若配置面被低权限方写入，则等价于给引擎所属 uid 一个"向任意可写路径追加内容"的原语。
 
 ### 2.3 搜索结果回写会话
@@ -199,7 +199,7 @@ configured(summarizationProvider + summarizationModel)
 
 ## 7. 漏洞报告方式
 
-- **渠道**：仓库的 GitHub Security Advisory（私有报告）。仓库地址见 `ACCEPTANCE-dsh-lcm.md:8`（`github.com/zy-xyz/dsh-compaction-lcm`）。本仓库没有单独的 SECURITY/CONTRIBUTING 文件，也没有邮件列表或 CVE 流程——不要假设有 SLA。
+- **渠道**：仓库的 GitHub Security Advisory（私有报告）。仓库地址见 `ACCEPTANCE-dsh-lcm.md:8`（`github.com/zy-xyz/dsh-lcm`）。本仓库没有单独的 SECURITY/CONTRIBUTING 文件，也没有邮件列表或 CVE 流程——不要假设有 SLA。
 - **报告必须带**：
   1. 版本（`package.json:3`，当前 `0.2.6`）；
   2. 命中的 `文件:行号`（本文的风格就是模板）；

@@ -1,0 +1,1991 @@
+{
+ "schema": "lcm-retrieval-bench/v1",
+ "generatedAt": "2026-11-07T15:21:52.357Z",
+ "instrument": {
+  "script": "bench/retrieval.mjs",
+  "sha256_16": "7954f2a43d11de2a",
+  "node": "v24.22.1",
+  "goldMode": "any",
+  "note": "rank recorded once (hitIndex+1); ndcg = 1/log2(rank+1); no model called"
+ },
+ "git": {
+  "rev": "ef0e85d",
+  "dirty": true
+ },
+ "defaultRankInSrc": "density (src/search.js:104)",
+ "logs": [
+  {
+   "id": "log1_d45c83f5",
+   "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd",
+   "droppedAnchors": 21,
+   "evaluated": 21,
+   "unevaluable": 0,
+   "byRank": {
+    "seq": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd",
+     "rankMode": "seq",
+     "goldMode": "any",
+     "droppedAnchors": 21,
+     "evaluated": 21,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.381,
+      "at5": 0.952,
+      "at10": 0.952,
+      "at50": 0.952
+     },
+     "mrr": 0.581,
+     "ndcgAt10": 0.673,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 1,
+       "hitAt5": 1
+      },
+      "path": {
+       "n": 2,
+       "hitAt5": 2
+      }
+     },
+     "rows": [
+      {
+       "anchor": "git 改动。\\n3. /vol2/1000/download/boot_a.img = 原厂 Android boot",
+       "type": "command",
+       "gold": 30,
+       "rank": 3,
+       "hits": 6
+      },
+      {
+       "anchor": "FILE_BYTES",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 12
+      },
+      {
+       "anchor": "cannot jump to completed. Mark in_progress first, then compl",
+       "type": "error",
+       "gold": 15,
+       "rank": 3,
+       "hits": 40
+      },
+      {
+       "anchor": "0xd0680200000000",
+       "type": "hex",
+       "gold": 4216,
+       "rank": 5,
+       "hits": 6
+      },
+      {
+       "anchor": "663880KB",
+       "type": "number",
+       "gold": 1150,
+       "rank": 4,
+       "hits": 7
+      },
+      {
+       "anchor": "d77dabf5-ea0e-4d9a-9328-7abe8af7f08f",
+       "type": "uuid",
+       "gold": 15,
+       "rank": 2,
+       "hits": 28
+      },
+      {
+       "anchor": "adb 写/EDL/分区变更；真机步骤只输出命令标 HANDOFF。\\n5. 结论必须附命令输出或 SHA-256 或文",
+       "type": "command",
+       "gold": 30,
+       "rank": 3,
+       "hits": 5
+      },
+      {
+       "anchor": "NAME_HEX",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "failed when blocking findings or validation failures mean do",
+       "type": "error",
+       "gold": 15,
+       "rank": 3,
+       "hits": 40
+      },
+      {
+       "anchor": "0x0268b9c0",
+       "type": "hex",
+       "gold": 4218,
+       "rank": 3,
+       "hits": 3
+      },
+      {
+       "anchor": "499920KB",
+       "type": "number",
+       "gold": 1150,
+       "rank": 4,
+       "hits": 7
+      },
+      {
+       "anchor": "/vol3/1000/work/notes/baseline.md",
+       "type": "path",
+       "gold": 123,
+       "rank": 1,
+       "hits": 34
+      },
+      {
+       "anchor": "python3 xxd od dd cmp unzip cpio gzip xz zstd lz4 mkbootimg ",
+       "type": "command",
+       "gold": 40,
+       "rank": 1,
+       "hits": 5
+      },
+      {
+       "anchor": "CMDLINE_512",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "failed\" inside those arrays. After the work and verification",
+       "type": "error",
+       "gold": 15,
+       "rank": 1,
+       "hits": 18
+      },
+      {
+       "anchor": "0x0268b9d0",
+       "type": "hex",
+       "gold": 4218,
+       "rank": 3,
+       "hits": 3
+      },
+      {
+       "anchor": "615468KB",
+       "type": "number",
+       "gold": 1955,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/macOS-ForSheng/repo/docs",
+       "type": "path",
+       "gold": 123,
+       "rank": 1,
+       "hits": 4
+      },
+      {
+       "anchor": "python3\n/usr/bin/od",
+       "type": "command",
+       "gold": 44,
+       "rank": null,
+       "hits": 0
+      },
+      {
+       "anchor": "EXTRA_CMDLINE_1024",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "cannot change its verdict. Treat the dependency results abov",
+       "type": "error",
+       "gold": 15,
+       "rank": 2,
+       "hits": 36
+      }
+     ]
+    },
+    "score": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd",
+     "rankMode": "score",
+     "goldMode": "any",
+     "droppedAnchors": 21,
+     "evaluated": 21,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.524,
+      "at5": 0.762,
+      "at10": 0.81,
+      "at50": 0.952
+     },
+     "mrr": 0.614,
+     "ndcgAt10": 0.654,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 0
+      },
+      "hex": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 1,
+       "hitAt5": 1
+      },
+      "path": {
+       "n": 2,
+       "hitAt5": 2
+      }
+     },
+     "rows": [
+      {
+       "anchor": "git 改动。\\n3. /vol2/1000/download/boot_a.img = 原厂 Android boot",
+       "type": "command",
+       "gold": 30,
+       "rank": 2,
+       "hits": 6
+      },
+      {
+       "anchor": "FILE_BYTES",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 12
+      },
+      {
+       "anchor": "cannot jump to completed. Mark in_progress first, then compl",
+       "type": "error",
+       "gold": 15,
+       "rank": 17,
+       "hits": 40
+      },
+      {
+       "anchor": "0xd0680200000000",
+       "type": "hex",
+       "gold": 4216,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "663880KB",
+       "type": "number",
+       "gold": 1150,
+       "rank": 4,
+       "hits": 7
+      },
+      {
+       "anchor": "d77dabf5-ea0e-4d9a-9328-7abe8af7f08f",
+       "type": "uuid",
+       "gold": 15,
+       "rank": 1,
+       "hits": 28
+      },
+      {
+       "anchor": "adb 写/EDL/分区变更；真机步骤只输出命令标 HANDOFF。\\n5. 结论必须附命令输出或 SHA-256 或文",
+       "type": "command",
+       "gold": 30,
+       "rank": 3,
+       "hits": 5
+      },
+      {
+       "anchor": "NAME_HEX",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "failed when blocking findings or validation failures mean do",
+       "type": "error",
+       "gold": 15,
+       "rank": 17,
+       "hits": 40
+      },
+      {
+       "anchor": "0x0268b9c0",
+       "type": "hex",
+       "gold": 4218,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "499920KB",
+       "type": "number",
+       "gold": 1150,
+       "rank": 4,
+       "hits": 7
+      },
+      {
+       "anchor": "/vol3/1000/work/notes/baseline.md",
+       "type": "path",
+       "gold": 123,
+       "rank": 1,
+       "hits": 34
+      },
+      {
+       "anchor": "python3 xxd od dd cmp unzip cpio gzip xz zstd lz4 mkbootimg ",
+       "type": "command",
+       "gold": 40,
+       "rank": 1,
+       "hits": 5
+      },
+      {
+       "anchor": "CMDLINE_512",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "failed\" inside those arrays. After the work and verification",
+       "type": "error",
+       "gold": 15,
+       "rank": 8,
+       "hits": 18
+      },
+      {
+       "anchor": "0x0268b9d0",
+       "type": "hex",
+       "gold": 4218,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "615468KB",
+       "type": "number",
+       "gold": 1955,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/macOS-ForSheng/repo/docs",
+       "type": "path",
+       "gold": 123,
+       "rank": 4,
+       "hits": 4
+      },
+      {
+       "anchor": "python3\n/usr/bin/od",
+       "type": "command",
+       "gold": 44,
+       "rank": null,
+       "hits": 0
+      },
+      {
+       "anchor": "EXTRA_CMDLINE_1024",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "cannot change its verdict. Treat the dependency results abov",
+       "type": "error",
+       "gold": 15,
+       "rank": 15,
+       "hits": 36
+      }
+     ]
+    },
+    "density": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd",
+     "rankMode": "density",
+     "goldMode": "any",
+     "droppedAnchors": 21,
+     "evaluated": 21,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.714,
+      "at5": 0.952,
+      "at10": 0.952,
+      "at50": 0.952
+     },
+     "mrr": 0.793,
+     "ndcgAt10": 0.832,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 1,
+       "hitAt5": 1
+      },
+      "path": {
+       "n": 2,
+       "hitAt5": 2
+      }
+     },
+     "rows": [
+      {
+       "anchor": "git 改动。\\n3. /vol2/1000/download/boot_a.img = 原厂 Android boot",
+       "type": "command",
+       "gold": 30,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "FILE_BYTES",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 12
+      },
+      {
+       "anchor": "cannot jump to completed. Mark in_progress first, then compl",
+       "type": "error",
+       "gold": 15,
+       "rank": 1,
+       "hits": 40
+      },
+      {
+       "anchor": "0xd0680200000000",
+       "type": "hex",
+       "gold": 4216,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "663880KB",
+       "type": "number",
+       "gold": 1150,
+       "rank": 5,
+       "hits": 7
+      },
+      {
+       "anchor": "d77dabf5-ea0e-4d9a-9328-7abe8af7f08f",
+       "type": "uuid",
+       "gold": 15,
+       "rank": 1,
+       "hits": 28
+      },
+      {
+       "anchor": "adb 写/EDL/分区变更；真机步骤只输出命令标 HANDOFF。\\n5. 结论必须附命令输出或 SHA-256 或文",
+       "type": "command",
+       "gold": 30,
+       "rank": 4,
+       "hits": 5
+      },
+      {
+       "anchor": "NAME_HEX",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "failed when blocking findings or validation failures mean do",
+       "type": "error",
+       "gold": 15,
+       "rank": 1,
+       "hits": 40
+      },
+      {
+       "anchor": "0x0268b9c0",
+       "type": "hex",
+       "gold": 4218,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "499920KB",
+       "type": "number",
+       "gold": 1150,
+       "rank": 5,
+       "hits": 7
+      },
+      {
+       "anchor": "/vol3/1000/work/notes/baseline.md",
+       "type": "path",
+       "gold": 123,
+       "rank": 1,
+       "hits": 34
+      },
+      {
+       "anchor": "python3 xxd od dd cmp unzip cpio gzip xz zstd lz4 mkbootimg ",
+       "type": "command",
+       "gold": 40,
+       "rank": 2,
+       "hits": 5
+      },
+      {
+       "anchor": "CMDLINE_512",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "failed\" inside those arrays. After the work and verification",
+       "type": "error",
+       "gold": 15,
+       "rank": 1,
+       "hits": 18
+      },
+      {
+       "anchor": "0x0268b9d0",
+       "type": "hex",
+       "gold": 4218,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "615468KB",
+       "type": "number",
+       "gold": 1955,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/macOS-ForSheng/repo/docs",
+       "type": "path",
+       "gold": 123,
+       "rank": 2,
+       "hits": 4
+      },
+      {
+       "anchor": "python3\n/usr/bin/od",
+       "type": "command",
+       "gold": 44,
+       "rank": null,
+       "hits": 0
+      },
+      {
+       "anchor": "EXTRA_CMDLINE_1024",
+       "type": "env",
+       "gold": 47,
+       "rank": 1,
+       "hits": 10
+      },
+      {
+       "anchor": "cannot change its verdict. Treat the dependency results abov",
+       "type": "error",
+       "gold": 15,
+       "rank": 1,
+       "hits": 36
+      }
+     ]
+    }
+   },
+   "densityVsSeq": {
+    "at1Gained": 9,
+    "at1Lost": 2,
+    "rankBetter": 9,
+    "rankWorse": 5,
+    "rankTie": 7
+   }
+  },
+  {
+   "id": "log2_65bd8898",
+   "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-65bd8898-db92-4879-8e80-0f1465d1f8d3/session.v4.jsonl.zstd",
+   "droppedAnchors": 22,
+   "evaluated": 22,
+   "unevaluable": 0,
+   "byRank": {
+    "seq": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-65bd8898-db92-4879-8e80-0f1465d1f8d3/session.v4.jsonl.zstd",
+     "rankMode": "seq",
+     "goldMode": "any",
+     "droppedAnchors": 22,
+     "evaluated": 22,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.682,
+      "at5": 0.955,
+      "at10": 1,
+      "at50": 1
+     },
+     "mrr": 0.802,
+     "ndcgAt10": 0.851,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 2,
+       "hitAt5": 2
+      },
+      "path": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 1,
+       "hitAt5": 1
+      }
+     },
+     "rows": [
+      {
+       "anchor": "pnpm install + build，创建独立 profile `~/.dsh/profiles/superagen",
+       "type": "command",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "WORK_TOOLS",
+       "type": "env",
+       "gold": 139,
+       "rank": 1,
+       "hits": 9
+      },
+      {
+       "anchor": "cannot access '/tmp/macOS-ForSheng': No such file or directo",
+       "type": "error",
+       "gold": 184,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "0x220001a8",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 3,
+       "hits": 3
+      },
+      {
+       "anchor": "4194304B",
+       "type": "number",
+       "gold": 496,
+       "rank": 1,
+       "hits": 4
+      },
+      {
+       "anchor": "/vol02/1000-1-3853fc20/",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "pnpm typecheck 通过，测试 1091/1092 通过。GitHub 源未配置（repositoryUnse",
+       "type": "command",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "GUIDE_CODING",
+       "type": "env",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "error) or hangs 50s+, and cache stays at the old version; co",
+       "type": "error",
+       "gold": 334,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x411fd461",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 3,
+       "hits": 3
+      },
+      {
+       "anchor": "499920KB",
+       "type": "number",
+       "gold": 2974,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/docker/ekko-studio/docker-compose.yml",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "git clone --depth 1 https://github.com/CrossDarwin/macOS-For",
+       "type": "command",
+       "gold": 160,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "GIT_TERMINAL_PROMPT",
+       "type": "env",
+       "gold": 160,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "Error: code run failed (exception): Expected ',', got 'ident",
+       "type": "error",
+       "gold": 439,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "0x1221011110101011",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 3,
+       "hits": 3
+      },
+      {
+       "anchor": "/vol3/1000/docker/ekko-studio/openviking",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "46c6f044-0815-4d66-b91d-6afc5d167b9d",
+       "type": "uuid",
+       "gold": 444,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git 2>&1 | tail -5\\n` });\\nreturn b.kind === \\\"foreground\\\" ",
+       "type": "command",
+       "gold": 160,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "THIRD_PARTY_NOTICES",
+       "type": "env",
+       "gold": 241,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "Error: code run failed (exception): ToolCallError: active te",
+       "type": "error",
+       "gold": 634,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "0xb8000000",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 7,
+       "hits": 11
+      }
+     ]
+    },
+    "score": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-65bd8898-db92-4879-8e80-0f1465d1f8d3/session.v4.jsonl.zstd",
+     "rankMode": "score",
+     "goldMode": "any",
+     "droppedAnchors": 22,
+     "evaluated": 22,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.773,
+      "at5": 0.909,
+      "at10": 1,
+      "at50": 1
+     },
+     "mrr": 0.831,
+     "ndcgAt10": 0.871,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "number": {
+       "n": 2,
+       "hitAt5": 2
+      },
+      "path": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 1,
+       "hitAt5": 1
+      }
+     },
+     "rows": [
+      {
+       "anchor": "pnpm install + build，创建独立 profile `~/.dsh/profiles/superagen",
+       "type": "command",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "WORK_TOOLS",
+       "type": "env",
+       "gold": 139,
+       "rank": 1,
+       "hits": 9
+      },
+      {
+       "anchor": "cannot access '/tmp/macOS-ForSheng': No such file or directo",
+       "type": "error",
+       "gold": 184,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x220001a8",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "4194304B",
+       "type": "number",
+       "gold": 496,
+       "rank": 4,
+       "hits": 4
+      },
+      {
+       "anchor": "/vol02/1000-1-3853fc20/",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "pnpm typecheck 通过，测试 1091/1092 通过。GitHub 源未配置（repositoryUnse",
+       "type": "command",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "GUIDE_CODING",
+       "type": "env",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "error) or hangs 50s+, and cache stays at the old version; co",
+       "type": "error",
+       "gold": 334,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x411fd461",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "499920KB",
+       "type": "number",
+       "gold": 2974,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/docker/ekko-studio/docker-compose.yml",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "git clone --depth 1 https://github.com/CrossDarwin/macOS-For",
+       "type": "command",
+       "gold": 160,
+       "rank": 6,
+       "hits": 6
+      },
+      {
+       "anchor": "GIT_TERMINAL_PROMPT",
+       "type": "env",
+       "gold": 160,
+       "rank": 6,
+       "hits": 6
+      },
+      {
+       "anchor": "Error: code run failed (exception): Expected ',', got 'ident",
+       "type": "error",
+       "gold": 439,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "0x1221011110101011",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "/vol3/1000/docker/ekko-studio/openviking",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "46c6f044-0815-4d66-b91d-6afc5d167b9d",
+       "type": "uuid",
+       "gold": 444,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git 2>&1 | tail -5\\n` });\\nreturn b.kind === \\\"foreground\\\" ",
+       "type": "command",
+       "gold": 160,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "THIRD_PARTY_NOTICES",
+       "type": "env",
+       "gold": 241,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "Error: code run failed (exception): ToolCallError: active te",
+       "type": "error",
+       "gold": 634,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "0xb8000000",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 5,
+       "hits": 11
+      }
+     ]
+    },
+    "density": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-65bd8898-db92-4879-8e80-0f1465d1f8d3/session.v4.jsonl.zstd",
+     "rankMode": "density",
+     "goldMode": "any",
+     "droppedAnchors": 22,
+     "evaluated": 22,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.727,
+      "at5": 0.955,
+      "at10": 1,
+      "at50": 1
+     },
+     "mrr": 0.84,
+     "ndcgAt10": 0.88,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 2,
+       "hitAt5": 2
+      },
+      "path": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 1,
+       "hitAt5": 1
+      }
+     },
+     "rows": [
+      {
+       "anchor": "pnpm install + build，创建独立 profile `~/.dsh/profiles/superagen",
+       "type": "command",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "WORK_TOOLS",
+       "type": "env",
+       "gold": 139,
+       "rank": 3,
+       "hits": 9
+      },
+      {
+       "anchor": "cannot access '/tmp/macOS-ForSheng': No such file or directo",
+       "type": "error",
+       "gold": 184,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x220001a8",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "4194304B",
+       "type": "number",
+       "gold": 496,
+       "rank": 2,
+       "hits": 4
+      },
+      {
+       "anchor": "/vol02/1000-1-3853fc20/",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "pnpm typecheck 通过，测试 1091/1092 通过。GitHub 源未配置（repositoryUnse",
+       "type": "command",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "GUIDE_CODING",
+       "type": "env",
+       "gold": 139,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "error) or hangs 50s+, and cache stays at the old version; co",
+       "type": "error",
+       "gold": 334,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x411fd461",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "499920KB",
+       "type": "number",
+       "gold": 2974,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/docker/ekko-studio/docker-compose.yml",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "git clone --depth 1 https://github.com/CrossDarwin/macOS-For",
+       "type": "command",
+       "gold": 160,
+       "rank": 2,
+       "hits": 6
+      },
+      {
+       "anchor": "GIT_TERMINAL_PROMPT",
+       "type": "env",
+       "gold": 160,
+       "rank": 2,
+       "hits": 6
+      },
+      {
+       "anchor": "Error: code run failed (exception): Expected ',', got 'ident",
+       "type": "error",
+       "gold": 439,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "0x1221011110101011",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 1,
+       "hits": 3
+      },
+      {
+       "anchor": "/vol3/1000/docker/ekko-studio/openviking",
+       "type": "path",
+       "gold": 334,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "46c6f044-0815-4d66-b91d-6afc5d167b9d",
+       "type": "uuid",
+       "gold": 444,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git 2>&1 | tail -5\\n` });\\nreturn b.kind === \\\"foreground\\\" ",
+       "type": "command",
+       "gold": 160,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "THIRD_PARTY_NOTICES",
+       "type": "env",
+       "gold": 241,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "Error: code run failed (exception): ToolCallError: active te",
+       "type": "error",
+       "gold": 634,
+       "rank": 1,
+       "hits": 1
+      },
+      {
+       "anchor": "0xb8000000",
+       "type": "hex",
+       "gold": 8105,
+       "rank": 7,
+       "hits": 11
+      }
+     ]
+    }
+   },
+   "densityVsSeq": {
+    "at1Gained": 6,
+    "at1Lost": 5,
+    "rankBetter": 6,
+    "rankWorse": 5,
+    "rankTie": 11
+   }
+  },
+  {
+   "id": "log3_d7951a68",
+   "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-d7951a68-b17e-48b3-a9ca-24eca5c28f9e/session.v4.jsonl.zstd",
+   "droppedAnchors": 24,
+   "evaluated": 24,
+   "unevaluable": 0,
+   "byRank": {
+    "seq": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-d7951a68-b17e-48b3-a9ca-24eca5c28f9e/session.v4.jsonl.zstd",
+     "rankMode": "seq",
+     "goldMode": "any",
+     "droppedAnchors": 24,
+     "evaluated": 24,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.083,
+      "at5": 0.917,
+      "at10": 0.917,
+      "at50": 0.958
+     },
+     "mrr": 0.502,
+     "ndcgAt10": 0.609,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 3,
+       "hitAt5": 1
+      },
+      "number": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "path": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 3,
+       "hitAt5": 3
+      }
+     },
+     "rows": [
+      {
+       "anchor": "git clone --depth 1 https://github.com/electricsheephq/lcm-x",
+       "type": "command",
+       "gold": 35,
+       "rank": 1,
+       "hits": 7
+      },
+      {
+       "anchor": "CODE_OF_CONDUCT",
+       "type": "env",
+       "gold": 50,
+       "rank": 2,
+       "hits": 24
+      },
+      {
+       "anchor": "error, it condenses and retries. You can also request conden",
+       "type": "error",
+       "gold": 203,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "0xd0680200000000",
+       "type": "hex",
+       "gold": 3656,
+       "rank": 2,
+       "hits": 8
+      },
+      {
+       "anchor": "24000tok",
+       "type": "number",
+       "gold": 561,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/out/rootfs.img",
+       "type": "path",
+       "gold": 2527,
+       "rank": 2,
+       "hits": 17
+      },
+      {
+       "anchor": "8104ea70-c333-46be-903c-3a09d5c52d3d",
+       "type": "uuid",
+       "gold": 480,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "git log ===\\\"; git log --oneline -5\\necho \\\"=== size ===\\\"; ",
+       "type": "command",
+       "gold": 44,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "LCM_SENSITIVE_PATTERNS_ENABLED",
+       "type": "env",
+       "gold": 255,
+       "rank": 2,
+       "hits": 23
+      },
+      {
+       "anchor": "cannot reduce the system prompt, tools, or session prefix, o",
+       "type": "error",
+       "gold": 203,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "0x49004000",
+       "type": "hex",
+       "gold": 5366,
+       "rank": 24,
+       "hits": 26
+      },
+      {
+       "anchor": "44.948641ms",
+       "type": "number",
+       "gold": 1359,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/macOS-ForSheng/rootfs/rootfs.shngroot.img",
+       "type": "path",
+       "gold": 2527,
+       "rank": 2,
+       "hits": 6
+      },
+      {
+       "anchor": "6b280d8c-7342-4056-87cb-f0bd76a5b60d",
+       "type": "uuid",
+       "gold": 631,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "node no summariser call starts unless it is expected",
+       "type": "command",
+       "gold": 297,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "LCM_IGNORE_MESSAGE_PATTERNS",
+       "type": "env",
+       "gold": 255,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "error, where the conversation condenses and the request retr",
+       "type": "error",
+       "gold": 203,
+       "rank": 2,
+       "hits": 4
+      },
+      {
+       "anchor": "0xa7100000",
+       "type": "hex",
+       "gold": 5645,
+       "rank": 57,
+       "hits": 59
+      },
+      {
+       "anchor": "949292ms",
+       "type": "number",
+       "gold": 1368,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/docker/overlay2/l/J65WBJLDTFTDTEK7NDWDFWNVIU",
+       "type": "path",
+       "gold": 2527,
+       "rank": 2,
+       "hits": 6
+      },
+      {
+       "anchor": "2d9f9bff-5626-4177-99ba-f8803d20afed",
+       "type": "uuid",
+       "gold": 631,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "git identity for status and doctor",
+       "type": "command",
+       "gold": 297,
+       "rank": 2,
+       "hits": 2
+      },
+      {
+       "anchor": "LCM_HERMES_BASE_DIR",
+       "type": "env",
+       "gold": 276,
+       "rank": 2,
+       "hits": 4
+      },
+      {
+       "anchor": "errors, and metadata — only the text content changes. If a r",
+       "type": "error",
+       "gold": 203,
+       "rank": 2,
+       "hits": 2
+      }
+     ]
+    },
+    "score": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-d7951a68-b17e-48b3-a9ca-24eca5c28f9e/session.v4.jsonl.zstd",
+     "rankMode": "score",
+     "goldMode": "any",
+     "droppedAnchors": 24,
+     "evaluated": 24,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.667,
+      "at5": 0.833,
+      "at10": 0.917,
+      "at50": 1
+     },
+     "mrr": 0.727,
+     "ndcgAt10": 0.767,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 3
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 2
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "path": {
+       "n": 3,
+       "hitAt5": 2
+      },
+      "uuid": {
+       "n": 3,
+       "hitAt5": 3
+      }
+     },
+     "rows": [
+      {
+       "anchor": "git clone --depth 1 https://github.com/electricsheephq/lcm-x",
+       "type": "command",
+       "gold": 35,
+       "rank": 1,
+       "hits": 7
+      },
+      {
+       "anchor": "CODE_OF_CONDUCT",
+       "type": "env",
+       "gold": 50,
+       "rank": 16,
+       "hits": 24
+      },
+      {
+       "anchor": "error, it condenses and retries. You can also request conden",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0xd0680200000000",
+       "type": "hex",
+       "gold": 3656,
+       "rank": 1,
+       "hits": 8
+      },
+      {
+       "anchor": "24000tok",
+       "type": "number",
+       "gold": 561,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/out/rootfs.img",
+       "type": "path",
+       "gold": 2527,
+       "rank": 10,
+       "hits": 17
+      },
+      {
+       "anchor": "8104ea70-c333-46be-903c-3a09d5c52d3d",
+       "type": "uuid",
+       "gold": 480,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git log ===\\\"; git log --oneline -5\\necho \\\"=== size ===\\\"; ",
+       "type": "command",
+       "gold": 44,
+       "rank": 6,
+       "hits": 6
+      },
+      {
+       "anchor": "LCM_SENSITIVE_PATTERNS_ENABLED",
+       "type": "env",
+       "gold": 255,
+       "rank": 16,
+       "hits": 23
+      },
+      {
+       "anchor": "cannot reduce the system prompt, tools, or session prefix, o",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x49004000",
+       "type": "hex",
+       "gold": 5366,
+       "rank": 3,
+       "hits": 26
+      },
+      {
+       "anchor": "44.948641ms",
+       "type": "number",
+       "gold": 1359,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/macOS-ForSheng/rootfs/rootfs.shngroot.img",
+       "type": "path",
+       "gold": 2527,
+       "rank": 5,
+       "hits": 6
+      },
+      {
+       "anchor": "6b280d8c-7342-4056-87cb-f0bd76a5b60d",
+       "type": "uuid",
+       "gold": 631,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "node no summariser call starts unless it is expected",
+       "type": "command",
+       "gold": 297,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "LCM_IGNORE_MESSAGE_PATTERNS",
+       "type": "env",
+       "gold": 255,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "error, where the conversation condenses and the request retr",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 4
+      },
+      {
+       "anchor": "0xa7100000",
+       "type": "hex",
+       "gold": 5645,
+       "rank": 3,
+       "hits": 59
+      },
+      {
+       "anchor": "949292ms",
+       "type": "number",
+       "gold": 1368,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/docker/overlay2/l/J65WBJLDTFTDTEK7NDWDFWNVIU",
+       "type": "path",
+       "gold": 2527,
+       "rank": 5,
+       "hits": 6
+      },
+      {
+       "anchor": "2d9f9bff-5626-4177-99ba-f8803d20afed",
+       "type": "uuid",
+       "gold": 631,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git identity for status and doctor",
+       "type": "command",
+       "gold": 297,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "LCM_HERMES_BASE_DIR",
+       "type": "env",
+       "gold": 276,
+       "rank": 1,
+       "hits": 4
+      },
+      {
+       "anchor": "errors, and metadata — only the text content changes. If a r",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 2
+      }
+     ]
+    },
+    "density": {
+     "file": "/home/agent/.dsh/sessions/--home-agent-workspaces--/session-d7951a68-b17e-48b3-a9ca-24eca5c28f9e/session.v4.jsonl.zstd",
+     "rankMode": "density",
+     "goldMode": "any",
+     "droppedAnchors": 24,
+     "evaluated": 24,
+     "unevaluable": 0,
+     "recall": {
+      "at1": 0.75,
+      "at5": 1,
+      "at10": 1,
+      "at50": 1
+     },
+     "mrr": 0.861,
+     "ndcgAt10": 0.897,
+     "byType": {
+      "command": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "env": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "error": {
+       "n": 4,
+       "hitAt5": 4
+      },
+      "hex": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "number": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "path": {
+       "n": 3,
+       "hitAt5": 3
+      },
+      "uuid": {
+       "n": 3,
+       "hitAt5": 3
+      }
+     },
+     "rows": [
+      {
+       "anchor": "git clone --depth 1 https://github.com/electricsheephq/lcm-x",
+       "type": "command",
+       "gold": 35,
+       "rank": 2,
+       "hits": 7
+      },
+      {
+       "anchor": "CODE_OF_CONDUCT",
+       "type": "env",
+       "gold": 50,
+       "rank": 2,
+       "hits": 24
+      },
+      {
+       "anchor": "error, it condenses and retries. You can also request conden",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0xd0680200000000",
+       "type": "hex",
+       "gold": 3656,
+       "rank": 3,
+       "hits": 8
+      },
+      {
+       "anchor": "24000tok",
+       "type": "number",
+       "gold": 561,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/out/rootfs.img",
+       "type": "path",
+       "gold": 2527,
+       "rank": 1,
+       "hits": 17
+      },
+      {
+       "anchor": "8104ea70-c333-46be-903c-3a09d5c52d3d",
+       "type": "uuid",
+       "gold": 480,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git log ===\\\"; git log --oneline -5\\necho \\\"=== size ===\\\"; ",
+       "type": "command",
+       "gold": 44,
+       "rank": 2,
+       "hits": 6
+      },
+      {
+       "anchor": "LCM_SENSITIVE_PATTERNS_ENABLED",
+       "type": "env",
+       "gold": 255,
+       "rank": 1,
+       "hits": 23
+      },
+      {
+       "anchor": "cannot reduce the system prompt, tools, or session prefix, o",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "0x49004000",
+       "type": "hex",
+       "gold": 5366,
+       "rank": 3,
+       "hits": 26
+      },
+      {
+       "anchor": "44.948641ms",
+       "type": "number",
+       "gold": 1359,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/1000/work/macOS-ForSheng/rootfs/rootfs.shngroot.img",
+       "type": "path",
+       "gold": 2527,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "6b280d8c-7342-4056-87cb-f0bd76a5b60d",
+       "type": "uuid",
+       "gold": 631,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "node no summariser call starts unless it is expected",
+       "type": "command",
+       "gold": 297,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "LCM_IGNORE_MESSAGE_PATTERNS",
+       "type": "env",
+       "gold": 255,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "error, where the conversation condenses and the request retr",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 4
+      },
+      {
+       "anchor": "0xa7100000",
+       "type": "hex",
+       "gold": 5645,
+       "rank": 2,
+       "hits": 59
+      },
+      {
+       "anchor": "949292ms",
+       "type": "number",
+       "gold": 1368,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "/vol3/docker/overlay2/l/J65WBJLDTFTDTEK7NDWDFWNVIU",
+       "type": "path",
+       "gold": 2527,
+       "rank": 1,
+       "hits": 6
+      },
+      {
+       "anchor": "2d9f9bff-5626-4177-99ba-f8803d20afed",
+       "type": "uuid",
+       "gold": 631,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "git identity for status and doctor",
+       "type": "command",
+       "gold": 297,
+       "rank": 1,
+       "hits": 2
+      },
+      {
+       "anchor": "LCM_HERMES_BASE_DIR",
+       "type": "env",
+       "gold": 276,
+       "rank": 1,
+       "hits": 4
+      },
+      {
+       "anchor": "errors, and metadata — only the text content changes. If a r",
+       "type": "error",
+       "gold": 203,
+       "rank": 1,
+       "hits": 2
+      }
+     ]
+    }
+   },
+   "densityVsSeq": {
+    "at1Gained": 18,
+    "at1Lost": 2,
+    "rankBetter": 20,
+    "rankWorse": 3,
+    "rankTie": 1
+   }
+  }
+ ],
+ "summary": [
+  {
+   "id": "log1_d45c83f5",
+   "n": 21,
+   "seq": {
+    "at1": 0.381,
+    "at5": 0.952,
+    "at10": 0.952,
+    "at50": 0.952,
+    "mrr": 0.581,
+    "ndcg10": 0.673
+   },
+   "score": {
+    "at1": 0.524,
+    "at5": 0.762,
+    "at10": 0.81,
+    "at50": 0.952,
+    "mrr": 0.614,
+    "ndcg10": 0.654
+   },
+   "density": {
+    "at1": 0.714,
+    "at5": 0.952,
+    "at10": 0.952,
+    "at50": 0.952,
+    "mrr": 0.793,
+    "ndcg10": 0.832
+   }
+  },
+  {
+   "id": "log2_65bd8898",
+   "n": 22,
+   "seq": {
+    "at1": 0.682,
+    "at5": 0.955,
+    "at10": 1,
+    "at50": 1,
+    "mrr": 0.802,
+    "ndcg10": 0.851
+   },
+   "score": {
+    "at1": 0.773,
+    "at5": 0.909,
+    "at10": 1,
+    "at50": 1,
+    "mrr": 0.831,
+    "ndcg10": 0.871
+   },
+   "density": {
+    "at1": 0.727,
+    "at5": 0.955,
+    "at10": 1,
+    "at50": 1,
+    "mrr": 0.84,
+    "ndcg10": 0.88
+   }
+  },
+  {
+   "id": "log3_d7951a68",
+   "n": 24,
+   "seq": {
+    "at1": 0.083,
+    "at5": 0.917,
+    "at10": 0.917,
+    "at50": 0.958,
+    "mrr": 0.502,
+    "ndcg10": 0.609
+   },
+   "score": {
+    "at1": 0.667,
+    "at5": 0.833,
+    "at10": 0.917,
+    "at50": 1,
+    "mrr": 0.727,
+    "ndcg10": 0.767
+   },
+   "density": {
+    "at1": 0.75,
+    "at5": 1,
+    "at10": 1,
+    "at50": 1,
+    "mrr": 0.861,
+    "ndcg10": 0.897
+   }
+  }
+ ]
+}

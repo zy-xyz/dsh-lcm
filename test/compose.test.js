@@ -40,13 +40,16 @@ test("the bundle patch leaves exactly one active compaction engine", async (t) =
   ];
 
   const composed = boot.composeEntries([upstream, ourRows]);
+  // Match on the row's identity, not on the package name: the engine package is
+  // called `dsh-lcm`, so a /compaction/ name test silently selects nothing and
+  // the "exactly one engine" assertion passes for the wrong reason (0 !== 1).
   const engines = composed.filter(
-    (e) => /compaction/.test(String(e.name ?? "")) && !/command|tool/.test(e.id)
+    (e) => /compaction|lcm/.test(String(e.name ?? "") + " " + String(e.id ?? "")) && !/command|tool/.test(e.id)
   );
   const active = engines.filter((e) => !e.disabled);
 
   assert.equal(active.length, 1, "exactly one compaction engine may be active");
-  assert.equal(active[0].name, "dsh-compaction-lcm", "and it is this backend");
+  assert.equal(active[0].name, "dsh-lcm", "and it is this backend");
   assert.ok(
     engines.some((e) => e.id === "compaction-basic" && e.disabled === true),
     "the built-in summarizer is disabled"

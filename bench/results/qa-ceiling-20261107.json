@@ -1,0 +1,109 @@
+{
+  "date": "2026-11-07",
+  "span": "/tmp/c2.json",
+  "canaries": 24,
+  "model": "balanced-lite",
+  "gateway": "http://10.126.126.4:20128/v1",
+  "question": "全跨度臂（third arg = full）在自然收尾时的锚点天花板",
+  "ladder": [
+    {
+      "max_tokens": 8000,
+      "arm": "full",
+      "label": "full-8000",
+      "ctxChars": 32259,
+      "hit": 20,
+      "total": 24,
+      "rate": 0.833,
+      "completionTokens": 3374,
+      "finish_reason": "stop",
+      "note": "首次自然收尾；重复 full-8000b 同样 20/24 / 3374 / stop"
+    }
+  ],
+  "ceiling": {
+    "found": true,
+    "cap": 8000,
+    "hit": 20,
+    "total": 24,
+    "rate": 0.833,
+    "cap_binding": false,
+    "why": "stop 时只用了 3374/8000 completionTokens，说明限制不是上限而是模型自己列举结束；再提高 MAX_TOKENS 不会再多出锚点，故未跑 16000/32000",
+    "missed": [
+      "1dc73913-7abd-4770...",
+      "62040ab4-873d-45aa...",
+      "60328828-cce8-487c...",
+      "BASE_IMAGE"
+    ],
+    "missed_note": "3 个 UUID 全文未出现；env 组在 SHENG_QMP_RING_VA 处自行收尾，BASE_IMAGE 未列出 —— 是模型漏列，不是被截断"
+  },
+  "comparison_at_same_cap": [
+    {
+      "arm": "lcm",
+      "label": "lcm-8000c",
+      "ctxChars": 8175,
+      "hit": 15,
+      "total": 24,
+      "rate": 0.625,
+      "completionTokens": 2448,
+      "finish_reason": "stop",
+      "pct_of_ceiling": 75
+    },
+    {
+      "arm": "basic",
+      "label": "basic-8000",
+      "ctxChars": 5283,
+      "hit": 4,
+      "total": 24,
+      "rate": 0.167,
+      "completionTokens": 1751,
+      "finish_reason": "stop",
+      "pct_of_ceiling": 20
+    }
+  ],
+  "failed_calls": [
+    {
+      "arm": "lcm",
+      "label": "lcm-8000",
+      "max_tokens": 8000,
+      "completionTokens": 3915,
+      "finish_reason": "error",
+      "hit": 15,
+      "total": 24,
+      "reason": "生成退化：内容末尾 (verification.json + root-build.json) 重复 30+ 次，网关以 finish_reason=error 收（HTTP 200，响应无 error 字段）；同一 prompt 两次调用逐字节相同（命中网关缓存），改用 lcm-8000c 拿到干净样本 stop/2448/15"
+    }
+  ],
+  "prior_context": [
+    {
+      "arm": "full-3000",
+      "hit": 4,
+      "total": 24,
+      "completionTokens": 3000,
+      "finish_reason": "length"
+    },
+    {
+      "arm": "full-1500",
+      "hit": 10,
+      "total": 24,
+      "completionTokens": 1500,
+      "finish_reason": "length"
+    },
+    {
+      "arm": "lcm-3000",
+      "hit": 16,
+      "total": 24,
+      "completionTokens": 1977,
+      "finish_reason": "stop"
+    },
+    {
+      "arm": "basic-3000",
+      "hit": 4,
+      "total": 24,
+      "completionTokens": 928,
+      "finish_reason": "stop"
+    }
+  ],
+  "summary_arms_source": {
+    "lcm": "/tmp/sum-lcm.txt",
+    "basic": "/tmp/sum-basic.txt"
+  },
+  "caveat": "单样本（temperature 0，combo 路由到 agnes-3.0-flash）；full 与 basic 两次重复一致，lcm 命中数两次一致（15），仅 tokens/finish_reason 因退化那次不同"
+}

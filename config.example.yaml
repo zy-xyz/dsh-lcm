@@ -1,11 +1,11 @@
-# dsh-compaction-lcm — 参数配置文件示例
+# dsh-lcm — 参数配置文件示例
 #
 # 用法：
 #   1) 复制到 profile 目录，例如 ~/.dsh/profiles/web/
 #   2) 在 cordis.patch.yml 的 compaction 行上引用配置：
 #
 #        - id: compaction-lcm
-#          name: dsh-compaction-lcm
+#          name: dsh-lcm
 #          config:
 #            <<: *lcm            # 或在 patch 里直接内联下面这些键
 #
@@ -74,7 +74,7 @@ checkpointCap: 16384
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 
-# ── 工具/命令行（dsh-compaction-lcm/tool 与 /command）的键 ───────────────
+# ── 工具/命令行（dsh-lcm/tool 与 /command）的键 ───────────────
 # 保留原版 backend（dsh-compaction-instant）的工具与命令名：
 #   recall / search 工具，/recall 命令
 # 默认 true。改成 false 只注册 lcm_expand / lcm_search / /lcm-search。

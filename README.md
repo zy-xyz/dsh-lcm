@@ -1,4 +1,4 @@
-# dsh-compaction-lcm
+# dsh-lcm
 
 Lossless Context Management compaction engine for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
@@ -14,12 +14,12 @@ Built on the [LCM paper](https://papers.voltropy.com/LCM) (Ehrlich & Blackman,
 [`dsh-compaction-instant`](https://github.com/TsFreddie/dsh-compaction-instant).
 
 > **Status: opt-in, not a replacement.** Measured against `dsh-compaction-basic`
-> on a real 436k-token span, this backend keeps **100%** of auto-extracted
-> anchors obtainable (vs 12.5% in the checkpoint alone) but does **not** write a
-> denser summary — it costs ~38% more output tokens on the span where it scores
-> higher, and the direction reverses on a smaller span. **`basic` remains the
-> default engine.** Install this one for sessions where retrieving an exact
-> earlier fact matters more than summary cost.
+> with type-grouped verbatim recall on two corpora, this backend hands the model
+> **3.0–3.5× more of the exact literals** than `basic` does (7/14 vs 2/14 on a
+> 4.3k span, 15/24 vs 4/24 on an 8.1k span) and reaches **75%** of what the model
+> can still quote from the same text *uncompacted* (20/24), where `basic` reaches
+> 20%. Summary cost is not part of the verdict: the user's standing instruction is
+> that cost is not to be optimised for. See [bench/REPORT.md](bench/REPORT.md) §19.
 
 ## What is measured, and what is not
 
@@ -31,8 +31,9 @@ retracted three of its claims. The current state:
 | configuration is a drop-in superset of basic | **verified** — 57 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
 | **a dropped fact stays recoverable** | **verified on production data** — see below |
-| this summary is *denser* than basic's | **not established** — 3-arm ablation splits by corpus |
-| lcm is cheaper | **retracted** — it writes ~38% more on the span where it scores higher |
+| **the summary keeps more exact literals** | **verified** — 2 corpora, same instrument: **7/14 vs 2/14**, **15/24 vs 4/24** |
+| this summary is *denser* than basic's | not claimed — density is not the goal, fidelity is |
+| lcm is cheaper | not claimed — cost is out of scope by instruction |
 
 ### The measured difference that is not a prompt trick
 
@@ -53,9 +54,12 @@ so the rest is one call away.
 Precisely stated: *discoverable* recoverability goes from 12.5% to 100%. Basic is not
 at zero — `session_search` exists — but its checkpoint never points at it.
 
-Because the summary-density claim does not hold (corpus c2 favours this engine by
-+12.5pp at +38% output tokens; corpus s reverses it), **basic remains the default
-engine** and this package stays an opt-in alternative.
+The old "denser summary" framing is gone: measured with type-grouped verbatim
+recall on two corpora, this backend's summary carries **3.0–3.5× more of the exact
+literals** than basic's (7/14 vs 2/14 on a 4.3k span; 15/24 vs 4/24 on an 8.1k
+span) and reaches **75%** of what the model can still quote from the *uncompacted*
+text, against basic's 20%. That is the claim, and it holds on both corpora.
+Installation is still a deliberate step — it disables `compaction-basic`.
 
 The honest structural claim, which needs no benchmark: **the checkpoint is a view
 over a log that keeps everything.** A summary that drops a path is recoverable
@@ -64,7 +68,7 @@ from the model's reach.
 
 ## What changes
 
-| | `dsh-compaction-basic` | `dsh-compaction-instant` | **`dsh-compaction-lcm`** |
+| | `dsh-compaction-basic` | `dsh-compaction-instant` | **`dsh-lcm`** |
 |---|---|---|---|
 | summarizer | LLM | deterministic compiler | **LLM** |
 | summary shape | free-form prose | verbatim excerpts | **4 narrative sections + an enumerated anchor list** |
@@ -84,7 +88,7 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
 
 ```yaml
 - id: compaction-lcm
-  name: dsh-compaction-lcm
+  name: dsh-lcm
   config:
     # ── identical to dsh-compaction-basic ──
     thresholdRatio: 0.8        # trigger = min(W*ratio, W-O-headroom)
@@ -132,7 +136,7 @@ aliases and register only the LCM names.
 ## Install
 
 ```bash
-dsh plugin --profile web add dsh-compaction-lcm
+dsh plugin --profile web add dsh-lcm
 ```
 
 The bundle patch disables `compaction-basic` (one `ctx.compaction` per context)

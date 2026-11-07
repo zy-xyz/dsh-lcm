@@ -1,7 +1,7 @@
 # LCM-X 功能族盘点 × dsh 版对比
 
 > 2026-11-07 · 读的是 `/home/agent/workspaces/lcmx-study/lcm-x`（stable **v0.29.1**，不是 v0.27.0 —— `plugin.yaml:2`、`README.md:144`、`docs/project-status.md:21` 三处一致）
-> 对比对象：本仓 `dsh-compaction-lcm` 0.2.5（2452 行 JS）
+> 对比对象：本仓 `dsh-lcm` 0.2.5（2452 行 JS）
 > 标 ▲ = 我读原文/看图确认；标 ● = 子代理核过合同细节
 
 ---

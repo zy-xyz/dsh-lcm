@@ -1,5 +1,5 @@
 /**
- * Model-facing same-session recall tools for `dsh-compaction-lcm`.
+ * Model-facing same-session recall tools for `dsh-lcm`.
  *
  * Two complementary entry points over the durable session log:
  *
@@ -16,7 +16,7 @@
  *
  * Registered as the `recall` and `search` tools on any context providing
  * `tools`.
- * @module dsh-compaction-lcm/tool
+ * @module dsh-lcm/tool
  */
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";

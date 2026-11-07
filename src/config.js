@@ -1,5 +1,5 @@
 /**
- * Configuration resolution for `dsh-compaction-lcm`.
+ * Configuration resolution for `dsh-lcm`.
  *
  * The key surface is a strict superset of `@deepseek-ai/dsh-compaction-basic`:
  * every key basic accepts is accepted here with the same meaning and the same
@@ -20,7 +20,7 @@
  *
  *   summaryTokens = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
  *
- * @module dsh-compaction-lcm/config
+ * @module dsh-lcm/config
  */
 import { deepFreeze } from "@deepseek-ai/dsh-util-values";
 

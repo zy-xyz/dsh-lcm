@@ -1,5 +1,5 @@
 /**
- * Human-facing `/lcm-search` command for `dsh-compaction-lcm`.
+ * Human-facing `/lcm-search` command for `dsh-lcm`.
  *
  * Grep-based, like VCC's `--grep`: `/lcm-search <keyword|regex>` searches the
  * session's durable event log (including content elided or truncated by
@@ -7,7 +7,7 @@
  * events and their `(seq N)` pointers, so the next model turn sees them.
  * The log is append-only, so hits are always the original content.
  *
- * @module dsh-compaction-lcm/command
+ * @module dsh-lcm/command
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
