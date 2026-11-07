@@ -20,10 +20,17 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 32 tests, 9/9 basic configs accepted identically |
-| a summary written from the enumerated anchor clause retains more verbatim identifiers | **under test** — 3-arm ablation, one span, N=4 |
-| the two engines were compared | **never done** — both arms were bare prompt strings, not `compile()` |
-| lcm is cheaper | **retracted** — token difference is inside the noise (95% CI −40%…+44%) |
+| configuration is a drop-in superset of basic | **verified** — 38 tests, identical defaults and budget math |
+| the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
+| this summary is better than basic's | **not established** — see below; the numbers point the other way |
+| lcm is cheaper | **retracted** — it writes ~38% more on the span where it scores higher |
+
+**The 3-arm ablation (§ bench/REPORT.md) does not favour this engine.** On corpus c2
+it retains more verbatim anchors (51% vs 38%) while spending 38% more output
+tokens; on corpus s it retains *fewer* (32% vs 36%). The one `basic + anchor-clause`
+sample beat both. Whatever the anchor clause buys, it looks like a property of the
+prompt, not of the backend — so **basic remains the default engine** and this
+package stays an opt-in alternative.
 
 The honest structural claim, which needs no benchmark: **the checkpoint is a view
 over a log that keeps everything.** A summary that drops a path is recoverable
