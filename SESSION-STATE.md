@@ -56,5 +56,23 @@ https://github.com/zy-xyz/dsh-lcm ｜ 版本 **0.3.0** ｜ **57 测试全绿**
 3. 跨会话检索（`session_scope`）—— P1
 4. 向量召回 —— P3，现在不该做
 
-## 推送经验
-直连 + `git -c http.version=HTTP/1.1` 成功；代理 `192.168.2.121:7890` **不可用**（连接超时 133s）。镜像测速：direct 0.95s / ghfast.top 1.25s / gh-proxy.com 1.14s / ghproxy.net 4.27s / jsdelivr 1.33s / kkgithub 超时。**镜像只能拉不能推**，push 走直连。
+## 网络：优先用自建镜像 `git.acezy.top`
+
+**拉取一律优先走镜像**（前缀 = `https://git.acezy.top/` + 完整原 URL）：
+
+```bash
+git clone https://git.acezy.top/https://github.com/OWNER/REPO.git
+curl -O https://git.acezy.top/https://raw.githubusercontent.com/OWNER/REPO/master/FILE
+curl -O https://git.acezy.top/https://github.com/OWNER/REPO/archive/master.tar.gz
+```
+
+实测（2026-11-07）：clone 200 / 1.20s（内容完整）、raw 200 / 1.18s、tarball 200 / 1.62s、API 200 / 1.52s。
+**不要用** `.../github.com/OWNER/REPO/raw/master/FILE` 这种形式（15s 超时或 404），用 raw.githubusercontent.com 前缀那条。
+
+**推送必须走直连**：镜像不转发认证，`git push` 到 `git.acezy.top` 会要用户名。直连时加 `-c http.version=HTTP/1.1`（HTTP/2 会报 `framing layer` 错误）：
+
+```bash
+GH_CONFIG_DIR=/home/agent/.dsh/agent-gh git -c http.version=HTTP/1.1 push
+```
+
+代理 `192.168.2.121:7890` **不可用**（133s 连接失败）。其余通道同次测速：direct 0.95s / gh-proxy.com 1.14s / ghfast.top 1.25s / jsdelivr 1.33s / ghproxy.net 4.27s / kkgithub 超时。
