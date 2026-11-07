@@ -121,9 +121,13 @@ The last line is the only new one.
 |---|---|
 | `lcm_expand` | restore exact original content by `seq` (`"3-7,15"`), `result` (`"3"`) or `checkpoint` (`"1"`) |
 | `lcm_search` | keyword/regex search over the whole durable log, including content a checkpoint omitted |
+| `recall` / `search` | **the original backend's names, kept as aliases** — identical behaviour |
+| `/lcm-search <pattern>` | the human-side search; appends hits as a durable user message |
+| `/recall <pattern>` | **the original command name, kept as an alias** |
 
-`/lcm-search <pattern>` does the same from the human side and appends the hits as
-a durable user message, so the next model turn sees them.
+Nothing that already pointed at `recall`, `search` or `/recall` breaks when
+switching backends. Set `legacyNames: false` on either plugin row to drop the
+aliases and register only the LCM names.
 
 ## Install
 

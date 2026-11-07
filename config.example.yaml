@@ -74,5 +74,13 @@ checkpointCap: 16384
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 
+# ── 工具/命令行（dsh-compaction-lcm/tool 与 /command）的键 ───────────────
+# 保留原版 backend（dsh-compaction-instant）的工具与命令名：
+#   recall / search 工具，/recall 命令
+# 默认 true。改成 false 只注册 lcm_expand / lcm_search / /lcm-search。
+# legacyNames: true
+#   maxRecallTokens: 16000
+#   maxSearchHits: 50
+
 # 调试日志落盘路径。默认 $DSH_HOME/compaction-debug.log。
 # debugLogPath: /tmp/compaction-debug.log

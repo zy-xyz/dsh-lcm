@@ -21,9 +21,11 @@ export const USAGE = "Usage: /lcm-search <keyword|regex>";
 export function resolveConfig(config = {}) {
   const maxRecallTokens = config.maxRecallTokens ?? DEFAULT_MAX_RECALL_TOKENS;
   const maxSearchHits = config.maxSearchHits ?? DEFAULT_MAX_SEARCH_HITS;
+  const legacyNames = config.legacyNames ?? true;
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("CommandRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("CommandRecallConfig: maxSearchHits must be a positive integer");
-  return { maxRecallTokens, maxSearchHits };
+  if (typeof legacyNames !== "boolean") throw new Error("CommandRecallConfig: legacyNames must be a boolean");
+  return { maxRecallTokens, maxSearchHits, legacyNames };
 }
 
 /** Execute one grep-based recall request against the calling agent's session. */
@@ -76,9 +78,9 @@ async function executeRecall(invocation, resolved) {
  * @param resolved - validated `{ maxRecallTokens, maxSearchHits }`.
  * @returns a registry-ready CommandDefinition.
  */
-export function defineRecallCommand(resolved) {
+export function defineRecallCommand(resolved, commandName = "lcm-search") {
   return {
-    name: "lcm-search",
+    name: commandName,
     description: "Search earlier conversation history by keyword or regex",
     handler: (invocation) => executeRecall(invocation, resolved)
   };
@@ -91,5 +93,12 @@ export function defineRecallCommand(resolved) {
  */
 export function apply(ctx, config) {
   const resolved = resolveConfig(config);
-  ctx.effect(() => ctx.commands.register(defineRecallCommand(resolved)));
+  ctx.effect(() => {
+    const disposers = [ctx.commands.register(defineRecallCommand(resolved, "lcm-search"))];
+    // Keep the original backend's command name working too.
+    if (resolved.legacyNames) disposers.push(ctx.commands.register(defineRecallCommand(resolved, "recall")));
+    return () => {
+      for (const dispose of disposers) dispose();
+    };
+  });
 }

@@ -30,9 +30,11 @@ export const inject = ["tools"];
 export function resolveConfig(config = {}) {
   const maxRecallTokens = config.maxRecallTokens ?? DEFAULT_MAX_RECALL_TOKENS;
   const maxSearchHits = config.maxSearchHits ?? DEFAULT_MAX_SEARCH_HITS;
+  const legacyNames = config.legacyNames ?? true;
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("ToolRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("ToolRecallConfig: maxSearchHits must be a positive integer");
-  return { maxRecallTokens, maxSearchHits };
+  if (typeof legacyNames !== "boolean") throw new Error("ToolRecallConfig: legacyNames must be a boolean");
+  return { maxRecallTokens, maxSearchHits, legacyNames };
 }
 
 const RECALL_DESCRIPTION = "Restore the exact original content of earlier events in THIS conversation by a typed reference. type=\"seq\" with a seq selection id (\"3-7,15\", \"seq 12\", \"seqs 3-7\" — the checkpoint marker forms) restores those events; type=\"result\" with the \"result N\" pointer from a tool-call one-liner (\"result 3\" or \"3\") restores that tool result; type=\"checkpoint\" with an ordinal (\"1\" = oldest, as in a \"[checkpoint N]\" elision line) or a \"seq N\" pointer restores that full checkpoint. The durable log is append-only, so recalled content is always the original tokens. To find events by keyword or regex instead, use the search tool.";
@@ -93,9 +95,9 @@ function executeRecall(exec, type, id, resolved) {
  * @param resolved - validated `{ maxRecallTokens, maxSearchHits }`.
  * @returns a registry-ready ToolDefinition.
  */
-export function defineRecallTool(resolved) {
+export function defineRecallTool(resolved, toolName = "lcm_expand") {
   return defineTool({
-    name: "lcm_expand",
+    name: toolName,
     description: RECALL_DESCRIPTION,
     parameters: {
       type: {
@@ -126,9 +128,9 @@ export function defineRecallTool(resolved) {
  * @param resolved - validated `{ maxRecallTokens, maxSearchHits }`.
  * @returns a registry-ready ToolDefinition.
  */
-export function defineSearchTool(resolved) {
+export function defineSearchTool(resolved, toolName = "lcm_search") {
   return defineTool({
-    name: "lcm_search",
+    name: toolName,
     description: SEARCH_DESCRIPTION,
     parameters: {
       pattern: {
@@ -176,9 +178,15 @@ export function apply(ctx, config) {
   const resolved = resolveConfig(config);
   ctx.effect(() => {
     const disposers = [
-      ctx.tools.register(defineRecallTool(resolved)),
-      ctx.tools.register(defineSearchTool(resolved))
+      ctx.tools.register(defineRecallTool(resolved, "lcm_expand")),
+      ctx.tools.register(defineSearchTool(resolved, "lcm_search"))
     ];
+    // The original backend's names stay available so anything already written
+    // against `recall` / `search` keeps working after switching backends.
+    if (resolved.legacyNames) {
+      disposers.push(ctx.tools.register(defineRecallTool(resolved, "recall")));
+      disposers.push(ctx.tools.register(defineSearchTool(resolved, "search")));
+    }
     return () => {
       for (const dispose of disposers) dispose();
     };

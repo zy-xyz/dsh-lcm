@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.5 — 2026-11-07
+
+The original backend's names are kept, not replaced.
+
+### Added
+
+- **`recall` and `search` tools, and `/recall`, are registered alongside
+  `lcm_expand` / `lcm_search` / `/lcm-search`.** `dsh-compaction-instant` shipped
+  those three names; anything already written against them — agent
+  instructions, saved prompts, habit — keeps working after a backend switch.
+  Covered by `test/compat.test.js` (5 tests).
+- `legacyNames` (default `true`) on the tool and command rows; set it to
+  `false` to register only the LCM names.
+- `defineRecallTool` / `defineSearchTool` / `defineRecallCommand` take an
+  optional name argument, so a deployment can register any alias without
+  forking the module.
+
+## 0.2.4 — 2026-11-07
 ## 0.2.4 — 2026-11-07
 
 Two more instances of the same off-by-one, and dead code removal.
