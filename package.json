@@ -41,7 +41,7 @@
   ],
   "scripts": {
     "check": "node --check src/index.js && node --check src/summarize.js && node --check src/region.js && node --check src/compiler.js && node --check src/tool.js && node --check src/command.js && node --check src/recall.js && node --check src/search.js",
-    "test": "node --test test/"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
