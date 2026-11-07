@@ -411,10 +411,16 @@ test("resolveCompactSpec honours the routed output reservation (audit D2)", () =
   const config = resolveConfig({});
   const policy = resolveTargetPolicy(config, { provider: "p", model: "m" });
 
-  // basic: messageBudget = W - O; pressureBudget = messageBudget - headroom
-  // W=128000, O=8192 -> 119808 - 65536 = 54272
+  // Numbers taken from an independent line-by-line audit of basic's source:
+  //   W=128000 O=8192 -> threshold 54272, retain 19169
+  //   W=200000 O=8192 -> threshold 126272, retain 30689
+  //   W=1000000 O=16384 -> threshold 800000, retain 157378
   assert.equal(resolveCompactSpec(policy, 128000, 8192).thresholdTokens, 54272);
-  assert.equal(resolveCompactSpec(policy, 128000, 8192).retainTokens, Math.floor(119808 * 0.16));
+  assert.equal(resolveCompactSpec(policy, 128000, 8192).retainTokens, 19169);
+  assert.equal(resolveCompactSpec(policy, 200000, 8192).thresholdTokens, 126272);
+  assert.equal(resolveCompactSpec(policy, 200000, 8192).retainTokens, 30689);
+  assert.equal(resolveCompactSpec(policy, 1000000, 16384).thresholdTokens, 800000);
+  assert.equal(resolveCompactSpec(policy, 1000000, 16384).retainTokens, 157378);
 
   // No reservation reproduces the old value: 128000 - 65536 = 62464
   assert.equal(resolveCompactSpec(policy, 128000, 0).thresholdTokens, 62464);

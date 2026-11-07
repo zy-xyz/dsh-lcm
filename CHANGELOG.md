@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.2.1 — 2026-11-07
+
+Round 2: independent audit fixes and a retracted benchmark.
+
+### Fixed (configuration parity — found by an independent line-by-line audit)
+
+- **D1** `static Config` did not declare `headroomTokens` or `maxTokens`, so both
+  were invisible to settings and one strict-loader release away from being
+  rejected as unknown keys.
+- **D2** `resolveCompactSpec` defaulted the routed output reservation to 0 and
+  the caller never passed it. Basic reserves `header.config.maxTokens ??
+  adapterDefault`, so the threshold fired up to `O` tokens late and the
+  retained tail was computed from the whole window instead of the message
+  budget. Now reproduced exactly (verified against three audit-derived points:
+  W=128000/O=8192 → 54272/19169, W=200000/O=8192 → 126272/30689,
+  W=1000000/O=16384 → 800000/157378).
+- **D3** an explicit `maxTokens` no longer caps the summary. Basic treats it as
+  the summarizer's output ceiling; this backend derived the budget from
+  `summaryRatio` alone, so a config that set `maxTokens: 4096` to bound spend
+  silently inherited the larger `checkpointCap`. The budget is now
+  `min(scaled, maxTokens)`.
+
+### Changed (benchmark credibility)
+
+- `bench/anchors.mjs`: anchors are de-nested (only maximal survive), balanced
+  across types (≤35% each), and deduplicated by fact. The v1 set was **100%
+  file paths** and gameable — nine literals scored 24/24.
+- `bench/REPORT.md` v2 retracts six v1 claims: the six-type anchor coverage,
+  the "random sampling", the cost-parity figure (95% CI −40%…+44%, p≈0.90), the
+  "0.98× fewer" sign, the claim that an engine was compared at all, and the
+  assumption that `max_tokens` was honoured.
+- README no longer claims a measured win. It states what is verified (config
+  drop-in), what is under test (the anchor clause, 3-arm ablation), and what was
+  never done (comparing the two engines).
+
+### Verified
+
+- 32 tests, including three audit-derived budget points and a static-Config key
+  declaration check.
+- `test/compose.test.js`: the bundle patch composes to exactly one active
+  engine.
+
+## 0.2.0 — 2026-11-07
+
+Full configuration parity with `@deepseek-ai/dsh-compaction-basic`, plus a
+measured fidelity win over it.
 ## 0.2.0 — 2026-11-07
 
 Full configuration parity with `@deepseek-ai/dsh-compaction-basic`, plus a
