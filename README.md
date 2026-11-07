@@ -28,7 +28,7 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 43 tests, identical defaults and budget math |
+| configuration is a drop-in superset of basic | **verified** — 57 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
 | **a dropped fact stays recoverable** | **verified on production data** — see below |
 | this summary is *denser* than basic's | **not established** — 3-arm ablation splits by corpus |

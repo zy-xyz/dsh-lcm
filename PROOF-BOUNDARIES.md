@@ -47,9 +47,9 @@
 
 ### 2.3 现状与证据
 
-状态：**已证（单测级）**，且今天在本机跑出 54 passed / 0 skipped（§10）。
+状态：**已证（单测级）**，且今天在本机跑出 57 passed / 0 skipped（§10）。
 
-证据文件：`src/config.js:83-140`（解析）、`src/config.js:173-217`（spec）、`src/config.js:237-241`（摘要预算）、`test/lcm.test.js:22-155,331-370,395-440`、`CHANGELOG.md:162-178`（审计 D1–D3 的修复记录）。
+证据文件：`src/config.js:83-140`（解析）、`src/config.js:173-217`（spec）、`src/config.js:237-241`（摘要预算）、`test/lcm.test.js:22-155,331-370,395-440`、`CHANGELOG.md:227-241`（审计 D1–D3 的修复记录）。
 
 ---
 
@@ -69,14 +69,14 @@
 
 - **不证明真实 harness 的持久化、flush、崩溃恢复。** 夹具的 `session.append` 是测试自己写的（`test/region.test.js:58-65`），它证明"事件序列满足 foldSurface"，不证明真实 session 的落盘与重放。`flush` 在测试里是空函数（`src/index.js:407-409` 的 flush 只在 `compactNow` 链路里，测试桩见 `test/region.test.js:265`）。
 - **不证明锁在并发下正确。** `assertCompactionInactive`（`src/region.js:188-201`）是读日志判定的，没有跨进程/跨 turn 的互斥测试。
-- **不证明这条结论在 0.2.2 之前也成立——恰恰相反。** `CHANGELOG.md:126-127` 记载："引擎从未成功压缩过任何东西"；`src/region.js:346-350` 的注释更直接：错误的 shape 会在 start/summary 落盘之后才被 foldSurface 拒掉，留下孤儿 summary 并使 surface 无法收缩。所以"事务正确"是 2026-11-07 才成立的结论。
+- **不证明这条结论在 0.2.2 之前也成立——恰恰相反。** `CHANGELOG.md:190-191` 记载："引擎从未成功压缩过任何东西"；`src/region.js:346-350` 的注释更直接：错误的 shape 会在 start/summary 落盘之后才被 foldSurface 拒掉，留下孤儿 summary 并使 surface 无法收缩。所以"事务正确"是 2026-11-07 才成立的结论。
 - **工具对安全闸只测了"必须抛"，没测"不该抛时不会抛"**（G1.3 的"不误触"需要 k=1..5 连续压缩，`ACCEPTANCE-dsh-lcm.md:20` 标的是"单测级"）。
 
 ### 3.3 现状与证据
 
 状态：**测试级已证，运行时未证**（进 G0 才谈运行）。
 
-证据文件：`src/region.js:99-172`（事务主体）、`src/region.js:248-288`（编译+shrink 定价）、`src/region.js:327-375`（commit）、`test/region.test.js:119-192,251-289`、`CHANGELOG.md:131-142`。
+证据文件：`src/region.js:99-172`（事务主体）、`src/region.js:248-288`（编译+shrink 定价）、`src/region.js:327-375`（commit）、`test/region.test.js:119-192,251-289`、`CHANGELOG.md:195-207`。
 
 ---
 
@@ -210,9 +210,9 @@
 
 ### (i) 单测级 PASS ≠ 运行时 PASS
 
-- **史实**：0.2.2 之前引擎"从未成功压缩过任何东西"（`CHANGELOG.md:126-127`），两处致命 bug（surfaceOp 形状、`compactNow` 引用了作用域外的 `spec`，见 `CHANGELOG.md:131-142`）。当时也不缺"看起来绿"的测试——缺的是**测到事务的**测试，这正是 `test/region.test.js:1-12` 的注释动机。
-- **机制**：本项目里"PASS"有一半取决于 profile 依赖是否可解析，否则静默 skip：`test/region.test.js:18-25`（`foldSurface`）、`test/compose.test.js:23-29`（`composeEntries`）、`test/lcm.test.js:332-337`（`basic`）、`test/recovery.test.js:95`（生产日志存在与否）。今天 54 passed / 0 skipped 是因为在本机 profile 里跑；换台机器同一份代码会少掉 6 条最关键的断言且仍是绿。
-- **规矩**：引用平面②/⑥ 的结论时必须带上"在本机 profile 内、54 tests、0 skipped"这三个限定词，否则它退化成"语法能过"。
+- **史实**：0.2.2 之前引擎"从未成功压缩过任何东西"（`CHANGELOG.md:190-191`），两处致命 bug（surfaceOp 形状、`compactNow` 引用了作用域外的 `spec`，见 `CHANGELOG.md:195-207`）。当时也不缺"看起来绿"的测试——缺的是**测到事务的**测试，这正是 `test/region.test.js:1-12` 的注释动机。
+- **机制**：本项目里"PASS"有一半取决于 profile 依赖是否可解析，否则静默 skip：`test/region.test.js:18-25`（`foldSurface`）、`test/compose.test.js:23-29`（`composeEntries`）、`test/lcm.test.js:332-337`（`basic`）、`test/recovery.test.js:95`（生产日志存在与否）。今天 57 passed / 0 skipped 是因为在本机 profile 里跑；换台机器同一份代码会少掉 6 条最关键的断言且仍是绿。
+- **规矩**：引用平面②/⑥ 的结论时必须带上"在本机 profile 内、57 tests、0 skipped"这三个限定词，否则它退化成"语法能过"。
 
 ### (ii) prompt 级消融不是引擎级对比
 
@@ -235,7 +235,7 @@
 
 ```bash
 node --test
-# 本次结果：tests 54 / pass 54 / fail 0 / skipped 0 / duration ≈ 0.6s
+# 本次结果：tests 57 / pass 57 / fail 0 / skipped 0 / duration ≈ 0.7s
 
 node bench/retrieval.mjs "$HOME/.dsh/sessions/--home-agent-workspaces--/d45c83f5-e619-4b3a-96e7-5cb17e2f690b/session.v4.jsonl.zstd"
 # 本次结果：droppedAnchors 21, recall {at1:0, at5:0.905, at10:0.952, at50:0.952}, mrr 0.337, ndcgAt10 0.952
@@ -254,16 +254,20 @@ min index = 0，其中 8 条为 0（gold 就是首个命中）
 
 ---
 
-## 11. 现存文档与代码的不一致（读证据前先看这一节）
+## 11. 文档漂移清理记录（0.2.8 后）
 
-| 位置 | 不一致 | 以什么为准 |
+以下各条已修，复核时不用再按旧注释怀疑实现：
+
+| 位置 | 状态 | 说明 |
 |---|---|---|
-| `README.md:31` | 写"43 tests"，实际 54 | `node --test` 的实际输出；`CHANGELOG.md:39` 的 54 是对的 |
-| `src/index.js:87-96` | 类注释仍在描述 instant 的"确定性编译器、不路由模型请求"，与本实现相反 | 实现：`src/index.js:259-302`（`compile()` 走 LLM） |
-| `src/index.js:174` | 日志文案 "with the instant compiler" | 实现同上 |
-| `src/region.js:1-17` | 模块头注释写"instant backend / 确定性编译器 / 永不 await 模型" | 实际 `src/region.js:128` 会 `await` 一个可能是 LLM 的 compile |
-| `ACCEPTANCE-dsh-lcm.md:134-135` | G2.5 写 1.02× ✅、G2.6 写 +22.5pp ✅ | 同文件 `ACCEPTANCE-dsh-lcm.md:26-27` 与 `ACCEPTANCE-dsh-lcm.md:143-154` 已判作废 |
-| `ACCEPTANCE-dsh-lcm.md:130` | G2.1 公式写 `min(0.75W, W−O−B)` | 实现与 `ACCEPTANCE-dsh-lcm.md:115` 都是 0.8（`src/config.js:30`、`src/config.js:195`） |
-| `CHANGELOG.md:41-42,59-60,82-83,123-124,157-158,200-207` | 版本标题重复出现两次 | 内容本身有效，只是标题行重复 |
+| `README.md:31` | 已修 | 测试数 43 → **57**（`node --test`：57 pass / 0 skipped） |
+| `src/index.js:87-96` | 已修 | 类注释改为"LLM 摘要"，只保留 instant 编译器的历史来源说明 |
+| `src/region.js:1-17` | 已修 | 模块头改为"compile 走模型调用"，不再自称"永不 await 模型" |
+| `ACCEPTANCE-dsh-lcm.md:130` | 已修 | G2.1 公式改为 `min(0.8W, W−O−B)`，与 `src/config.js:30`、`src/config.js:195` 一致 |
+| `ACCEPTANCE-dsh-lcm.md:134-135` | 已修 | G2.5 / G2.6 改为不达标结论，与同文件 `:26-27` 一致；全文不再以 1.02× / +22.5pp 作为通过证据 |
+| `CHANGELOG.md` 各版本标题 | 已修 | 重复标题行删除，每个版本只出现一次，倒序 |
 
-这几条不影响 §2–§8 的判定，但会让"读注释当证据"的复核跑偏；本文件所有结论都只引实现行号，不引这类注释。
+仍遗留两处，均不在"注释/文档可改"范围内：
+
+- `src/index.js:174` 的运行期日志字符串仍写 "with the instant compiler"——属于可执行代码，本轮只改注释。
+- §6 的 recall@1/@5 数字来自 0.2.8 之前的 rank 记录偏差（`rank = hitIndex + 2`）；0.2.8 修正后默认排序改为 `density`（见 `CHANGELOG.md` 0.2.8）。§6 的绝对值需要按新仪器重出，不属于文档改写。

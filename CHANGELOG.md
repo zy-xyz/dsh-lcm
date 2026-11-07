@@ -38,7 +38,6 @@ the default flipped.
   make the best ordering look like the worst.
 
 ## 0.2.7 — 2026-11-07
-## 0.2.7 — 2026-11-07
 
 At equal budget this package was **worse** than the built-in backend. Fixed.
 
@@ -69,7 +68,6 @@ claim "better"; enough to hold the "not worse" line.
   anchor scoring) plus a `--score` CLI that re-scores saved text without calling
   a model, so the numbers stay checkable offline.
 
-## 0.2.6 — 2026-11-07
 ## 0.2.6 — 2026-11-07
 
 Retrieval quality measured on production data — and a relevance ranking that lost.
@@ -109,7 +107,6 @@ than shipping a worse order that looked smarter.
 - 54 tests.
 
 ## 0.2.5 — 2026-11-07
-## 0.2.5 — 2026-11-07
 
 The original backend's names are kept, not replaced.
 
@@ -126,7 +123,6 @@ The original backend's names are kept, not replaced.
   optional name argument, so a deployment can register any alias without
   forking the module.
 
-## 0.2.4 — 2026-11-07
 ## 0.2.4 — 2026-11-07
 
 Two more instances of the same off-by-one, and dead code removal.
@@ -149,7 +145,6 @@ Two more instances of the same off-by-one, and dead code removal.
 
 - 44 tests, including three header-shift regressions (recall, search, deriveDag).
 
-## 0.2.3 — 2026-11-07
 ## 0.2.3 — 2026-11-07
 
 The engine-level measurement the prompt A/B could not provide, plus a bug it found.
@@ -191,7 +186,6 @@ remainder is one call away.
   not at zero (dsh ships `session_search`), but its checkpoint never points at it.
 
 ## 0.2.2 — 2026-11-07
-## 0.2.2 — 2026-11-07
 
 Two **fatal** bugs found by a test-coverage audit. The engine had never
 successfully compacted anything.
@@ -224,7 +218,6 @@ successfully compacted anything.
   cuts, system-head exclusion, and a full `compactNow` round trip.
 - 38 tests total.
 
-## 0.2.1 — 2026-11-07
 ## 0.2.1 — 2026-11-07
 
 Round 2: independent audit fixes and a retracted benchmark.
@@ -267,10 +260,6 @@ Round 2: independent audit fixes and a retracted benchmark.
 - `test/compose.test.js`: the bundle patch composes to exactly one active
   engine.
 
-## 0.2.0 — 2026-11-07
-
-Full configuration parity with `@deepseek-ai/dsh-compaction-basic`, plus a
-measured fidelity win over it.
 ## 0.2.0 — 2026-11-07
 
 Full configuration parity with `@deepseek-ai/dsh-compaction-basic`, plus a

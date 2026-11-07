@@ -85,14 +85,14 @@ const modelPolicy = z.object({
 });
 
 /**
- * Deterministic compaction backend using `ctx.tokenMeter` for pressure,
- * retention, and checkpoint-convergence pricing, and the offline VCC-style
- * compiler instead of an LLM summarizer — the replacement step never routes a
- * model request, so compaction is instant and keeps original tokens only.
+ * LLM-summarizing compaction backend using `ctx.tokenMeter` for pressure,
+ * retention, and checkpoint pricing. It descends from
+ * `dsh-compaction-instant`'s deterministic VCC-style compiler, but the
+ * replacement step is now a real model call (`src/summarize.js`).
  *
- * `compile()` is the sole subclass customization hook; the replay-free
- * compiler and durable mutation strategy stay fixed so every pricing decision
- * uses the singleton token meter.
+ * `compile()` is the sole subclass customization hook; range selection and the
+ * durable mutation strategy stay fixed so every pricing decision uses the
+ * singleton token meter.
  */
 /**
  * Emit one engine-side debug line through the resolved sink when debug is on.

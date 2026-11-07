@@ -1,9 +1,9 @@
 /**
  * LLM leaf summarizer for `dsh-compaction-lcm`.
  *
- * Where `dsh-compaction-lcm` runs a deterministic compiler (zero model
- * calls, verbatim excerpts), this backend asks the model for a real summary —
- * the LCM paper's "recursive context compression" leaf step. The summary is
+ * This is the replacement step `dsh-compaction-lcm` uses: a model-written
+ * summary, descended from `dsh-compaction-instant`'s deterministic compiler
+ * (zero model calls, verbatim excerpts) — the LCM paper's "recursive context compression" leaf step. The summary is
  * NOT the only copy: every shadowed node stays in the append-only session log,
  * and the checkpoint carries `seq N` pointers so `lcm_expand` can restore the
  * exact original tokens.

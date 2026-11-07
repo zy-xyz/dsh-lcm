@@ -1,7 +1,7 @@
 /**
  * Same-session recall core for `dsh-compaction-lcm`.
  *
- * The lossless counterpart of the VCC-style compiler: compaction checkpoints
+ * The lossless counterpart of the compaction step: checkpoints
  * mark every elision with a `(seq N)` / `(seqs A-B)` pointer into the durable
  * session log; this module expands those pointers back into the exact
  * original content. Because the log is append-only, every token the compiler

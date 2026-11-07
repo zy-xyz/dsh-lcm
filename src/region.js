@@ -6,12 +6,12 @@
  * verbatim — lock entry assertions, `compaction/start|summary|end` bracketing,
  * checkpoint replacement provenance, surface-stability checks, flush handling,
  * and the `busy`/`changed`/`summary`/`commit`/`persistence` failure vocabulary —
- * so the instant backend remains a contract-exact drop-in replacement for the
+ * so this backend remains a contract-exact drop-in replacement for the
  * `/compact` command and every other `ctx.compaction` consumer.
  *
- * The ONLY replaced step is summarization: where basic awaits an LLM replay,
- * this backend runs the deterministic VCC-style compiler (see compiler.js),
- * which never awaits a model and therefore completes "instantly".
+ * The ONLY replaced step is summarization: this backend asks the model for a
+ * structured checkpoint (see summarize.js). It descends from
+ * `dsh-compaction-instant`'s deterministic compiler, which made no model call.
  *
  * @module dsh-compaction-lcm/region
  */
@@ -86,12 +86,12 @@ export function selectCompactableRange(session, measurement, retainTokens) {
  * is the compaction lock before the compile yields. Every later failure makes
  * exactly one `compaction/end` attempt; a failed close deliberately leaves the
  * unmatched start detectable.
- * @param dependencies - conversation meter and the deterministic compile hook.
+ * @param dependencies - conversation meter and the compile hook.
  * @param session - session whose surface is mutated.
  * @param start - inclusive first surface-node seq.
  * @param end - inclusive last surface-node seq.
  * @param agent - retained for signature parity with other backends; the
- *   instant compiler never routes a model call through it.
+ *   compile step routes the model call through it.
  * @param options - bracket owner, stability rule, and optional durability checkpoint.
  * @param signal - optional cancellation signal checked at the safe boundaries.
  * @returns the successful durable compaction result.
@@ -234,12 +234,12 @@ export function prepareCompaction(dependencies, session, selection) {
 }
 
 /**
- * Run the deterministic region compiler, frame its checkpoint, and price the
- * replacement under the singleton token meter. Mirrors basic's shrink
+ * Run the region compile step (an LLM summary), frame its checkpoint, and price
+ * the replacement under the singleton token meter. Mirrors basic's shrink
  * guarantee: a checkpoint that would not reduce the surface is rejected.
  * @param dependencies - conversation meter and the compile hook.
  * @param prepared - priced selection snapshot.
- * @param agent - retained for signature parity; the compiler never routes it.
+ * @param agent - retained for signature parity; the compile step routes it.
  * @param compactionId - owning transaction identity for checkpoint provenance.
  * @param sourceCommandId - initiating manual command, when present.
  * @param signal - optional cancellation signal.
