@@ -343,10 +343,15 @@ function commitCompactionBody(session, startEvent, compiled) {
     ...rawOutput === undefined ? {} : { rawOutput, llmStreamCall: true }
   });
   session.append("user/message", checkpointMessage, {
+    // The positional replacement contract is EXACTLY {op, startSeq, endSeq} —
+    // three own keys, both seqs non-negative safe integers. Anything else is
+    // rejected by foldSurface at commit time, after compaction/start and
+    // compaction/summary have already landed, which strands an orphan summary
+    // and leaves the surface unable to shrink.
     surfaceOp: {
       op: "replace",
-      start,
-      end
+      startSeq: start,
+      endSeq: end
     },
     sourceEventSeqs: [
       startEvent.seq,

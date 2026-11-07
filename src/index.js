@@ -295,6 +295,7 @@ export class LcmCompactionEngine extends CompactionEngine {
       capped: false,
       provider: result.provider,
       model: result.model,
+      maxTokens: budget,
       usage: result.usage,
       rawOutput: result.rawOutput
     };
@@ -395,7 +396,9 @@ export class LcmCompactionEngine extends CompactionEngine {
         try {
           operationSignal.throwIfAborted();
           const measurement = this.ctx.tokenMeter.measure(agent.session);
-          const range = selectCompactableRange(agent.session, measurement, spec.retainTokens);
+          // Manual /compact follows basic: retain 0 tokens, i.e. compact the whole
+          // history except the trailing node, independent of the pressure policy.
+          const range = selectCompactableRange(agent.session, measurement, 0);
           if (range === null) return null;
           return await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
             owner: null,

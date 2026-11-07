@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.2.2 — 2026-11-07
+
+Two **fatal** bugs found by a test-coverage audit. The engine had never
+successfully compacted anything.
+
+### Fixed
+
+- **The positional replacement shape was wrong.** `commitCompactionBody` emitted
+  `{op, start, end}`; the harness requires exactly `{op, startSeq, endSeq}`
+  (`dsh-session/surface` `isReplaceOp`: three own keys, both non-negative safe
+  integers). Every commit therefore threw *after* `compaction/start` and
+  `compaction/summary` had landed, stranding an orphan summary, leaving the
+  surface unable to shrink, and burning the pressure retry budget until
+  "still above threshold". Inherited verbatim from `dsh-compaction-instant`,
+  which targets an older harness.
+- **`compactNow` referenced an out-of-scope `spec`,** so `/compact` threw
+  `ReferenceError` and the catch-all rewrote it as
+  `ManualCompactionError("busy")` — manual compaction was 100% broken while
+  looking like lock contention. Now follows basic: `retainTokens = 0`.
+- `compile()` now returns `maxTokens`, so `compaction/summary` records the
+  generation ceiling instead of silently omitting it.
+
+### Added
+
+- `test/region.test.js` — the first tests of the durable transaction. The
+  fixture replays every append through the harness's own `foldSurface`, so an
+  invalid `surfaceOp` fails in CI instead of in production. Covers: commit
+  shape and surface shrinkage, summary→replacement adjacency, start/end
+  bracketing, the shrink guard (throws, closes its marker, records a string
+  error), compile-failure lock release with no orphan summary, tool-pair-safe
+  cuts, system-head exclusion, and a full `compactNow` round trip.
+- 38 tests total.
+
+## 0.2.1 — 2026-11-07
 ## 0.2.1 — 2026-11-07
 
 Round 2: independent audit fixes and a retracted benchmark.
