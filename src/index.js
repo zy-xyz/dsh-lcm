@@ -271,7 +271,11 @@ export class LcmCompactionEngine extends CompactionEngine {
     const entries = [
       {
         seq: prepared.shadowedSeqs[0],
-        text: `[lcm leaf summary · ${prepared.shadowedSeqs.length} nodes · seqs ${prepared.start}-${prepared.end} · ~${prepared.shadowedTokenCount} → ~${tokens} tokens · restore with lcm_expand]\n${text}`,
+        // The header names both recovery paths. Anchors in the body carry their
+        // own `(seq N)`, so the common case is one lcm_expand call; a fact the
+        // checkpoint never listed is still findable with lcm_search. Saying only
+        // "restore with lcm_expand" left the model guessing which seq to name.
+        text: `[lcm leaf summary · ${prepared.shadowedSeqs.length} nodes · seqs ${prepared.start}-${prepared.end} · ~${prepared.shadowedTokenCount} → ~${tokens} tokens · anchors below carry (seq N): restore with lcm_expand, or find anything else with lcm_search]\n${text}`,
         kind: "checkpoint"
       }
     ];
