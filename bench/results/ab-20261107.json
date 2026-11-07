@@ -1,0 +1,70 @@
+{
+ "stats": {
+  "span": {
+   "nodes": 37,
+   "tokens": 9075,
+   "canaries": 24
+  },
+  "protocol": "temperature 0, max_tokens 1089 (gateway overrides it; recorded actual), N=5 per arm, canary = auto-extracted verbatim anchors present in output",
+  "basic": [
+   {
+    "completion": 7756,
+    "canary": 13
+   },
+   {
+    "completion": 6285,
+    "canary": 12
+   },
+   {
+    "completion": 6878,
+    "canary": 12
+   },
+   {
+    "completion": 3182,
+    "canary": 12
+   },
+   {
+    "completion": 8153,
+    "canary": 13
+   }
+  ],
+  "lcm": [
+   {
+    "completion": 5012,
+    "canary": 15
+   },
+   {
+    "completion": 7501,
+    "canary": 17
+   },
+   {
+    "completion": 7463,
+    "canary": 20
+   },
+   {
+    "completion": 5768,
+    "canary": 17
+   },
+   {
+    "completion": 7138,
+    "canary": 20
+   }
+  ]
+ },
+ "summary": {
+  "basic": {
+   "tokensMean": 6451,
+   "canaryMean": 12.4,
+   "canaryRate": 51.7
+  },
+  "lcm": {
+   "tokensMean": 6576,
+   "canaryMean": 17.8,
+   "canaryRate": 74.2
+  },
+  "verdict": {
+   "tokens": "0.98x fewer with lcm",
+   "canary": "22.5 pp with lcm"
+  }
+ }
+}
