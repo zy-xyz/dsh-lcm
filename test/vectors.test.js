@@ -9,7 +9,9 @@
  *   2. ranking is cosine, not dot product — the difference only shows up on
  *      unscaled vectors, which is exactly the case a shortcut would get wrong;
  *   3. the disk cache is a real short-circuit — a cache hit sends no request;
- *   4. a failing backend degrades a search, it does not fail one.
+ *   4. a failing backend degrades a search, it does not fail one;
+ *   5. one refused *string* costs that string, not the whole question — the
+ *      backend defect measured in production, isolated by bisection.
  */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -79,6 +81,48 @@ async function embeddingServer(table, status = 200) {
     close: () => new Promise((resolve) => server.close(resolve))
   };
 }
+
+/**
+ * A stand-in endpoint with one input-sensitive defect.
+ *
+ * The real backend (measured) rejects specific strings with a stable HTTP 400
+ * whose body is `invalid_type expected number received nan`, while every other
+ * string in the same batch is fine. This reproduces exactly that: a batch
+ * containing a refused string fails as a whole, which is what forces the client
+ * to bisect.
+ *
+ * @param table - text to vector table.
+ * @param isPoison - predicate deciding which input strings are refused.
+ * @returns the base URL, a request counter, and a closer.
+ */
+async function inputSensitiveServer(table, isPoison) {
+  const state = { requests: 0, batches: [], refused: 0 };
+  const server = createServer(async (request, response) => {
+    state.requests += 1;
+    const body = await readJson(request);
+    const inputs = Array.isArray(body.input) ? body.input : [body.input];
+    state.batches.push(inputs.length);
+    if (inputs.some((text) => isPoison(text) || table[text] === undefined)) {
+      state.refused += 1;
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "invalid_type expected number received nan" } }));
+      return;
+    }
+    const data = inputs.map((text, index) => ({ object: "embedding", index, embedding: table[text] }));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ object: "list", model: body.model, data, usage: { prompt_tokens: 0, total_tokens: 0 } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  return {
+    state,
+    baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+    close: () => new Promise((resolve) => server.close(resolve))
+  };
+}
+
+/** The exact string the production backend refuses. */
+const POISON = "import x from 'rn-maps';";
 
 /** Vector settings pointing at one fake server. */
 function vectorConfig(server, cacheDir, overrides = {}) {
@@ -178,3 +222,97 @@ test("a failing backend degrades to the lexical result with one notice", async (
     await cache.clean();
   }
 });
+
+
+test("one poisoned text is skipped, not fatal: the rest still ranks", async () => {
+  const cache = await scratch();
+  const query = "how do we store the target token column";
+  // Distinct cosines against the query, so the surviving order is not a tie.
+  const table = { [query]: [1, 0, 0], alpha: [1, 0, 0], beta: [1, 1, 0], gamma: [0, 0, 1] };
+  const server = await inputSensitiveServer(table, (text) => text === POISON);
+  try {
+    const items = [
+      { seq: 1, text: "alpha" },
+      { seq: 2, text: POISON },
+      { seq: 3, text: "beta" },
+      { seq: 4, text: "gamma" }
+    ];
+    const ranked = await rankByVector(vectorConfig(server, cache.dir), items, query);
+    assert.deepEqual(ranked.map((entry) => entry.seq), [1, 3, 4], "the poisoned event is simply absent");
+    assert.equal(ranked.skipped, 1, "exactly one candidate was skipped");
+    assert.deepEqual(ranked.failedSeqs, [2], "the skipped seq is reported");
+    assert.ok(Math.abs(ranked[0].score - 1) < 1e-6, "the surviving ranking is still cosine");
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("a poisoned text is recovered by one cleaned variant, so nothing is skipped", async () => {
+  const cache = await scratch();
+  const query = "how do we store the target token column";
+  // Only the space-prefixed form is accepted: the measured workaround.
+  const table = { [query]: [1, 0, 0], alpha: [1, 0, 0], [" " + POISON]: [0, 1, 0] };
+  const server = await inputSensitiveServer(table, (text) => text === POISON);
+  try {
+    const items = [{ seq: 1, text: "alpha" }, { seq: 2, text: POISON }];
+    const ranked = await rankByVector(vectorConfig(server, cache.dir), items, query);
+    assert.deepEqual(ranked.map((entry) => entry.seq), [1, 2], "the cleaned variant is ranked in place");
+    assert.equal(ranked.skipped, 0, "the retry means nothing is skipped");
+    assert.deepEqual(ranked.failedSeqs, []);
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("a backend that refuses everything still fails the call", async () => {
+  const cache = await scratch();
+  const items = Array.from({ length: 31 }, (_, index) => ({ seq: index + 1, text: "text " + index }));
+  const server = await inputSensitiveServer({}, () => true);
+  try {
+    await assert.rejects(
+      () => rankByVector(vectorConfig(server, cache.dir), items, "the query"),
+      (error) => error.name === "VectorBackendError" && /HTTP 400/.test(error.message),
+      "an unusable backend is still an error, not a silent empty ranking"
+    );
+    // Both halves refused at the top level: the payload, not one string, so the
+    // descent stops instead of walking every text.
+    assert.ok(
+      server.state.requests <= 24,
+      "a total refusal must not be bisected per text, saw " + server.state.requests
+    );
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("bisection bounds the requests: one poisoned text is not a linear scan", async () => {
+  const cache = await scratch();
+  const query = "q";
+  const items = Array.from({ length: 31 }, (_, index) => ({ seq: index + 1, text: "text " + index }));
+  const table = { [query]: [1, 0, 0] };
+  for (const item of items) table[item.text] = [0, 1, 0];
+  const server = await inputSensitiveServer(table, (text) => text === "text 17");
+  try {
+    const ranked = await rankByVector(vectorConfig(server, cache.dir), items, query, undefined, 0);
+    assert.equal(ranked.skipped, 1);
+    // One request for the healthy batch, then a descent: log2(32) = 5 splits at
+    // two requests each, plus the refused text and its cleaned variant. A
+    // per-text retry would be 32 requests, so the ceiling is 2*log2(n) + 6 and
+    // the sublinearity check is half the log size.
+    assert.ok(
+      server.state.requests <= 2 * Math.log2(32) + 6,
+      "expected <= 16 requests, saw " + server.state.requests
+    );
+    assert.ok(
+      server.state.requests < items.length / 2,
+      "bisection must be well below one request per text, saw " + server.state.requests
+    );
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
