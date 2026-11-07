@@ -1,0 +1,78 @@
+# dsh-compaction-lcm — 参数配置文件示例
+#
+# 用法：
+#   1) 复制到 profile 目录，例如 ~/.dsh/profiles/web/
+#   2) 在 cordis.patch.yml 的 compaction 行上引用配置：
+#
+#        - id: compaction-lcm
+#          name: dsh-compaction-lcm
+#          config:
+#            <<: *lcm            # 或在 patch 里直接内联下面这些键
+#
+#   3) 也可以把本文件的键直接写进 patch 的 config: 段（推荐，少一层缩进坑）
+#
+# 键的语义与 @deepseek-ai/dsh-compaction-basic **完全一致**，默认值也一致。
+# 从 basic 迁过来时，你现有的配置可以原样贴进来，不需要改名或换算。
+
+# ── 与 basic 共享的键（语义 + 默认值完全相同）──────────────────────────
+
+# 触发压缩的压力占比。默认 0.8。
+# 实际触发点 = floor(min(contextWindow × thresholdRatio, messageBudget − headroomTokens))
+thresholdRatio: 0.8
+
+# 为下一次补全预留的 token 容量。默认 65536。
+# 也是 maxTokens 的默认值来源。
+headroomTokens: 65536
+
+# 原样保留的最近尾部占「消息预算」的比例。默认 0.16。
+# 与 retainTokens 互斥；两者都设会直接报错。
+retainRatio: 0.16
+
+# 原样保留的最近尾部 token 绝对上限。设了它就忽略 retainRatio。
+# 默认不设（走 retainRatio）。
+# retainTokens: 32768
+
+# 摘要用哪个 provider/model。留空 = 沿用当前路由的模型。
+# 两键必须同时为空或同时非空。
+summarizationProvider: ""
+summarizationModel: ""
+
+# 摘要请求的输出上限。默认 = headroomTokens（65536）。
+# ⚠ 实测建议：真实摘要只输出 5~6K，把它压到 shadowed 的 0.25 倍更划算。
+# maxTokens: 16384
+
+# 压缩失败重试次数（同一次压力触发内）。默认 1。
+compactionRetries: 1
+
+# 上下文溢出后强制恢复的重试次数。默认 1。
+maxOverflowRetries: 1
+
+# 是否自动压缩。默认 true。关掉后只能手动 /compact。
+auto: true
+
+# 按精确 provider/model 覆盖上面任意键。默认 []。
+modelPolicies: []
+# modelPolicies:
+#   - provider: omniroute
+#     model: deepseek-v4-flash-auto
+#     thresholdRatio: 0.75
+#     headroomTokens: 32768
+
+# ── LCM 专有键（只增行为，不改共享键的含义）────────────────────────────
+
+# 单次摘要预算 = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
+# 让压缩比在不同窗口下保持稳定，而不是被 headroomTokens 单点决定。
+# 默认 0.12（≈ 8:1）。
+summaryRatio: 0.12
+
+# 摘要预算下限，保证小片段也能产出可用摘要。默认 512。
+summaryFloorTokens: 512
+
+# 单次摘要预算硬上限。默认 16384。
+checkpointCap: 16384
+
+# 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
+debug: false
+
+# 调试日志落盘路径。默认 $DSH_HOME/compaction-debug.log。
+# debugLogPath: /tmp/compaction-debug.log

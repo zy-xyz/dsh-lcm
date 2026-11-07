@@ -1,0 +1,19 @@
+# dsh-compaction-lcm bundle patch.
+#
+# Installing this package with `dsh plugin add` makes it a profile layer
+# automatically (package.json declares `dsh.bundle`). This patch disables the
+# built-in summarizer row — one `ctx.compaction` implementation per context —
+# and inserts the LCM engine plus its recovery tools as host-level rows.
+#
+# The user's profile patch is applied after this bundle, so per-profile
+# overrides of these rows still win.
+
+- id: compaction-basic
+  disabled: true
+- insert:
+    - id: compaction-lcm
+      name: dsh-compaction-lcm
+    - id: tool-lcm-expand
+      name: dsh-compaction-lcm/tool
+    - id: command-lcm-search
+      name: dsh-compaction-lcm/command
