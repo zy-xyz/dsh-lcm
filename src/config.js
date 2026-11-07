@@ -219,16 +219,25 @@ export function resolveCompactSpec(policy, contextWindow, reservedCompletionToke
 /**
  * Resolve the summary token budget for one leaf summary.
  *
- * The budget scales with what is being replaced, so the compression ratio is
- * stable across context-window sizes, and it is clamped so a tiny span still
- * produces a usable summary and a huge span cannot exceed the cap.
+ * Two ceilings apply, and both are meaningful to a `compaction-basic` user:
+ *
+ *   scaled   = shadowed × summaryRatio, clamped to [summaryFloorTokens, checkpointCap]
+ *   budget   = min(scaled, maxTokens)
+ *
+ * The scaled term keeps the compression ratio stable across context-window
+ * sizes. The `maxTokens` term preserves basic's contract that `maxTokens` is the
+ * summary request's output cap — so an existing config that set
+ * `maxTokens: 4096` to bound summarizer spend keeps that bound instead of
+ * silently inheriting the larger `checkpointCap`.
+ *
  * @param config - resolved configuration.
  * @param shadowedTokenCount - tokens in the span being replaced.
  * @returns the summary token ceiling.
  */
 export function resolveSummaryBudget(config, shadowedTokenCount) {
   const scaled = Math.floor(shadowedTokenCount * config.summaryRatio);
-  return Math.min(config.checkpointCap, Math.max(config.summaryFloorTokens, scaled));
+  const clamped = Math.min(config.checkpointCap, Math.max(config.summaryFloorTokens, scaled));
+  return Math.max(1, Math.min(clamped, config.maxTokens));
 }
 
 // ── exact-target overrides ─────────────────────────────────────────────────

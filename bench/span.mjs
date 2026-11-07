@@ -5,7 +5,14 @@
 // Renders the conversation the way a summarizer would see it: role + text,
 // tool calls as one line, tool results head/tail excerpted.
 //
-// Usage: node bench/span.mjs <session.jsonl.zstd> [--max-tokens 40000] [--tail]
+// Usage:
+//   node bench/span.mjs <session.jsonl.zstd> [--max-tokens 8000]
+//   node bench/span.mjs <session.jsonl.zstd> --last 60      # last N surface nodes
+//   node bench/span.mjs <session.jsonl.zstd> --range 100-180
+//
+// Default source is the richest production compaction (the exact span a
+// summarizer was asked about). --last/--range let any session act as corpus,
+// so the A/B is not limited to the two sessions that happen to have compacted.
 
 import fs from "node:fs";
 import zlib from "node:zlib";
@@ -24,19 +31,36 @@ function load(f) {
 const events = load(file);
 const bySeq = new Map(events.map((e) => [e.seq, e]));
 
-// Find the richest compaction and take its shadowed span (that is exactly the
-// span a summarizer was asked about in production).
-let best = null;
-for (const e of events) {
-  if (e.type !== "compaction/summary") continue;
-  const n = (e.data?.shadowedSeqs ?? []).length;
-  if (best === null || n > best.n) best = { n, event: e };
+// Choose the span: explicit range > last-N surface nodes > richest compaction.
+const rangeArg = opt("range", null);
+const lastArg = opt("last", null);
+let seqs;
+let source;
+
+if (typeof rangeArg === "string" && rangeArg.includes("-")) {
+  const [a, b] = rangeArg.split("-").map(Number);
+  seqs = events.map((e) => e.seq).filter((s) => s >= a && s <= b);
+  source = `range ${rangeArg}`;
+} else if (lastArg !== null) {
+  const n = Number(lastArg);
+  const surfaceSeqs = events.map((e) => e.seq);
+  seqs = surfaceSeqs.slice(-Math.max(2, n));
+  source = `last ${n} nodes`;
+} else {
+  // The richest compaction: exactly the span a summarizer was asked about.
+  let best = null;
+  for (const e of events) {
+    if (e.type !== "compaction/summary") continue;
+    const n = (e.data?.shadowedSeqs ?? []).length;
+    if (best === null || n > best.n) best = { n, event: e };
+  }
+  if (best === null) {
+    console.error("no compaction/summary in this log — pass --last N or --range A-B");
+    process.exit(2);
+  }
+  seqs = best.event.data.shadowedSeqs;
+  source = `compaction ${best.event.data.compactionId}`;
 }
-if (best === null) {
-  console.error("no compaction/summary in this log");
-  process.exit(2);
-}
-const seqs = best.event.data.shadowedSeqs;
 
 // Trim from the oldest end until we fit the token budget (keep the most recent
 // context, which is what matters for the next step).
@@ -73,39 +97,23 @@ for (let i = seqs.length - 1; i >= 0; i -= 1) {
 }
 const text = rendered.join("\n\n");
 
-// Objective canary set: strings the agent would need verbatim later.
-// Auto-extracted, never hand-picked, so the test cannot be gamed.
-const CANARY_PATTERNS = [
-  /\/vol\d+\/[\w.\/-]+/g,          // absolute volume paths
-  /\/[\w.-]+\/[\w.-]+\/[\w.\/-]+\.(?:img|sh|py|md|json|yaml|yml|txt|log|db)/g, // file paths
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/g,  // uuids/session ids
-  /0x[0-9a-fA-F]{6,}/g,                    // addresses
-  /\b[A-Z][A-Z0-9_]{3,}_[A-Z0-9_]{2,}\b/g, // ENV_VARS / CONSTANTS
-  /\b(?:error|Error|ERROR|failed|FAILED)[^\n]{8,60}/g
-];
-const seen = new Set();
-const canaries = [];
-for (const pattern of CANARY_PATTERNS) {
-  for (const match of text.match(pattern) ?? []) {
-    const value = match.trim();
-    if (value.length < 6 || value.length > 120) continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    canaries.push(value);
-  }
-}
-// Deterministic sample, spread across the span so recency bias cannot help.
-const step = Math.max(1, Math.floor(canaries.length / 24));
-const sample = canaries.filter((_, i) => i % step === 0).slice(0, 24);
+// Anchors come from the audited extractor: nesting removed, types balanced,
+// repeated dumps collapsed. See bench/anchors.mjs for why this matters.
+const { buildAnchorSet } = await import("./anchors.mjs");
+const anchorSet = buildAnchorSet(text);
+
 
 console.log(JSON.stringify({
   source: file,
-  compactionId: best.event.data.compactionId,
+  spanSource: source,
   spanNodes: seqs.length,
   renderedNodes: rendered.length,
   chars: text.length,
   tokensEstimate: estimate(text),
-  canariesTotal: canaries.length,
-  canaries: sample,
+  canariesTotal: anchorSet.anchors.length,
+  canaryPool: anchorSet.poolSize,
+  droppedNested: anchorSet.droppedNested,
+  canaryTypes: anchorSet.typeCounts,
+  canaries: anchorSet.anchors.map((a) => a.value),
   text
 }, null, 0));

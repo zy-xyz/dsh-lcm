@@ -13,18 +13,22 @@ Built on the [LCM paper](https://papers.voltropy.com/LCM) (Ehrlich & Blackman,
 2026-02) and on the durable-protocol work in
 [`dsh-compaction-instant`](https://github.com/TsFreddie/dsh-compaction-instant).
 
-## Measured, not asserted
+## What is measured, and what is not
 
-Same model, same span, `temperature 0`, N=5 per arm, canaries auto-extracted
-from a real 9 075-token production span ([full method](bench/REPORT.md)):
+An audit of the first benchmark round (see [bench/REPORT.md](bench/REPORT.md))
+retracted three of its claims. The current state:
 
-| | `dsh-compaction-basic` | **`dsh-compaction-lcm`** |
-|---|---|---|
-| completion tokens | 6 451 | 6 576 (+1.9%) |
-| verbatim anchors retained | 12.4 / 24 (51.7%) | **17.8 / 24 (74.2%)** |
+| claim | status |
+|---|---|
+| configuration is a drop-in superset of basic | **verified** — 32 tests, 9/9 basic configs accepted identically |
+| a summary written from the enumerated anchor clause retains more verbatim identifiers | **under test** — 3-arm ablation, one span, N=4 |
+| the two engines were compared | **never done** — both arms were bare prompt strings, not `compile()` |
+| lcm is cheaper | **retracted** — token difference is inside the noise (95% CI −40%…+44%) |
 
-**Same cost, +22.5 percentage points of verbatim fidelity.** No claim of being
-cheaper — the win is that a fifth fewer paths, commands and IDs get lost.
+The honest structural claim, which needs no benchmark: **the checkpoint is a view
+over a log that keeps everything.** A summary that drops a path is recoverable
+with `lcm_expand`; a summary that drops it in a summarizer-only backend is gone
+from the model's reach.
 
 ## What changes
 

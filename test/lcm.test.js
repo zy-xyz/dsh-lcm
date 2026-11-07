@@ -390,3 +390,45 @@ test("engineDebug writes to the configured debug log only when debug is on", asy
   assert.match(fs.readFileSync(path, "utf8"), /probe/);
   fs.rmSync(path, { force: true });
 });
+// ── parity regressions found by the round-2 audit ──────────────────────────
+
+test("static Config exposes every shared basic key (audit D1)", () => {
+  // schemastery keeps the declared field map on `.dict`. A key missing here is
+  // invisible to the settings UI and one strict-loader release away from being
+  // rejected as unknown.
+  const declared = Object.keys(LcmCompactionEngine.Config.dict);
+  const shared = [
+    "thresholdRatio", "headroomTokens", "retainRatio", "retainTokens",
+    "summarizationProvider", "summarizationModel", "maxTokens",
+    "compactionRetries", "maxOverflowRetries", "modelPolicies", "auto"
+  ];
+  for (const key of shared) {
+    assert.ok(declared.includes(key), `static Config must declare the shared key "${key}"`);
+  }
+});
+
+test("resolveCompactSpec honours the routed output reservation (audit D2)", () => {
+  const config = resolveConfig({});
+  const policy = resolveTargetPolicy(config, { provider: "p", model: "m" });
+
+  // basic: messageBudget = W - O; pressureBudget = messageBudget - headroom
+  // W=128000, O=8192 -> 119808 - 65536 = 54272
+  assert.equal(resolveCompactSpec(policy, 128000, 8192).thresholdTokens, 54272);
+  assert.equal(resolveCompactSpec(policy, 128000, 8192).retainTokens, Math.floor(119808 * 0.16));
+
+  // No reservation reproduces the old value: 128000 - 65536 = 62464
+  assert.equal(resolveCompactSpec(policy, 128000, 0).thresholdTokens, 62464);
+});
+
+test("an explicit maxTokens caps the summary budget (audit D3)", () => {
+  const tight = resolveConfig({ maxTokens: 2048 });
+  // scaled budget for a 100k span would be 12000, but maxTokens caps it
+  assert.equal(resolveSummaryBudget(tight, 100000), 2048);
+
+  const loose = resolveConfig({});
+  assert.equal(resolveSummaryBudget(loose, 100000), Math.min(16384, 12000));
+
+  // The cap never goes below 1, so a pathological config still yields a request.
+  const tiny = resolveConfig({ maxTokens: 1, summaryFloorTokens: 512 });
+  assert.equal(resolveSummaryBudget(tiny, 100000), 1);
+});

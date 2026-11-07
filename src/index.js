@@ -43,6 +43,17 @@ export function routedTarget(session) {
   };
 }
 
+/**
+ * Output tokens one routed request reserves, exactly as basic computes it: the
+ * request envelope's own `maxTokens`, else the adapter's default.
+ * @param header - durable routed request header.
+ * @param defaultMaxTokens - adapter-provided default, when any.
+ * @returns the reserved completion budget (0 when unknown).
+ */
+function reservedCompletionTokens(header, defaultMaxTokens) {
+  return header?.config?.maxTokens ?? defaultMaxTokens ?? 0;
+}
+
 // ── schemastery surface (composition-time validation only) ─────────────────
 // The resolved defaults and every cross-field rule live in ./config.js; these
 // schemas exist so the Loader can validate a composition entry before the
@@ -111,8 +122,10 @@ export class LcmCompactionEngine extends CompactionEngine {
   ];
   static Config = z.object({
     thresholdRatio: thresholdRatioSchema,
+    headroomTokens: headroomTokensSchema,
     retainRatio: retainRatioSchema,
     retainTokens: retainTokensSchema,
+    maxTokens: maxTokensSchema,
     checkpointCap: checkpointCapSchema,
     summaryRatio: z.number(),
     summaryFloorTokens: maxTokensSchema,
@@ -314,15 +327,22 @@ export class LcmCompactionEngine extends CompactionEngine {
         prune.pruneSession(agent.session);
         measurement = meter.measure(agent.session);
       }
-      const range = selectCompactableRange(agent.session, measurement, 1, 0);
+      const range = selectCompactableRange(agent.session, measurement, 0);
       if (range === null) return null;
       return this.compactRegion(range.start, range.end, agent, signal);
     }
-    const context = (await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal)).context;
+    const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal);
+    const context = info.context;
     assertNoActiveCompaction(agent.session, "automatic pressure compaction");
     const targetKey = `${target.provider}/${target.model}`;
-    if (context === undefined) throw new TargetPressureConfigError(targetKey, `compaction-instant: no context capacity for ${targetKey}; configure contextWindow on that adapter model`);
-    const spec = resolveCompactSpec(policy, context.contextWindow);
+    if (context === undefined) throw new TargetPressureConfigError(targetKey, `compaction-lcm: no context capacity for ${targetKey}; configure contextWindow on that adapter model`);
+    // basic's exact reservation: the routed request's own output budget must not
+    // be counted as available message space.
+    const spec = resolveCompactSpec(
+      policy,
+      context.contextWindow,
+      reservedCompletionTokens(agent.session.requestHeader(), info.defaultMaxTokens)
+    );
     if (measurement.totalTokens < spec.thresholdTokens) return null;
     if (prune !== undefined) {
       prune.pruneSession(agent.session);
