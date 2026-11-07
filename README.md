@@ -105,7 +105,33 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     summaryRatio: 0.12         # summary budget = clamp(span*ratio, floor, cap)
     summaryFloorTokens: 512
     checkpointCap: 16384
+    # ── optional vector recall (off by default) ──
+    vectorEnabled: false       # both gates must open: this + rank=vector|hybrid
+    vectorBaseUrl: "http://10.126.126.3:1234/v1"
+    vectorModel: "text-embedding-qwen3-vl-embedding-8b"
+    vectorDim: 4096
+    vectorTopK: 8
+    vectorTimeoutMs: 20000
+    vectorCacheDir: ".lcm-vectors"
 ```
+
+### Optional semantic search
+
+`lcm_search` is a regex over the durable log — built for "the agent remembers a
+string", not for natural-language questions. On LongMemEval_S, feeding the
+question text verbatim produced **zero hits on 499 of 500 questions**; that is a
+query-shape mismatch, not a bug in the matcher. Two ways out, both opt-in:
+
+- `rank: "vector"` — embedding KNN against any OpenAI-compatible endpoint.
+  Cosine, not dot product (the endpoint returns unnormalised vectors, and a
+  dot-product ranking measurably inverts the order). Results are cached on disk
+  by `sha256(model + truncated text)`.
+- `rank: "hybrid"` — RRF (k=60) over lexical and vector, the same fusion
+  `lcm-x` uses for its `hybrid_rrf` arm.
+
+With `vectorEnabled: false` — the default — both modes cost nothing: the search
+path is byte-identical to the lexical one, asserted by test. An unreachable
+backend degrades to lexical and says so in the result text instead of throwing.
 
 Budget math is basic's, verbatim:
 
@@ -124,7 +150,7 @@ The last line is the only new one.
 | tool | purpose |
 |---|---|
 | `lcm_expand` | restore exact original content by `seq` (`"3-7,15"`), `result` (`"3"`) or `checkpoint` (`"1"`) |
-| `lcm_search` | keyword/regex search over the whole durable log, including content a checkpoint omitted |
+| `lcm_search` | keyword/regex search over the whole durable log, including content a checkpoint omitted; optional `vector`/`hybrid` ranking when embeddings are configured |
 | `recall` / `search` | **the original backend's names, kept as aliases** — identical behaviour |
 | `/lcm-search <pattern>` | the human-side search; appends hits as a durable user message |
 | `/recall <pattern>` | **the original command name, kept as an alias** |
@@ -151,6 +177,12 @@ and inserts this engine plus its tools.
   important strings" while it writes prose retains ~40%; asking it for a flat
   one-per-line list of every identifier retains ~74%. Measured, see
   [bench/REPORT.md](bench/REPORT.md).
+- **Pointer density beats summary density.** Industry measurements converge on
+  the same point (Anthropic's just-in-time context, Letta's filesystem-as-memory,
+  memory-bench's agentic grep arm, SUMER's goal-directed search): compression is
+  lossy, and what wins is keeping lightweight pointers and fetching on demand.
+  That is the architecture here, which is why recoverability is 100% while the
+  checkpoint is 3.8k tokens. See [RESEARCH-INDUSTRY.md](RESEARCH-INDUSTRY.md).
 - **The DAG is derived, not stored.** `deriveDag()` reconstructs checkpoint
   depth from `compaction/summary` events plus their replacement message. No side
   store, no migration, rebuildable after any restart.

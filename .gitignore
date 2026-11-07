@@ -3,5 +3,3 @@ node_modules/
 *.log
 bench/.embed-cache/
 .lcm-vectors/
-bench/results/*.json
-bench/results/*.md
