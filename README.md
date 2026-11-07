@@ -105,6 +105,7 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     summaryRatio: 0.12         # summary budget = clamp(span*ratio, floor, cap)
     summaryFloorTokens: 512
     checkpointCap: 16384
+    anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
     # ── optional vector recall (off by default) ──
     vectorEnabled: false       # both gates must open: this + rank=vector|hybrid
     vectorBaseUrl: "http://10.126.126.3:1234/v1"

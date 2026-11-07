@@ -47,6 +47,14 @@ const DEFAULT_SUMMARY_RATIO = 0.12;
 const DEFAULT_SUMMARY_FLOOR_TOKENS = 512;
 /** Absolute ceiling for one summary. */
 const DEFAULT_CHECKPOINT_CAP = 16384;
+/**
+ * Whether a leaf summary anchor list gets `(seq N)` pointers.
+ *
+ * On by default: attribution is pure local computation over events already in
+ * memory — no request, no extra token — and it is what turns the anchor list
+ * from a lost citation into an index `lcm_expand` can follow directly.
+ */
+const DEFAULT_ANCHOR_POINTERS = true;
 
 /** Fields shared by top-level defaults and exact-target overrides (== basic). */
 const POLICY_KEYS = [
@@ -72,6 +80,7 @@ const LCM_KEYS = [
   "summaryRatio",
   "summaryFloorTokens",
   "checkpointCap",
+  "anchorPointers",
   "debug",
   "debugLogPath",
   "vectorEnabled",
@@ -162,6 +171,7 @@ export function resolveConfig(config = {}) {
     summaryRatio: config.summaryRatio ?? DEFAULT_SUMMARY_RATIO,
     summaryFloorTokens: config.summaryFloorTokens ?? DEFAULT_SUMMARY_FLOOR_TOKENS,
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
+    anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     debug,
     debugLogPath,
     // ── optional vector recall (inert unless vectorEnabled) ──
@@ -330,6 +340,7 @@ function validatePolicy(config, name) {
   if (config.checkpointCap !== undefined) assertPositiveInteger(`${name}.checkpointCap`, config.checkpointCap);
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
+  if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.debug !== undefined && typeof config.debug !== "boolean") throw new Error(`${name}.debug must be a boolean`);
   if (config.debugLogPath !== undefined && typeof config.debugLogPath !== "string") throw new Error(`${name}.debugLogPath must be a string`);
   if (config.vectorEnabled !== undefined && typeof config.vectorEnabled !== "boolean") throw new Error(`${name}.vectorEnabled must be a boolean`);

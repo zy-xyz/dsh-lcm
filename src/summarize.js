@@ -20,6 +20,7 @@
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { resolveEventAt } from "./events.js";
+import { projectMessageText } from "./recall.js";
 
 /**
  * Section skeleton the summary must follow.
@@ -183,12 +184,19 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   }
 
   const raw = assembler.blocks();
-  const text = raw
+  const produced = raw
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n")
     .trim();
-  if (text.length === 0) throw new Error("lcm: summarization produced no text content");
+  if (produced.length === 0) throw new Error("lcm: summarization produced no text content");
+  // Pointers are attributed here, after the model call and before the
+  // checkpoint is wrapped: the summarizer input stays the verbatim span (the
+  // prefix-cache constraint above), and an anchor that the span never contained
+  // keeps no pointer at all.
+  const text = config.anchorPointers === false
+    ? produced
+    : attributeAnchorPointers(produced, session, prepared.shadowedSeqs);
 
   return {
     summary: [{ type: "text", text }],
@@ -198,6 +206,157 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     maxTokens: budgetTokens,
     ...(assembler.usage === undefined ? {} : { usage: assembler.usage })
   };
+}
+
+/**
+ * Section heading that opens the verbatim-anchor list.
+ *
+ * Matched loosely (any heading level, the exact phrase) because a model that
+ * renames the heading still produced an anchor list, and dropping pointers for
+ * the whole summary over one character would be the wrong trade.
+ */
+const ANCHOR_HEADING_RE = /^#{1,6}\s*逐字锚点/u;
+
+/** A line that already carries a pointer the model copied out of a child checkpoint. */
+const EXISTING_POINTER_RE = /\((?:seqs?\s+[\d,\s-]+)\)\s*$/u;
+
+/** Bullet or ordered-list marker in front of one anchor. */
+const BULLET_RE = /^(?:[-*+]|\d+[.)])\s+/u;
+
+/** Any markdown heading, used to find the end of the anchor section. */
+const HEADING_RE = /^#{1,6}\s/u;
+
+/**
+ * Render one event exactly as lexical search renders it, so a pointer found
+ * here is a pointer lcm_search would have found too: same projection, same
+ * bytes. Case folding happens once, inside the index.
+ * @param session - session-shaped value.
+ * @param seq - surface seq of the event.
+ * @returns the rendered body, or undefined when the event is absent.
+ */
+function spanBody(session, seq) {
+  const event = resolveEventAt(session, seq);
+  if (event === undefined) return undefined;
+  const message = typeof session.deriveEventMessage === "function" ? session.deriveEventMessage(event) : null;
+  if (message !== null) return projectMessageText(message);
+  return "[" + event.type + "]\n" + JSON.stringify(event.data ?? null);
+}
+
+/**
+ * Build a one-pass, case-folded index over the shadowed span.
+ *
+ * Every event is rendered once and concatenated into a single haystack whose
+ * per-event start offsets are recorded. One anchor then costs one indexOf over
+ * the span plus one binary search, instead of one scan per anchor.
+ *
+ * Folding is applied per body before its offset is taken, so a body whose case
+ * folding changes its length still leaves every later offset correct.
+ * @param session - session-shaped value.
+ * @param shadowedSeqs - seqs of the span being replaced.
+ * @returns the haystack plus a first-occurrence lookup.
+ */
+function buildSpanIndex(session, shadowedSeqs) {
+  const parts = [];
+  const starts = [];
+  const seqs = [];
+  let cursor = 0;
+  for (const seq of shadowedSeqs ?? []) {
+    const body = spanBody(session, seq);
+    if (body === undefined || body.length === 0) continue;
+    const folded = body.toLowerCase();
+    starts.push(cursor);
+    seqs.push(seq);
+    parts.push(folded);
+    cursor += folded.length + 1;
+  }
+  const haystack = parts.join("\n");
+  return {
+    haystack,
+    /**
+     * First seq in the span whose rendered body contains the anchor verbatim.
+     * @param anchor - literal anchor text.
+     * @returns the owning seq, or undefined when the span never contained it.
+     */
+    lookup(anchor) {
+      if (haystack.length === 0) return undefined;
+      const at = haystack.indexOf(anchor.toLowerCase());
+      if (at < 0) return undefined;
+      let low = 0;
+      let high = starts.length - 1;
+      let found = seqs[0];
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (starts[mid] <= at) {
+          found = seqs[mid];
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return found;
+    }
+  };
+}
+
+/**
+ * Strip the presentation a model puts around one anchor and return the literal
+ * text to attribute. Returns null for lines that carry no anchor.
+ * @param line - one line of the summary.
+ * @returns the anchor text, or null when the line should be left alone.
+ */
+function anchorTextOf(line) {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return null;
+  if (HEADING_RE.test(trimmed)) return null;
+  if (EXISTING_POINTER_RE.test(trimmed)) return null;
+  let anchor = trimmed.replace(BULLET_RE, "").trim();
+  anchor = anchor.replace(/^`+([\s\S]*?)`+$/u, "$1").trim();
+  if (anchor.length === 0) return null;
+  return anchor;
+}
+
+/**
+ * Append (seq N) to every verbatim anchor the span actually contained.
+ *
+ * The model is asked for anchor values, never for pointers: the summarizer
+ * input is the verbatim span replayed to reuse the provider prefix cache (see
+ * summarizeLeaf), so inserting seq markers into the input would break that
+ * cache. Attribution therefore happens after the fact, deterministically,
+ * against the same rendered bytes lcm_search searches.
+ *
+ * A line whose anchor does not appear verbatim in the span is returned
+ * unchanged: the model may have rewritten it, and a guessed pointer would send
+ * lcm_expand to the wrong event. An anchor with no pointer is honest
+ * information — this string is not in the log as written.
+ *
+ * @param text - model-returned markdown.
+ * @param session - session-shaped value owning the events.
+ * @param shadowedSeqs - seqs of the span being replaced; nothing outside it is
+ *   searched, because a seq outside the span is not in this checkpoint's scope.
+ * @returns the markdown with (seq N) appended where attribution succeeded.
+ */
+export function attributeAnchorPointers(text, session, shadowedSeqs) {
+  if (typeof text !== "string" || text.length === 0) return text;
+  const lines = text.split("\n");
+  const heading = lines.findIndex((line) => ANCHOR_HEADING_RE.test(line.trim()));
+  if (heading < 0) return text;
+  let sectionEnd = lines.length;
+  for (let end = heading + 1; end < lines.length; end += 1) {
+    if (HEADING_RE.test(lines[end].trim())) {
+      sectionEnd = end;
+      break;
+    }
+  }
+  const index = buildSpanIndex(session, shadowedSeqs);
+  if (index.haystack.length === 0) return text;
+  for (let line = heading + 1; line < sectionEnd; line += 1) {
+    const anchor = anchorTextOf(lines[line]);
+    if (anchor === null) continue;
+    const seq = index.lookup(anchor);
+    if (seq === undefined) continue;
+    lines[line] = lines[line].replace(/\s+$/u, "") + " (seq " + seq + ")";
+  }
+  return lines.join("\n");
 }
 
 /**

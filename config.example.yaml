@@ -71,6 +71,11 @@ summaryFloorTokens: 512
 # 单次摘要预算硬上限。默认 16384。
 checkpointCap: 16384
 
+# 给摘要「逐字锚点」清单里的每一条事后补上 (seq N) 指针，让 lcm_expand 可以直接跟进，
+# 不必先 lcm_search 猜一次。归因只扫被压缩区间，锚点在该区间里逐字找不到就不加指针。
+# 纯本地计算、零网络、零额外 token，所以默认 true；设 false 输出与不开启时逐字节相同。
+anchorPointers: true
+
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 
