@@ -13,6 +13,14 @@ Built on the [LCM paper](https://papers.voltropy.com/LCM) (Ehrlich & Blackman,
 2026-02) and on the durable-protocol work in
 [`dsh-compaction-instant`](https://github.com/TsFreddie/dsh-compaction-instant).
 
+> **Status: opt-in, not a replacement.** Measured against `dsh-compaction-basic`
+> on a real 436k-token span, this backend keeps **100%** of auto-extracted
+> anchors obtainable (vs 12.5% in the checkpoint alone) but does **not** write a
+> denser summary — it costs ~38% more output tokens on the span where it scores
+> higher, and the direction reverses on a smaller span. **`basic` remains the
+> default engine.** Install this one for sessions where retrieving an exact
+> earlier fact matters more than summary cost.
+
 ## What is measured, and what is not
 
 An audit of the first benchmark round (see [bench/REPORT.md](bench/REPORT.md))
