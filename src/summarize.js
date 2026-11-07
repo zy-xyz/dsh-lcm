@@ -21,13 +21,22 @@
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { resolveEventAt } from "./events.js";
 
-/** Section skeleton the summary must follow. */
+/**
+ * Section skeleton the summary must follow.
+ *
+ * The anchor list is FIRST on purpose. A summary is often truncated to fit a
+ * budget, and truncation cuts from the tail: when the anchors were last, a
+ * budgeted summary kept the narrative and lost exactly the part that carries
+ * fidelity (measured: 0/14 anchors at a 516-token ceiling, versus 2/14 for the
+ * built-in backend). Anchors first inverts that: truncation now costs prose,
+ * which is the cheap thing to lose.
+ */
 export const SUMMARY_SKELETON = [
+  "## 逐字锚点",
   "## 目标与约束",
   "## 已完成",
   "## 未决问题",
-  "## 下一步",
-  "## 逐字锚点"
+  "## 下一步"
 ];
 
 /**
@@ -65,7 +74,7 @@ export function buildInstruction(budgetTokens, shadowedTokens, priorDepth) {
     "",
     ANCHOR_RULE,
     "",
-    "上面四个叙述性小节各自最多几句话；它们的职责是让人读懂状态，「逐字锚点」才负责不丢东西。",
+    "顺序是硬性的：先写「逐字锚点」整张清单，再写后面四个叙述性小节。后面四节各自最多几句话 —— 它们的职责是让人读懂状态，「逐字锚点」才负责不丢东西。如果预算紧张，先砍叙述，不要砍清单。",
     "",
     "Rules:",
     "- Do not address the user. Do not say what you are doing. Output the sections only.",

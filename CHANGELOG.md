@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.7 — 2026-11-07
+
+At equal budget this package was **worse** than the built-in backend. Fixed.
+
+### Fixed
+
+- **The anchor list was the last section, so truncation destroyed it.** A summary
+  is routinely cut to fit a budget, and truncation cuts the tail: with the
+  anchors last, a budgeted summary kept the narrative and lost exactly the part
+  that carries fidelity. Measured at a 516-token ceiling: **0/14 anchors**
+  (the built-in backend kept 2/14). Evidence: the truncated text ended at
+  `## 逐字锚点\n- /vol3/1000/work/`.
+  `SUMMARY_SKELETON` now puts `逐字锚点` first, and the instruction says to cut
+  prose, never the list.
+
+### Measured (equal budget, N=4 per arm, temperature 0)
+
+| arm | hits | mean | budgeted tokens |
+|---|---|---|---|
+| basic | 2, 2, 3, 2 | 16.1% | 494 |
+| **lcm** | 3, 4, 4, 2 | **23.2%** | 509 |
+
+Non-inferior at equal cost, and consistently ahead on 3 of 4 runs. Not enough to
+claim "better"; enough to hold the "not worse" line.
+
+### Added
+
+- `bench/equal-budget.mjs`: pure scoring (token count, budget truncation,
+  anchor scoring) plus a `--score` CLI that re-scores saved text without calling
+  a model, so the numbers stay checkable offline.
+
+## 0.2.6 — 2026-11-07
 ## 0.2.6 — 2026-11-07
 
 Retrieval quality measured on production data — and a relevance ranking that lost.
