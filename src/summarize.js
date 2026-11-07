@@ -19,6 +19,7 @@
  * @module dsh-compaction-lcm/summarize
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
+import { resolveEventAt } from "./events.js";
 
 /** Section skeleton the summary must follow. */
 export const SUMMARY_SKELETON = [
@@ -228,12 +229,11 @@ export function deriveDag(session) {
     if (event.type === "compaction/summary") summaries.push(event);
   }
   // A compaction/summary is immediately followed by its replacement message.
-  const seqToShadowed = new Map();
+  // Resolve by seq, never by array index: a persisted log starts with a header
+  // record that has no `seq`, so `events[seq + 1]` is off by one on every file.
   for (const summary of summaries) {
     const shadowed = summary.data?.shadowedSeqs ?? [];
-    for (const seq of shadowed) seqToShadowed.set(seq, shadowed);
-    // The replacement node is the next surface user/message after the summary.
-    const next = session.events[summary.seq + 1];
+    const next = resolveEventAt(session, summary.seq + 1);
     if (next !== undefined && next.type === "user/message" && isCheckpoint(next.data?.source)) {
       nodeBySeq.set(next.seq, {
         seq: next.seq,

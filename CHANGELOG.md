@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.4 — 2026-11-07
+
+Two more instances of the same off-by-one, and dead code removal.
+
+### Fixed
+
+- **`deriveDag` read `session.events[summary.seq + 1]`**, so on every persisted log
+  (header record first, no `seq`) it looked one event past the replacement and
+  found nothing: the summary DAG reported zero checkpoints for real sessions.
+  Now resolved through `resolveEventAt`. Regression test added.
+- Removed an unused `seqToShadowed` map left over from an earlier revision.
+
+### Removed
+
+- `compiler.js`: `excerptToolResult` and `tailTokens` — the last survivors of the
+  VCC region compiler, dead since it was replaced by LLM summarization
+  (851 → 275 lines across this series).
+
+### Verified
+
+- 44 tests, including three header-shift regressions (recall, search, deriveDag).
+
+## 0.2.3 — 2026-11-07
 ## 0.2.3 — 2026-11-07
 
 The engine-level measurement the prompt A/B could not provide, plus a bug it found.

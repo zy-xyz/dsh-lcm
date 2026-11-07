@@ -144,3 +144,19 @@ test("every anchor the summary dropped is recoverable from the log", { skip: !fs
   assert.ok(dropped > 0, "the production summary did drop anchors; otherwise this test proves nothing");
   assert.equal(recovered, dropped, `every dropped anchor must be recoverable (dropped ${dropped}, recovered ${recovered})`);
 });
+// ── deriveDag must not rely on array indices either ────────────────────────
+
+test("deriveDag reads a header-shifted log correctly", async () => {
+  const { deriveDag } = await import("../src/summarize.js");
+  // Same shape as a persisted session file: a header record with no seq first.
+  const events = [
+    { type: "session", version: 4, id: "s1" },
+    { type: "user/message", seq: 0, time: 1, data: { content: [{ type: "text", text: "a" }] } },
+    { type: "compaction/summary", seq: 1, time: 1, data: { compactionId: "c1", shadowedSeqs: [0], shadowedTokenCount: 100 } },
+    { type: "user/message", seq: 2, time: 1, data: { source: { kind: "compact-checkpoint", compactionId: "c1" } } }
+  ];
+  const dag = deriveDag({ events });
+  assert.equal(dag.checkpoints, 1, "the checkpoint node must be found despite the header shift");
+  assert.equal(dag.maxDepth, 1);
+  assert.deepEqual(dag.nodeBySeq.get(2).children, [0]);
+});

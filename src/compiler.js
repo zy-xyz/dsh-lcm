@@ -175,58 +175,7 @@ export function truncateTokens(text, limit, ref) {
   return { text: out + note, truncated: true };
 }
 
-/**
- * Keep the LAST `limit` non-whitespace tokens of a text, additionally capped
- * at `limit * 4` characters. The end of the text is always preserved.
- * @param text - text to bound.
- * @param limit - non-whitespace token budget.
- * @param ref - provenance prepended as `...(elided before {ref})`.
- * @returns `{ text, truncated }`.
- */
-function tailTokens(text, limit, ref) {
-  const tokens = tokenize(text);
-  let count = 0;
-  let startIdx = tokens.length;
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    if (tokens[index].trim().length > 0) {
-      count += 1;
-      if (count > limit) break;
-    }
-    startIdx = index;
-  }
-  let out = startIdx === 0 ? text : tokens.slice(startIdx).join("");
-  let truncated = startIdx > 0;
-  const maxChars = Math.max(32, limit * 4);
-  if (out.length > maxChars) {
-    out = completeCodePointAtStart(out.slice(out.length - maxChars));
-    truncated = true;
-  } else if (truncated) {
-    out = completeCodePointAtStart(out);
-  }
-  if (!truncated) return { text, truncated: false };
-  const note = ref === undefined ? "...(elided before)" : `...(elided before ${ref})`;
-  return { text: note + out, truncated: true };
-}
 
-/**
- * Head/tail excerpt of a tool result under one shared token budget. The tail
- * is anchored to the end of the text, so a result whose tail matters more than
- * its head (file listings, logs) keeps its end.
- * @param text - projected result text.
- * @param budget - combined non-whitespace token budget for head + tail.
- * @param ref - provenance for the elision marker.
- * @returns the excerpt, or the full text when it already fits.
- */
-export function excerptToolResult(text, budget, ref) {
-  const overBudget = countTokens(text) > budget || text.length > budget * 4;
-  if (budget <= 0 || !overBudget) return text;
-  const half = Math.floor(budget / 2);
-  const headLimit = Math.max(8, half);
-  const tailLimit = Math.max(8, budget - headLimit);
-  const head = truncateTokens(text, headLimit, ref);
-  const tail = tailTokens(text, tailLimit, ref);
-  return `${head.text}\n...(elided from ${ref})\n${tail.text}`;
-}
 
 // ── projection ─────────────────────────────────────────────────────────────
 
