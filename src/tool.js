@@ -46,7 +46,7 @@ export function resolveConfig(config = {}) {
 
 const RECALL_DESCRIPTION = "Restore the exact original content of earlier events in THIS conversation by a typed reference. type=\"seq\" with a seq selection id (\"3-7,15\", \"seq 12\", \"seqs 3-7\" — the checkpoint marker forms) restores those events; type=\"result\" with the \"result N\" pointer from a tool-call one-liner (\"result 3\" or \"3\") restores that tool result; type=\"checkpoint\" with an ordinal (\"1\" = oldest, as in a \"[checkpoint N]\" elision line) or a \"seq N\" pointer restores that full checkpoint. The durable log is append-only, so recalled content is always the original tokens. To find events by keyword or regex instead, use the search tool.";
 
-const SEARCH_DESCRIPTION = "Search THIS conversation's durable event log by keyword or regular expression (case-insensitive, Unicode-aware). Every event ever recorded is searchable, including content elided or truncated by compaction checkpoints — the log is append-only and untouched. Returns the matching events with their (seq N) seq numbers and the matching lines. Then call recall with a (seq N) pointer to restore any hit's full exact original content. Escape regex special characters (e.g. use \\\\( for a literal parenthesis).";
+const SEARCH_DESCRIPTION = "Search THIS conversation's durable event log by keyword or regular expression (case-insensitive, Unicode-aware). Every event ever recorded is searchable, including content elided or truncated by compaction checkpoints — the log is append-only and untouched. Returns the matching events with their (seq N) seq numbers and the matching lines. Then call recall with a (seq N) pointer to restore any hit's full exact original content. Matching is line by line and literal: a pasted natural-language question almost never hits, and \"domain controller\" only matches those two words adjacent — search one distinctive word instead, or join alternatives with | (\"timeout|ETIMEDOUT\"). Escape regex special characters (e.g. use \\\\( for a literal parenthesis).";
 
 const RECALL_OUTPUT = {
   schema: {
@@ -143,7 +143,7 @@ export function defineSearchTool(resolved, toolName = "lcm_search") {
       pattern: {
         type: "string",
         required: true,
-        description: "Keyword or regular expression to search for (case-insensitive). Escape regex special characters."
+        description: "Keyword or regular expression to search for (case-insensitive). Prefer one distinctive word over a sentence or an adjacent phrase; use | for alternatives (timeout|ETIMEDOUT). Escape regex special characters."
       }
     },
     output: SEARCH_OUTPUT,

@@ -215,6 +215,43 @@ function tokensOf(hits) {
   return hits.reduce((total, hit) => total + estimateEntryTokens(hit.text), 0);
 }
 
+/** Why a pattern that reads fine to a human still matches nothing. */
+const ZERO_HIT_REASON = "a sentence, an adjacent phrase or an escaped metacharacter is one literal string here";
+
+/** Shortest token worth suggesting as a standalone query. */
+const HINT_MIN_TOKEN = 3;
+/** Token boundaries for the suggestion; non-word characters never enter a hint. */
+const HINT_TOKEN_SPLIT = /[^\p{L}\p{N}_]+/u;
+
+/**
+ * The one-line next step shown when a search matched nothing.
+ *
+ * A model's default move is to paste the question it was asked, and the log is
+ * matched line by line as one literal phrase, so that move returns zero hits
+ * (499 of LongMemEval_S's 500 questions, measured). The hint is advice only:
+ * the pattern is never rewritten and never re-run behind the model's back, so a
+ * result set stays a function of what was actually asked for.
+ * @param patternSource - the raw pattern that matched nothing.
+ * @returns one line naming the usual cause and two concrete alternatives.
+ */
+export function zeroHitHint(patternSource) {
+  const source = String(patternSource ?? "");
+  const words = [];
+  for (const token of source.split(HINT_TOKEN_SPLIT)) {
+    if (token.length >= HINT_MIN_TOKEN && !words.includes(token)) words.push(token);
+  }
+  // The longest tokens are the most distinctive, so they make the better example.
+  const [first, second] = words.slice().sort((a, b) => b.length - a.length);
+  // A pattern that already uses | needs no lesson about |.
+  const either = second !== undefined && !source.includes("|")
+    ? ' or either/or ("' + first + "|" + second + '")'
+    : "";
+  const retry = first === undefined
+    ? ' Retry one distinctive word, or either/or ("timeout|ETIMEDOUT").'
+    : ' Retry one distinctive word ("' + first + '")' + either + ".";
+  return "[" + ZERO_HIT_REASON + "." + retry + "]";
+}
+
 /**
  * Search one session with the lexical ranking only.
  * @param session - session-shaped value with events.
@@ -232,6 +269,7 @@ export function searchSession(session, patternSource, config) {
   const omitted = totalMatches - hits.length;
   const lines = [
     '[search "' + pattern.source + '": ' + totalMatches + " matching event(s)]",
+    ...(totalMatches === 0 ? [zeroHitHint(pattern.source)] : []),
     ...hits.map((hit) => hit.text),
     ...(omitted > 0 ? ["[" + omitted + " more matching event(s) omitted — narrow the pattern or use recall]"] : []),
     ...(truncated ? ["[search budget exhausted; some hits were cut]"] : [])
