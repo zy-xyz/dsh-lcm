@@ -95,18 +95,27 @@ function pickQuestions(all, headCount, sampleCount) {
 /** Escape a query so it is matched literally as a regex. */
 const escape = (s) => String(s ?? "").replace(/[.*+?^\u0024{}()|[\]\\]/gu, (c) => "\\" + c);
 
-/** Stopwords for the supplementary token-OR adapter variant only. */
-const STOP = new Set(("a an the and or but if then than that this these those i me my mine you your yours we us our it its is are was were be been being do does did doing have has had having of in on at to for with about as by from into over after before up down out off again once here there all any both each few more most other some such no nor not only own same so too very can will just should now what which who whom when where why how").split(/\s+/u));
+/**
+ * The exact stopword set lcm-x's fts arm drops (benchmarking/longmemeval.py,
+ * _FTS_STOPWORDS). Kept verbatim so the OR-of-terms query here is the same
+ * query construction, not a lookalike.
+ */
+const STOP = new Set(("a an and are as at be by did do does for from had has have how i in is it me my of on or that the to was were what when where which who why with you your").split(/\s+/u));
 
-/** Content tokens of a question (supplementary variant only). */
+/**
+ * Content terms of a question, following lcm-x's build_fts_query: split on
+ * whitespace, strip edge punctuation, reduce each token to bareword characters
+ * (alphanumerics and underscore), drop empty tokens and stopwords, dedupe in
+ * first-seen order.
+ */
 function questionTokens(question) {
-  const words = String(question ?? "").toLowerCase().match(/[a-z0-9][a-z0-9'\-]*/gu) ?? [];
   const seen = new Set();
   const kept = [];
-  for (const word of words) {
-    if (word.length < 3 || STOP.has(word) || seen.has(word)) continue;
-    seen.add(word);
-    kept.push(word);
+  for (const raw of String(question ?? "").split(/\s+/u)) {
+    const bare = raw.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, "").replace(/[^\p{L}\p{N}_]+/gu, "");
+    if (bare.length === 0 || STOP.has(bare.toLowerCase()) || seen.has(bare.toLowerCase())) continue;
+    seen.add(bare.toLowerCase());
+    kept.push(bare);
   }
   return kept;
 }
@@ -447,7 +456,7 @@ const pct = (v) => (v === 0 ? "0.000" : v.toFixed(3));
 const armRows = activeModes
   .map((rank) => {
     const o = arms[rank].overall;
-    return "| " + rank + " | " + pct(o.recall.at5) + " | " + pct(o.recall.at10) + " | " + pct(o.ndcgAt10) + " | " + pct(o.recall.at1) + " | " + pct(o.mrr) + " | " + pct(o.zeroHitRate) + " |";
+    return "| " + rank + " | " + o.n + " | " + pct(o.recall.at5) + " | " + pct(o.recall.at10) + " | " + pct(o.ndcgAt10) + " | " + pct(o.recall.at1) + " | " + pct(o.mrr) + " | " + pct(o.zeroHitRate) + " |";
   })
   .join("\n");
 
@@ -478,7 +487,7 @@ const zeroRows = activeModes
 const variantRowsMd = Object.keys(variants)
   .map((rank) => {
     const o = variants[rank].overall;
-    return "| " + rank + " | " + pct(o.recall.at5) + " | " + pct(o.recall.at10) + " | " + pct(o.ndcgAt10) + " | " + pct(o.recall.at1) + " | " + pct(o.mrr) + " | " + pct(o.zeroHitRate) + " |";
+    return "| " + rank + " | " + o.n + " | " + pct(o.recall.at5) + " | " + pct(o.recall.at10) + " | " + pct(o.ndcgAt10) + " | " + pct(o.recall.at1) + " | " + pct(o.mrr) + " | " + pct(o.zeroHitRate) + " |";
   })
   .join("\n");
 
@@ -500,8 +509,8 @@ const md = [
   "",
   "## Session-level metrics",
   "",
-  "| arm (rank) | sR@5 | sR@10 | sNDCG@10 | sR@1 | MRR | zero-hit rate |",
-  "|---|---|---|---|---|---|---|",
+  "| arm (rank) | n | sR@5 | sR@10 | sNDCG@10 | sR@1 | MRR | zero-hit rate |",
+  "|---|---|---|---|---|---|---|---|",
   armRows,
   ...(failedRows.length > 0 ? ["", "| arm | status | reason |", "|---|---|---|", failedRows] : []),
   "",
@@ -519,17 +528,38 @@ const md = [
   "",
   "Misses by construction: the lexical index has no tokenised/OR recall, so a paraphrased question that shares no literal substring with any event retrieves nothing. Recorded as a miss, never retried with narrower keywords.",
   "",
-  "## Supplementary adapter variant - NOT the METHODOLOGY metric",
+  "## Second query policy - OR-of-terms (the policy lcm-x's own fts arm uses)",
   "",
-  c("tokenOr") + ": the question's content tokens OR-ed into one regex instead of the verbatim question. This approximates what an FTS arm does and is reported for diagnosis only - it is a different query than the one the method mandates.",
+  "The METHODOLOGY-mandated query is the question verbatim. It is also the wrong query for a line-oriented regex, and the near-zero table above is what that costs. lcm-x's " + c("fts") + " arm does not do that either: " + c("build_fts_query") + " in " + c("benchmarking/longmemeval.py") + " tokenises the question, drops stopwords, and ORs the barewords into one FTS5 MATCH. The " + c("tokenOr") + " rows below apply the same policy to this harness (content tokens OR-ed into one case-insensitive regex, stopwords dropped) so the two lexical systems are compared on the same query construction. Both tables are honest; they answer different questions.",
   "",
-  "| variant (rank) | sR@5 | sR@10 | sNDCG@10 | sR@1 | MRR | zero-hit rate |",
-  "|---|---|---|---|---|---|---|",
+  "| variant (rank) | n | sR@5 | sR@10 | sNDCG@10 | sR@1 | MRR | zero-hit rate |",
+  "|---|---|---|---|---|---|---|---|",
   variantRowsMd,
+  "",
+  "## Why the verbatim-query arm is ~0.002 (mechanism, not a bug)",
+  "",
+  "A LongMemEval question is a natural-language sentence (" + c("What degree did I graduate with?") + "). " + c("searchSession") + " compiles the pattern and tests it line by line against each event's rendered text. A whole-sentence regex therefore only fires when that exact sentence appears verbatim inside one line of the haystack - which happens on 1 of 500 questions. Every other question returns zero hits at every rank mode, identically, because ordering cannot rescue an empty candidate set.",
+  "",
+  "That is the honest reading of the production tool's contract: " + c("searchSession") + " is an *anchor* search (a path, an id, an error line, a keyword), and its documented use is 'the agent remembers a string, types it, gets the event back'. It was never a question-answering retriever. Feeding it a full question is the METHODOLOGY-mandated adapter (query = question verbatim, no token picking), so the near-zero result is reported as-is rather than hidden behind a friendlier query policy.",
+  "",
+  "## Reference: lcm-x published retrieval numbers (NOT a like-for-like comparison)",
+  "",
+  "From " + c("../lcm-x/benchmarks/results/longmemeval-v3-500q-fastembed.md") + " (n=470 scoreable, LongMemEval_S, local FastEmbed " + c("BAAI/bge-small-en-v1.5") + ", 500q):",
+  "",
+  "| lcm-x arm | sR@5 | sR@10 | sNDCG@10 | route |",
+  "|---|---|---|---|---|",
+  "| chunk_vectors | 0.96 | 0.98 | 0.924 | embedding KNN over raw conversational chunks |",
+  "| summary_vectors | 0.87 | 0.93 | 0.837 | embedding KNN over one summary per session |",
+  "| hybrid_rrf3 | 0.77 | 0.97 | 0.714 | RRF over FTS + summary + chunk |",
+  "| hybrid_rrf | 0.49 | 0.64 | 0.484 | RRF over FTS + summary |",
+  "| fts | 0.20 | 0.36 | 0.204 | **lexical only** (tokenised full-text search) |",
+  "| lcm_recall (50q subset) | 0.98 | 1.00 | - | production tool, weighted RRF + priors |",
+  "",
+  "Read the " + c("fts") + " row as the only structural counterpart: it is the one arm with no embedding model. The gap between it (sR@5 0.20) and this harness's verbatim-query number is a **query-shape** difference, not a retrieval-quality difference: FTS tokenises the question into terms and ORs/ANDs them against an inverted index, while this harness feeds the whole question to a line-oriented regex, which almost never matches a line verbatim. The " + c("tokenOr") + " table above removes exactly that difference, which is why it - not the verbatim number - is the row to compare against " + c("fts") + ". Even so the two remain different instruments: FTS5 ranks by BM25 over a tokenised inverted index, this harness ranks by match count or length-normalised match density over lines.",
   "",
   "## Boundaries",
   "",
-  "1. **This plugin is lexical only.** No vector recall, no embeddings, no chunk store: " + c("searchSession") + " is a case-insensitive regex over rendered event text plus one of three orderings (" + c("seq") + " chronological, " + c("score") + " match-count, " + c("density") + " length-normalised match density). Paraphrased and semantic questions are structurally disadvantaged; that is a property of the measured system, not of the harness.",
+  "1. **The measured arms are lexical only.** " + c("searchSession") + " is a case-insensitive regex over rendered event text plus one of three orderings (" + c("seq") + " chronological, " + c("score") + " match-count, " + c("density") + " length-normalised match density); there is no tokeniser, no inverted index and no chunk store, so a question sharing no literal substring with an event retrieves nothing at any rank mode. " + (payload.config.vector === null ? "The optional semantic route (" + c("searchSessionHybrid") + ", " + c("src/vectors.js") + ") exists but was not exercised by this run - pass " + c("--rank vector,hybrid") + " to score it." : "This run also scored the optional semantic route (see the vector/hybrid rows above)."),
   "2. **Turn-level is unavailable.** LongMemEval_S labels evidence at session granularity (" + c("answer_session_ids") + ") only; there are no per-turn evidence labels, so any " + c("(session, turn_index)") + " recall/NDCG would be invented. No tR@k is reported. " + c("perQuestion.*.eventRank") + " (rank of the first event inside an evidence session) ships in the JSON as a diagnostic.",
   "3. **n = " + questions.length + "** questions, all with non-empty " + c("answer_session_ids") + ". Per-type n is in the table above.",
   "4. **Not comparable to lcm-x's published numbers.** lcm-x's retrieval numbers run with an embedding provider (local FastEmbed " + c("BAAI/bge-small-en-v1.5") + " floor, " + c("voyage-context-3") + " recommended) and score vector/KNN and RRF-fused arms. Comparing a regex matcher to " + c("chunk_vectors") + " (sR@5 0.96) measures the absence of an embedding path, not the quality of this one. The defensible counterpart is lcm-x's own lexical arm, " + c("fts") + ": sR@5 0.20 / sR@10 0.36 / sNDCG@10 0.204.",
