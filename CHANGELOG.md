@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.2.8 — 2026-11-07
+
+The retrieval ranking conclusion was inverted by an instrument bug. Corrected, and
+the default flipped.
+
+### Fixed
+
+- **`bench/retrieval.mjs` recorded `index + 2` as the rank** (`rank = hitIndex + 1`
+  then `+1` again on write), so recall@1 was structurally 0 for every mode and
+  hid the entire advantage of the length-normalised ranking. The same file's
+  "NDCG" was a constant copy of recall@10.
+- `rank` is now written once, NDCG is a real `1/log2(rank+1)`, and the false claim
+  that "the top hit is always outside the span" is gone (it was an artifact).
+
+### Changed
+
+- **Default result order is now `density`**, which wins on the metric that matches
+  the actual use — "get me any copy of this fact":
+
+  | log | order | recall@1 | recall@5 | MRR | NDCG@10 |
+  |---|---|---|---|---|---|
+  | d45c83f5 (21) | seq | 0.381 | 0.952 | 0.581 | 0.673 |
+  | | **density** | **0.714** | 0.952 | **0.793** | **0.832** |
+  | session-65bd (22) | seq | 0.682 | 0.955 | 0.802 | 0.851 |
+  | | **density** | **0.727** | 0.955 | **0.840** | **0.880** |
+
+  `seq` and `score` stay available through the `rank` key.
+
+### Notes
+
+- Under the `gold=first` label density is *worse* (recall@1 0.143 vs 0.381): it
+  prefers short events that are entirely about the term over the first passing
+  mention. Real callers want any copy, so the default optimises `any`; both sets
+  of numbers stay in the report.
+- The lesson recorded in bench/REPORT.md §14: one wrong counting rule is enough to
+  make the best ordering look like the worst.
+
+## 0.2.7 — 2026-11-07
 ## 0.2.7 — 2026-11-07
 
 At equal budget this package was **worse** than the built-in backend. Fixed.

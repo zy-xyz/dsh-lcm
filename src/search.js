@@ -24,12 +24,12 @@ export const MAX_LINES_PER_HIT = 10;
 /**
  * How one result set is ordered.
  *
- * `seq` is the default because it won on production data: two relevance
- * rankings (raw match count, length-normalised density) were measured against
- * 21 anchors a real summary had dropped, and both lost to plain chronological
- * order on recall@5 and MRR. See bench/REPORT.md §14. The alternatives stay
- * available so the question can be re-opened when callers expand results
- * agentically rather than reading a single payload.
+ * `density` is the default because it won on production data: measured against
+ * the anchors real summaries had dropped, length-normalised density beat plain
+ * chronological order on recall@1 (0.71 vs 0.38), MRR (0.79 vs 0.58) and
+ * NDCG@10 (0.83 vs 0.67), with recall@5 tied. An earlier measurement said the
+ * opposite; that instrument had an off-by-one in the rank it recorded, and the
+ * correction is recorded in bench/REPORT.md §14.
  */
 export const RANK_MODES = Object.freeze(["seq", "score", "density"]);
 
@@ -101,7 +101,7 @@ export function searchSession(session, patternSource, config) {
   const pattern = compileSearchPattern(patternSource);
   const maxHits = config.maxSearchHits;
   const maxTokens = config.maxRecallTokens;
-  const rankMode = config.rank ?? "seq";
+  const rankMode = config.rank ?? "density";
   const events = session.events;
   const collected = [];
   let totalMatches = 0;

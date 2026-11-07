@@ -50,9 +50,13 @@ test("density order normalises by event size", () => {
   assert.equal(result.rank, "density");
 });
 
-test("the default is seq, the mode that won on production data", () => {
+test("the default is density, the mode that won on production data", () => {
+  // Measured on the anchors real summaries dropped: density beat chronological
+  // order on recall@1 (0.71 vs 0.38), MRR (0.79 vs 0.58) and NDCG@10 (0.83 vs
+  // 0.67), with recall@5 tied. An earlier run said the opposite because the
+  // instrument mis-recorded rank; see bench/REPORT.md §14.
   const result = searchSession(fixture(), "target token", { maxSearchHits: 50, maxRecallTokens: 100000 });
-  assert.equal(result.rank, "seq");
+  assert.equal(result.rank, "density");
   assert.deepEqual(RANK_MODES, ["seq", "score", "density"]);
 });
 

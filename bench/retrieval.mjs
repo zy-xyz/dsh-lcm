@@ -81,11 +81,17 @@ function ownersOf(value) {
 /** Escape an anchor so it is matched literally as a regex. */
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function ndcgAt(rankedGolds, k) {
-  // Binary relevance, single gold: DCG = 1/log2(rank+1), IDCG = 1.
-  const rank = rankedGolds.findIndex((hit) => hit);
-  if (rank === -1 || rank >= k) return 0;
-  return 1 / Math.log2(rank + 2);
+/**
+ * Binary-relevance NDCG@k for one query with a single relevant item.
+ *
+ * With one relevant document, IDCG = 1 (it sits at rank 1), so NDCG@k equals
+ * 1/log2(rank+1) when the gold is inside the top k and 0 otherwise. This is
+ * deliberately *not* the same function as recall@k: recall counts "any gold in
+ * the top k", NDCG weights where in the top k it landed.
+ */
+function ndcgAt(rank, k) {
+  if (rank === null || rank < 1 || rank > k) return 0;
+  return 1 / Math.log2(rank + 1);
 }
 
 const rows = [];
@@ -102,14 +108,14 @@ for (const anchor of dropped) {
     anchor: anchor.value.slice(0, 60),
     type: anchor.type,
     gold: owners[0],
-    rank: rank === -1 ? null : rank + 1,
+    rank: rank === -1 ? null : rank,
     hits: order.length
   });
 }
 
 const at = (k) => rows.filter((r) => r.rank !== null && r.rank <= k).length / rows.length;
 const mrr = rows.reduce((sum, r) => sum + (r.rank === null ? 0 : 1 / r.rank), 0) / rows.length;
-const ndcg = rows.reduce((sum, r) => sum + (r.rank === null ? 0 : ndcgAt([true].concat(Array(0)), 10) * (r.rank <= 10 ? 1 : 0)), 0) / rows.length;
+const ndcg = rows.reduce((sum, r) => sum + ndcgAt(r.rank, 10), 0) / rows.length;
 
 const byType = {};
 for (const r of rows) {
