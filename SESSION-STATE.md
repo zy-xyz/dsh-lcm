@@ -1,55 +1,60 @@
 # SESSION-STATE —— 交接/压缩锚点
 
-> 写于 2026-11-07，上下文将满。**任何后续会话先读这个文件**，再读 bench/REPORT.md。
+> 写于 2026-11-07。**任何后续会话先读这个文件**，再读 bench/REPORT.md。
 > 所有数字都可用仓库内脚本复现，不要相信本文件以外的口头叙述。
 
 ## 目标（当前版本）
 团队模式、领导者不做执行。优雅实现 / 上传 GitHub / **不能比原版 lcm 更差** / **不能比 dsh 自带压缩更差** / 遵循验收标准。
 
+**成本不是判据**（用户明示：成本不需要压制，成本相关的也不需要测）。
+
 ## 仓库
-https://github.com/zy-xyz/dsh-lcm ｜ 版本 **0.2.9** ｜ **57 测试全绿**
-本地：`/home/agent/workspaces/lcmx-study/dsh-lcm`
-验收标准：`/home/agent/workspaces/lcmx-study/ACCEPTANCE-dsh-lcm.md`（19 ✅ / 5 ❌）
+https://github.com/zy-xyz/dsh-lcm ｜ 版本 **0.3.0** ｜ **57 测试全绿**
+本地：`/home/agent/workspaces/lcmx-study/dsh-lcm`（原 `dsh-compaction-lcm`，已改名，旧仓库留了迁移指引）
+验收标准：`/home/agent/workspaces/lcmx-study/ACCEPTANCE-dsh-lcm.md`
 
 ## 一句话现状
-**质量维度不差、可恢复性远胜、成本持平或更低；摘要密度方向不稳（已如实记录）。默认引擎未切换。**
+**保真这一门已经过了：lcm 摘要把 3.0–3.5 倍的逐字事实交给模型，并达到模型对同一原文复用上限的 75%（basic 20%）。可以切换，但真装载需用户点头。**
 
-## 关键实测（都可复现）
+## 唯一可采信的保真指标（其余口径全部作废）
 
-| 维度 | 指标 | basic | lcm | 结论 |
+类型分组逐字召回（`bench/qa-recall.mjs`），输出上限 8000，全臂 `stop` 自然收尾：
+
+| 语料 | 跨度 | basic | lcm | 天花板 |
 |---|---|---|---|---|
-| 等预算保真（516 tok，N=4） | 锚点命中 | 16.1% | **23.2%** | 不差 |
-| 自然长度（N=4–5） | 锚点 / token | 5.0 / 2700 | 5.0 / **2182** | 同保真、少 19% |
-| 生成期硬上限 516 | 锚点 | 2.5 | **3.5** | 同成本更高 |
-| **类型分组逐字召回**（c2，24 锚点） | 命中 | 4/24 = 16.7% | **9/24 = 37.5%** | **2.25×**（天花板 10/24） |
-| 可恢复性（生产 436k 跨度） | 模型可得 | 摘要 12.5% | **100%**，0 丢失 | 架构级 |
-| 检索可达性（21 锚点） | recall@5 / MRR | —（无检索） | **0.952 / 0.793** | 新能力 |
+| `s` | 4302 tok | 2/14 = 14.3% | **7/14 = 50.0%** | 未测 |
+| `c2` | 8065 tok | 4/24 = 16.7% | **15/24 = 62.5%** | **20/24 = 83.3%** |
+
+## 可恢复性（架构级，不靠 benchmark）
+生产 436 194 tok 跨度：摘要只携带 12.5% 锚点，但 `lcm_expand` 可逐字取回 **21/21，0 丢失**，模型可得 **100%**。
+
+## 检索可达性（三份真实压缩日志，density 默认）
+跨日志均值 recall@1 **0.730** / @5 **0.969** / MRR **0.831** / NDCG@10 **0.870**；时间序 0.382 / 0.941 / 0.628 / 0.711。
+显著性如实：log1 9:2 p=0.065（边缘）、log2 6:5 p=1.0（持平）、log3 18:2 p=0.0004。**不是三份都显著。**
+
+## 仪器事实（别再重学）
+1. 同一 prompt 重跑 → **逐字节相同**（网关缓存）。跑 3 次是假重复，N=1。
+2. 命中数**不随输出上限单调**：c2 全跨度 1500→10/24、3000→4/24、8000→20/24。只有同上限横向比较 + `stop` 绝对值有意义。
+3. `lcm` 臂在 8000 上限下退化过两次（重复短语 30+ 次，`finish_reason=error`），换标签重跑命中数不变。单次调用不是结论。
+4. `max_tokens` 是否执行**取决于路由**：`deepseek-v4-flash-auto` 忽略，`balanced-lite`/`best` 执行。
 
 ## 已修的真 bug（都带回归测试）
-1. `surfaceOp` 写成 `{op,start,end}` → harness 要 `{op,startSeq,endSeq}`；**插件此前从未成功压缩过一次**（0.2.2）
+1. `surfaceOp` 写成 `{op,start,end}` → harness 要 `{op,startSeq,endSeq}`；插件曾从未成功压缩过一次（0.2.2）
 2. `compactNow` 引用越界 `spec` → `/compact` 必抛 ReferenceError 被伪装成 busy（0.2.2）
-3. `session.events[seq]` 错位（持久化日志首条 header 无 seq）→ recall/search/deriveDag 全部查不到（0.2.3/0.2.4）
-4. 锚点清单排在末节 → 截断时被砍光，等预算 0/14（原版 2/14）（0.2.7）
-5. `retrieval.mjs` 把 rank 加了两遍 → recall@1 恒为 0，**排序结论一度是反的**（0.2.8）
+3. `session.events[seq]` 错位 → recall/search/deriveDag 全部查不到（0.2.3/0.2.4）
+4. 锚点清单排在末节 → 截断时被砍光（0.2.7）
+5. `retrieval.mjs` 把 rank 加了两遍 → 排序结论一度是反的（0.2.8）
+6. 指令自称「最后一节」而骨架早已把锚点提到第一节 —— 自相矛盾（0.3.0）
+7. `compose.test.js` 用包名匹配引擎行，改名后匹配到 0 条，断言反而「通过」（0.3.0）
 
-## 仪器（bench/）
-- `span.mjs` 取真实跨度；`anchors.mjs` 去嵌套+分层+去重；`recovery.mjs` 可恢复性
-- `retrieval.mjs` 检索可达性（rank: seq/score/**density 默认**）
-- `equal-budget.mjs` 纯打分 + `--score` 离线复算；`ab-one.mjs` 单臂运行（支持 `none` 不设上限）
-- `qa-eval.mjs` 出题/判分；`qa-recall.mjs` **类型分组逐字召回（最可靠的端到端指标）**
-- `llm.mjs` 直连 OpenAI 兼容 HTTP（**不要再用 MCP 通道**：60s 硬截止会杀掉整个臂）
-
-## 已知的仪器/口径坑（别再踩）
-- `deepseek-v4-flash-auto` **不执行 `max_tokens`**（要 40 得 654）；`balanced-lite`/`best` 执行
-- 不同路由的数字**不可跨表比较**（deepseek vs agnes-3.0-flash）
-- `qa-eval` 的"near \"提示语\""问法会让模型在摘要缺该提示语时答 UNKNOWN，即使答案在摘要里 → 用 `qa-recall.mjs` 的分组问法
-- 三个 arm 的输出都撞 1500 token 上限，天花板 10/24 是**被 cap 压低**的
+## 被实测否掉的想法
+- **给叙述节加「合计不超过 20 行」上限压成本** → `s` 语料 7/14 掉到 3/14。模型把行数上限读成整份回复的上限，连锚点一起削。已回滚，测试里留了反向断言。
 
 ## 未完成
-1. 把 qa-recall 结果写进 `bench/REPORT.md` §17（数字已在上面）
-2. 提高到 3000 token 输出上限重跑 qa-recall，看天花板是否升到 ~18/24
-3. `PROOF-BOUNDARIES.md` §6 的检索绝对值仍是 0.2.8 前旧仪器数字，需重出
-4. G0 真装载（要重启 dsh，需用户同意）——当前**故意不做**，因为结论是"不切换"
+1. **G0 真装载**（`dsh plugin add` + 重启 dsh）—— 需用户点头；装进 profile 会 disable `compaction-basic`，不可回退
+2. G3 其余（30 条随机 seq 抽查）、G4/G5/G6 —— 都需要运行中的引擎
+3. 跨会话检索（`session_scope`）—— P1
+4. 向量召回 —— P3，现在不该做
 
-## 下一步优先级
-P0 写 §17 + 提高输出上限重测 ｜ P1 跨会话检索（`session_scope`）｜ P3 向量召回（现在不该做）
+## 推送经验
+直连 + `git -c http.version=HTTP/1.1` 成功；代理 `192.168.2.121:7890` **不可用**（连接超时 133s）。镜像测速：direct 0.95s / ghfast.top 1.25s / gh-proxy.com 1.14s / ghproxy.net 4.27s / jsdelivr 1.33s / kkgithub 超时。**镜像只能拉不能推**，push 走直连。
