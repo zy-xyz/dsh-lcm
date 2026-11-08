@@ -1212,6 +1212,32 @@ compaction failed  0
 改前同一场景：`step compaction failed: lcm: summarization produced no text content` **2 次**。
 
 这条同时覆盖了三件事：**父会话与子代理并发压缩**（`compactIfNeeded` 多次触发、只有一次 summarize、无 `assertNoActiveCompaction` 冲突）、**空响应降级**、以及**子代理会话独立压缩**。
+### G6.1 状态面：`/lcm-status`
+
+验收表里 G6.1 要求「暴露 depth / 节点数 / 实时 CR / 累计节省 token」，之前一直没做。现在补上：**命令而不是工具**——它回答的是操作员的问题，做成工具会占用每一次请求的模型注意力。
+
+```
+lcm status
+  surface nodes: 17
+  checkpoints: 3 (max depth 2)  d1=2 d2=1
+  compactions: 3
+  tokens: 14500 shadowed -> 1800 kept  (8.06:1)
+  saved: 12700 tokens
+```
+
+**数字全部从日志读，不在内存里养计数器**：这样它能扛重启、描述的是持久化后的会话，也才配当证据（照 lcm-x 的 `lcm_status`/`lcm_inspect` 的立场）。
+
+### 一条必须说清的验证边界
+
+想用真引擎跑 `/lcm-status` 验证，失败了——**而且失败得对**：slash 命令是**人侧**的入口，模型在对话里写 `/lcm-status` 只是文本，harness 不会拦截。所以：
+
+| 面 | 谁能触发 | 怎么验证 |
+|---|---|---|
+| `lcm_expand`（工具） | **模型** | 真引擎日志里能看到调用 |
+| `/lcm-search`、`/lcm-status`（命令） | **人** | 只能靠单元测试验证注册，不能靠模型跑 |
+
+这条以前我在报告里含糊过去了（把 `/lcm-search` 和工具混着说），现在写清楚。命令的注册由 `test/compat.test.js` + `test/status.test.js` 钉住，profile 确实是软链到工作树（`dsh-lcm -> ../../../../workspaces/lcmx-study/dsh-lcm`，版本 0.7.0），所以重启后人工敲 `/lcm-status` 就能看到。
+
 
 
 

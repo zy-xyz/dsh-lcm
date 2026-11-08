@@ -10,7 +10,9 @@
  * @module dsh-lcm/command
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
+import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, searchSession } from "./search.js";
 
 export const name = "command-lcm-search";
@@ -95,11 +97,66 @@ export function defineRecallCommand(resolved, commandName = "lcm-search") {
 export function apply(ctx, config) {
   const resolved = resolveConfig(config);
   ctx.effect(() => {
-    const disposers = [ctx.commands.register(defineRecallCommand(resolved, "lcm-search"))];
+    const disposers = [
+      ctx.commands.register(defineRecallCommand(resolved, "lcm-search")),
+      // G6.1: the state surface. A command, not a tool - it answers an operator's
+      // question, and a tool would spend model attention on every request.
+      ctx.commands.register(defineStatusCommand())
+    ];
     // Keep the original backend's command name working too.
     if (resolved.legacyNames) disposers.push(ctx.commands.register(defineRecallCommand(resolved, "recall")));
     return () => {
       for (const dispose of disposers) dispose();
     };
   });
+}
+
+/**
+ * `/lcm-status` — the state surface G6.1 asks for, without adding a tool.
+ *
+ * lcm-x exposes `lcm_status` / `lcm_inspect` for the same reason: after a
+ * compaction the operator needs to see what the engine holds and what it saved,
+ * and "compaction fired" is not an answer. Reading it off the log rather than
+ * keeping counters in memory means the numbers survive a restart and describe the
+ * session as persisted.
+ * @param session - the calling agent's session.
+ * @returns a human-readable status block, or a note when nothing is compacted.
+ */
+export function buildStatus(session) {
+  const dag = deriveDag(session);
+  const events = sessionEvents(session);
+  const summaries = events.filter((event) => event.type === "compaction/summary");
+  if (dag.checkpoints === 0) {
+    return "lcm: no checkpoints in this session yet — nothing has been compacted. Surface: " + session.surface.nodes.length + " node(s).";
+  }
+  let shadowedTotal = 0;
+  let keptTotal = 0;
+  for (const summary of summaries) {
+    shadowedTotal += summary.data?.shadowedTokenCount ?? 0;
+    keptTotal += summary.data?.maxTokens ?? 0;
+  }
+  const ratio = keptTotal === 0 ? "n/a" : (shadowedTotal / keptTotal).toFixed(2) + ":1";
+  const byDepth = new Map();
+  for (const node of dag.nodeBySeq.values()) byDepth.set(node.depth, (byDepth.get(node.depth) ?? 0) + 1);
+  const depths = [...byDepth.entries()].sort((a, b) => a[0] - b[0]).map(([depth, count]) => "d" + depth + "=" + count).join(" ");
+  return [
+    "lcm status",
+    "  surface nodes: " + session.surface.nodes.length,
+    "  checkpoints: " + dag.checkpoints + " (max depth " + dag.maxDepth + ")  " + depths,
+    "  compactions: " + summaries.length,
+    "  tokens: " + shadowedTotal + " shadowed -> " + keptTotal + " kept  (" + ratio + ")",
+    "  saved: " + Math.max(0, shadowedTotal - keptTotal) + " tokens"
+  ].join("\n");
+}
+
+/**
+ * Build the `lcm-status` command definition (for tests and introspection).
+ * @returns a registry-ready CommandDefinition.
+ */
+export function defineStatusCommand(commandName = "lcm-status") {
+  return {
+    name: commandName,
+    description: "Show what this session has compacted: checkpoints, depth, tokens saved",
+    handler: (invocation) => ({ kind: "success", text: buildStatus(invocation.agent.session) })
+  };
 }

@@ -45,13 +45,16 @@ test("legacyNames: false drops the original names", () => {
 test("commands register both /lcm-search and /recall", () => {
   const { ctx, commands } = recorder();
   command.apply(ctx, {});
-  assert.deepEqual(commands.sort(), ["lcm-search", "recall"]);
+  // /lcm-status joined the surface for G6.1: an operator needs to see what the
+  // engine holds after a compaction, and it is a command rather than a tool so it
+  // costs no model attention on ordinary requests.
+  assert.deepEqual(commands.sort(), ["lcm-search", "lcm-status", "recall"]);
 });
 
 test("legacyNames: false drops the original command name", () => {
   const { ctx, commands } = recorder();
   command.apply(ctx, { legacyNames: false });
-  assert.deepEqual(commands, ["lcm-search"]);
+  assert.deepEqual(commands, ["lcm-search", "lcm-status"]);
 });
 
 test("a tool definition can be built under either name", () => {
