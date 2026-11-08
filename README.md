@@ -36,7 +36,7 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 80 tests, identical defaults and budget math |
+| configuration is a drop-in superset of basic | **verified** — 102 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
 | **a dropped fact stays recoverable** | **verified on production data** — see below |
 | **the summary keeps more exact literals** | **verified** — 2 corpora, same instrument: **7/14 vs 2/14**, **15/24 vs 4/24** |
@@ -104,17 +104,17 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     retainRatio: 0.16          # mutually exclusive with retainTokens
     summarizationProvider: ""  # "" = the routed model
     summarizationModel: ""
-    maxTokens: 65536           # defaults to headroomTokens
+    maxTokens: 65536           # target length hint; never sent as a request cap
     compactionRetries: 1
     maxOverflowRetries: 1
     modelPolicies: []
     auto: true
     # ── LCM-only ──
-    summaryRatio: 0.12         # summary budget = clamp(span*ratio, floor, cap)
+    summaryRatio: 0.12         # summary target = clamp(span*ratio, floor, cap)
     summaryFloorTokens: 512
     checkpointCap: 16384
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
-    emptySummaryRetries: 2     # retry a response with no text block (maxTokens is never retried)
+    emptySummaryRetries: 2     # retry a response with no text block (a truncated-but-textual one is never retried)
     # ── optional vector recall (off by default) ──
     vectorEnabled: false       # both gates must open: this + rank=vector|hybrid
     vectorBaseUrl: "http://10.126.126.3:1234/v1"
@@ -150,10 +150,14 @@ messageBudget   = contextWindow − reservedCompletionTokens
 pressureBudget  = messageBudget − headroomTokens
 thresholdTokens = floor(min(contextWindow × thresholdRatio, pressureBudget))
 retainTokens    = retainTokens ?? floor(messageBudget × retainRatio)
-summaryTokens   = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
+targetTokens    = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
 ```
 
-The last line is the only new one.
+The last line is the only new one, and it is a **target**, not a cap: the
+summarizer request carries no `maxTokens`, so the provider's own default ceiling
+applies and a longer answer is accepted. The transaction is bounded by the shrink
+guarantee (framed summary must be smaller than the span it replaces), which is a
+post-hoc check no cap can replace.
 
 ## Tools
 

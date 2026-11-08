@@ -24,7 +24,7 @@ https://github.com/zy-xyz/dsh-lcm ｜ **0.4.2** ｜ **100 测试全绿**
 
 ## 由 G0 牵出的三个健壮性修复（都有测试）
 1. **空摘要**：模型只返回 reasoning 无 text → `emptySummaryRetries`（默认 2）同 prompt 重试；`max-tokens` 不重试。
-2. **推理吃光预算**：reasoning 优先后端把预算全花在思考上 → 无 text 的 `max-tokens` 预算翻倍一次，**instruction 里的上限同步重建**（否则告诉模型 512 却允许 1024）。
+2. **推理吃光预算**：reasoning 优先后端把预算全花在思考上 → **根因修法：摘要请求不再下发 `maxTokens`**（上一版的「预算翻倍一次」已删除，那是在错的层面打补丁）。instruction 只保留目标长度（"aim for roughly N tokens"）。无 text 的 `max-tokens` 现在走空文本重试。
 3. **压不能缩小的跨度**：引擎会去压刚生成的 checkpoint（428 tok，预算钳到 512）→ `selectCompactableRange` 加 `minTokens` 守卫，自动路径传 `summaryFloorTokens`。修复后真引擎日志里 `span=1` 出现 **0** 次。
 
 ## 保真（唯一可采信的口径）

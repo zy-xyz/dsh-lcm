@@ -21,7 +21,7 @@
 thresholdRatio: 0.8
 
 # 为下一次补全预留的 token 容量。默认 65536。
-# 也是 maxTokens 的默认值来源。
+# 也是摘要「目标长度」上限 maxTokens 的默认值来源。
 headroomTokens: 65536
 
 # 原样保留的最近尾部占「消息预算」的比例。默认 0.16。
@@ -37,8 +37,10 @@ retainRatio: 0.16
 summarizationProvider: ""
 summarizationModel: ""
 
-# 摘要请求的输出上限。默认 = headroomTokens（65536）。
-# ⚠ 实测建议：真实摘要只输出 5~6K，把它压到 shadowed 的 0.25 倍更划算。
+# 摘要的目标长度上限（**不再作为请求的 maxTokens 发给 provider**）。
+# 默认 = headroomTokens（65536）。它只参与「aim for roughly N tokens」这句提示，
+# 不会截断模型输出：推理型后端会把小预算全花在 reasoning 上、正文为空，
+# 那是实测过的整次压缩失败原因，所以这里不下发硬上限。
 # maxTokens: 16384
 
 # 压缩失败重试次数（同一次压力触发内）。默认 1。
@@ -60,15 +62,17 @@ modelPolicies: []
 
 # ── LCM 专有键（只增行为，不改共享键的含义）────────────────────────────
 
-# 单次摘要预算 = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
+# 单次摘要目标长度 = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
 # 让压缩比在不同窗口下保持稳定，而不是被 headroomTokens 单点决定。
-# 默认 0.12（≈ 8:1）。
+# 默认 0.12（≈ 8:1）。同样是「目标」，不是请求上限。
 summaryRatio: 0.12
 
 # 摘要预算下限，保证小片段也能产出可用摘要。默认 512。
 summaryFloorTokens: 512
 
-# 单次摘要预算硬上限。默认 16384。
+# 单次摘要目标长度的上限。默认 16384。
+# 注意：它**不是**事后闸门 —— 模型超出这个数照样接受。真正兜住这次事务的是
+# region 层的 shrink 保证（framed 摘要必须小于被替换的区间）。
 checkpointCap: 16384
 
 # 给摘要「逐字锚点」清单里的每一条事后补上 (seq N) 指针，让 lcm_expand 可以直接跟进，
@@ -78,7 +82,7 @@ anchorPointers: true
 
 # 模型返回「一个 text block 都没有」（只有 reasoning 或干脆空）时，同 prompt 同路由再试几次。
 # 这是采样事故而不是确定性失败：吃到推理的后端会把预算全花在 reasoning 上，重试一次通常就有正文。
-# 只在空文本时重试；撞 maxTokens 的确定性截断仍然立即失败，不重试。
+# 只在空文本时重试；已产出正文但被 provider 默认上限截断的确定性截断仍然立即失败，不重试。
 # 默认 2（最多 3 次尝试）；设 0 关闭重试。
 emptySummaryRetries: 2
 

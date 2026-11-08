@@ -90,7 +90,7 @@
 **两个硬结论**：
 
 1. **压缩比不是问题，开销才是。** 436K 压到 3.8K 已经 114:1，但为了压它，摘要请求吃掉了 598K token（含 system + tools 前缀 + 787 个节点）。压一次亏一次。
-2. **`maxTokens=65536` 是浪费的**——实际只输出 5 480。把 `maxTokens` 降到 `0.25 × shadowed` 不损失任何东西，却让上限更可预测。
+2. **`maxTokens=65536` 是浪费的**——实际只输出 5 480。~~把 `maxTokens` 降到 `0.25 × shadowed`~~ —— **此建议已作废**：实测证明小预算会被推理型后端整个吃掉（finish=`max-tokens`、正文为空、整次压缩失败），现在请求根本不下发 `maxTokens`。
 
 **原结论「把净开销从 111% 压到 30% 以下」是错的，见下。** 111% 的口径对任何摘要式压缩都不可能达标。
 ### G2.4 的更正：这个门槛对**任何**摘要式压缩都不可能通过
@@ -187,7 +187,7 @@ compaction/end     seq 42
 ### 顺带发现并修掉的两个健壮性缺口
 
 1. **空摘要** —— 模型返回响应但无 text block（只有 reasoning）。已修：`emptySummaryRetries`（默认 2）同 prompt 同路由重试，`max-tokens` 确定性截断**不**重试。
-2. **推理吃光预算** —— reasoning 优先的后端把整个 completion 预算花在思考上，finish 是 `max-tokens` 但什么都没被截断。已修：区分「有 text 的 max-tokens」（立即抛）与「无 text 的 max-tokens」（预算翻倍一次，instruction 里的上限同步更新，否则会告诉模型 512 却允许 1024）。
+2. **推理吃光预算** —— reasoning 优先的后端把整个 completion 预算花在思考上，finish 是 `max-tokens` 但什么都没被截断。**根因修法：请求不再携带 `maxTokens`**（改用 provider 自己的默认上限），instruction 里的预算从「硬上限」改成「目标长度」。保留「有 text 的 max-tokens 立即抛」；「无 text 的 max-tokens」并入空文本重试。上一版的「预算翻倍一次」补丁已删除 —— 上限都不设了，翻倍没有意义。
 3. **压一个压不动的跨度** —— 引擎会把**刚生成的 checkpoint 节点本身**（428 token）再压一次，而预算下限被钳到 512，数学上不可能缩小。已修：`selectCompactableRange` 加 `minTokens` 守卫，两个自动路径传 `summaryFloorTokens`。修复后真引擎日志里 `span=1` 出现次数 **0**（修复前每次都出现）。
 
 **一个必须说清的边界**：上面那次真引擎验证的最后仍报 `compaction still above threshold after 2 compaction attempts`。这不是 bug —— 是我为了逼出压缩把 `thresholdRatio` 设成 0.001（阈值 256 token），压完仍高于它。**正常配置触发点 = 0.8×窗口，不会出现这种追击**。

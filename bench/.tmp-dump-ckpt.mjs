@@ -1,0 +1,25 @@
+import fs from "node:fs";
+import { buildInstruction } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/summarize.js";
+import { countTokens, defaultBudget } from "/home/agent/workspaces/lcmx-study/dsh-lcm/bench/equal-budget.mjs";
+
+const KEY = (process.env.OMNIROUTE_API_KEY ?? process.env.OPENAI_API_KEY ?? (()=>{const t=fs.readFileSync(process.env.HOME+"/.dsh/.credentials.yaml","utf8");return /sk-[A-Za-z0-9_-]{20,}/.exec(t)[0];})());
+const BASE = "http://10.126.126.4:20128/v1";
+const ds = JSON.parse(fs.readFileSync("/home/agent/workspaces/lcmx-study/data/longmemeval_s.json","utf8"));
+const idx = Number(process.argv[2] ?? 0);
+const q = ds[idx];
+const hay = (()=>{const out=[];const S=q.haystack_sessions??[];const I=q.haystack_session_ids??[];const D=q.haystack_dates??[];
+for(let s=0;s<S.length;s++){out.push("[session "+(I[s]??"s"+s)+" | "+(D[s]??"")+"]");for(const m of (S[s]??[]))out.push(String(m.role??"user")+": "+String(m.content??""));}return out.join("\n");})();
+const tok = countTokens(hay);
+const budget = defaultBudget({tokensEstimate: tok});
+const instruction = buildInstruction(budget, tok, 0);
+const prompt = "以下是本次会话的一段历史记录：\n\n"+hay+"\n\n=== INSTRUCTION ===\n"+instruction;
+const res = await fetch(BASE+"/chat/completions",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+KEY},body:JSON.stringify({model:"balanced-lite",messages:[{role:"user",content:prompt}],max_tokens:budget,temperature:0})});
+const j = await res.json();
+const ck = String(j.choices?.[0]?.message?.content??"").trim();
+console.log("QID", q.question_id, "| type", q.question_type);
+console.log("question:", q.question);
+console.log("gold:", JSON.stringify(q.answer));
+console.log("haystack est-tokens:", tok, "| budget:", budget, "| checkpoint chars:", ck.length, "| finish:", j.choices?.[0]?.finish_reason);
+console.log("===== CHECKPOINT BEGIN =====");
+console.log(ck);
+console.log("===== CHECKPOINT END =====");

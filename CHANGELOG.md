@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.0 — 2026-11-08 — the summary request carries no completion cap
+
+### Changed
+
+- **`summarizeLeaf` no longer sends `maxTokens`.** A summary-sized completion
+  budget is spent entirely on hidden reasoning by reasoning-first backends, so
+  the response finished `max-tokens` with ZERO text and the whole compaction
+  failed — measured three times, on three backends. Output length is also not
+  predictable enough to cap usefully: the anchor list alone varies by an order of
+  magnitude across spans, so every fixed number was either a truncation or dead
+  weight. The provider's own default ceiling now applies.
+- **The budget in the instruction became a target.** `buildInstruction` still
+  names the number ("Aim for roughly N tokens (about R:1) — that is a target, not
+  a hard limit"), because a model told the size writes the right size; it is just
+  no longer enforced at the wire.
+- **`checkpointCap` is no longer a request cap** — it bounds the TARGET only.
+  An oversize summary is accepted: the transaction is bounded by the shrink
+  guarantee (`framed < shadowed`), which truncation would actively work against
+  by cutting the tail of the anchor list.
+- Provenance field `maxTokens` → `targetTokens` on the compile result and on
+  the durable `compaction/summary` record; `summarizeLeaf` also reports
+  `finish`.
+
+### Removed
+
+- **`BUDGET_ESCALATIONS` and the `budget-escalated` path.** Doubling a ceiling
+  that is no longer sent has no meaning; a `max-tokens` finish WITHOUT text now
+  falls through to `emptySummaryRetries`, which is the correct handling because
+  there is no budget left to escalate. `test/budget-escalation.test.js` is
+  replaced by `test/no-token-cap.test.js`.
+
+### Kept (deliberately)
+
+- `error`/`aborted` finishes throw immediately.
+- A `max-tokens` finish that DID produce text is still deterministic truncation
+  and still throws on the first attempt.
+- Empty text (no text block at all) is still retried on the same prompt+route.
+- The shrink guarantee is untouched: it is the only hard gate on the transaction.
+
 ## 0.3.0 — 2026-11-07
 
 Renamed to **`dsh-lcm`**, and the verdict is now backed by the only fidelity
