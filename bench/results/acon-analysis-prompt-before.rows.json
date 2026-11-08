@@ -1,0 +1,6 @@
+{
+ "input": "acon-before-20261108.json.jsonl",
+ "augment": "acon-step1-20261108.json",
+ "pairs": 7,
+ "promptChars": 22798
+}

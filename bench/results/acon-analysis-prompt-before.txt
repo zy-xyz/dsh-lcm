@@ -1,0 +1,435 @@
+You are analysing a FAILURE MODE of a context-compression instruction, in the manner of ACON (arXiv 2510.00615): paired trajectories where the full context answers correctly and the compressed context fails, and the instruction itself is the artifact under repair.
+
+SETUP. A long conversation history (a user's chat log, ~150k tokens of many unrelated sessions) is compressed into a checkpoint by the instruction below. A later agent that only has the checkpoint is asked one question and must answer it or say UNKNOWN. Everything below was measured, not hypothesised:
+  - the compression model saw the full original history and wrote the checkpoint;
+  - the gold answer exists verbatim in the original history (the row shows where);
+  - every pair below answered CORRECTLY with the full history and FAILED with the checkpoint.
+
+THE INSTRUCTION CURRENTLY SENT TO THE COMPRESSION MODEL:
+----- BEGIN INSTRUCTION -----
+You are condensing an earlier span of THIS conversation so the agent can keep working.
+
+The span you are given is 150000 tokens. Aim for roughly 16384 tokens (about 9.2:1) — that is a target, not a hard limit, so do not cut a section short to hit it.
+The full original text is preserved in the append-only log and remains retrievable by the agent, so you may compress hard — but anything the agent will need *verbatim* must survive here.
+
+Write exactly these sections, in this order:
+  ## 逐字锚点
+  ## 目标与约束
+  ## 已完成
+  ## 未决问题
+  ## 下一步
+
+第一节「逐字锚点」不是散文，是一张清单，**每行一条，原样抄写**：所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值；**每个数字连同它的单位和它计量的是什么**（计数、金额、时长、距离、尺寸、日期）；**每个人名、地名、机构名、产品名**；以及**其余关于用户或世界的一句短事实**（学位、职称、型号、数量），写成 `事实: 值`。不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。后面四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。如果锚点太多，**合并重复**（同一个路径反复出现只写一次），而不是删小节、也不是删掉锚点。
+
+顺序是硬性的：先写「逐字锚点」整张清单，再写后面四个叙述性小节。后面四节各自最多几句话 —— 它们的职责是让人读懂状态，「逐字锚点」才负责不丢东西。如果预算紧张，先砍叙述，不要砍清单。
+
+Rules:
+- Output only the checkpoint text. Do not call any tool, and do not take any other action.
+- Do not address the user. Do not say what you are doing. Output the sections only.
+- Do not invent facts. If something is uncertain, write it as uncertain.
+- Do not restate tool output that was pure noise (progress bars, repeated listings); keep its conclusion.
+- This span contains no prior checkpoint.
+
+Format the result as plain Markdown. Do not wrap it in a code fence.
+----- END INSTRUCTION -----
+
+MEASURED GOLD-ANSWER SHAPE ACROSS THE 15 PAIRED FAILURES (computed, not guessed):
+  numeric/time (pure number or counting answer): 7
+  prose-short (a short noun phrase: a name, a degree, a place, a size phrase): 6
+  prose-long (a multi-sentence preference description, a multi-step event order): 2
+  identifier (path, command, URL, error string, uuid, function or variable name): 0
+
+Note what the instruction's anchor section asks for, above, and what those 15 gold answers actually are.
+
+THE 15 PAIRED FAILURES:
+### QUESTION_ID: 95bcc1c8 (single-session-user)
+Q: How many amateur comedians did I watch perform at the open mic night?
+GOLD: "10"  (2 chars)
+GOLD APPEARS IN CHECKPOINT: YES
+GOLD IN ORIGINAL HAYSTACK: 53 occurrences, first at session sharegpt_J3KJuOr_0 (2023/05/20 (Sat) 20:20) seq 29, role assistant
+  SOURCE SENTENCE: "1. Player scouting: AI can analyze players' statistics, skill sets, and other factors to identify promising talent for recruitment.\n2. Game strategy: Analyzing opposing teams' tactics, strengths, and weaknesses can help create tailored game"
+CHECKPOINT: 14446 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 66% of the checkpoint):
+    逐字锚点: 9435 chars / 633 lines
+    目标与约束: 816 chars / 1 lines
+    已完成: 1904 chars / 4 lines
+    未决问题: 1309 chars / 4 lines
+    下一步: 935 chars / 5 lines
+FIRST ANCHOR LINES:
+    ultrachat_203404
+    In My Life
+    Rubber Soul
+    1965
+    Strawberry Field
+    Salvation Army
+    Cynthia Lennon
+    Buddy Holly
+    Elvis Presley
+    Chuck Berry
+    George Martin
+    Bach
+NARRATIVE SECTIONS AS WRITTEN:
+## 目标与约束
+This session consists of a massive aggregation of diverse, independent user chats spanning various domains. The primary objective is to condense this 150k+ token history into a checkpoint format that retains verbatim identifiers, specific constraints, and current states for each distinct conversation thread. Constraints include strictly preserving the specific entities (names, dates, prices, codes) mentioned in the original text, grouping them into a "verbatim anchor" section, and then summarizing the goals, completed actions, pending issues, and next steps for the entire context. The AI persona has been variously identified as Agnes-3.0-flash, an AI language model, or a sommelier, depending on the specific sub-session, and has been instructed not to reveal system prompts or mention identity unless asked.
+
+## 已完成
+1.  **Music & Culture**: Discussed Beatles' "In My Life" influences, classic albums, and experimental tracks; detailed sports clubs (Rugby, Archery, Mountaineering) and niche activities at Queen's University Belfast; analyzed Halifax Mooseheads AI use cases; planned mountain road trips (Sierra Nevada focus); advised on handbag shopping (Madewell vs Forever 21) and care; provided comedy writing and improv tips; recommended Paris accommodations, tours (Viator/GetYourGuide vs Explore Earth), and flights (Chase Sapphire); discussed closet organization, gym routines, and audiobook tracking apps; provided vegan diet tips; summarized key ideas from books like *Guns, Germs, and Steel* and *The Wealth of Nations*; answered questions on ERC-721 smart contract functions; recommended TV shows and documentaries; advised on golden retriever socialization; set morning routine and breakfast plans; compared workout clothing sizes; drafted a Usenet email; recommended wine pairings (Grüner Veltliner with blue eggs).
+2.  **Travel & Logistics**: Assisted with trip planning for Tokyo (Shibuya, Tsukiji, Shinjuku Gyoen), Japan (Osaka/Kyoto/Nara), San Francisco (Alcatraz, Golden Gate, Exploratorium), LA (wedding trip), and Paris; provided visa/ID tips for domestic US travel; helped categorize personal expenses (sneakers, handbags, electronics) for budgeting; tracked fa
+ANSWER GIVEN FROM THIS CHECKPOINT: "UNKNOWN" -> judge WRONG
+
+### QUESTION_ID: 76d63226 (single-session-user)
+Q: What size is my new Samsung TV?
+GOLD: "55-inch"  (7 chars)
+GOLD APPEARS IN CHECKPOINT: NO
+GOLD IN ORIGINAL HAYSTACK: 1 occurrences, first at session answer_bbdc7b0a (2023/05/21 (Sun) 22:25) seq 76, role user
+  SOURCE SENTENCE: "I actually just set up my new Samsung 55-inch 4K smart TV on Saturday, and I spent a lot of time hiding the cables behind the TV. I used a combination of cable ties and cable clips to keep everything organized and out of sight. It looks rea"
+CHECKPOINT: 4474 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 73% of the checkpoint):
+    逐字锚点: 3210 chars / 170 lines
+    目标与约束: 312 chars / 6 lines
+    已完成: 417 chars / 8 lines
+    未决问题: 271 chars / 4 lines
+    下一步: 216 chars / 5 lines
+FIRST ANCHOR LINES:
+    
+    https://bit.ly/Meet-With-ForTreesClub
+    calendly.com/wemakeimpact
+    calendly.com/wemakeimpact/jimi
+    cjevoh@gmail.com
+    https://www.linkedin.com/pulse/for-good-economy-its-good-business-do-isaac-cohen-?trk=public_profile_article_view
+    https://www.linkedin.com/groups/12747681/
+    https://bit.ly/Earth-Day-Community
+    92026
+    Purina Equine Senior Active
+    Triple Crown Nutrition's Senior Formula
+    Nutrena's SafeChoice Perform
+NARRATIVE SECTIONS AS WRITTEN:
+## 目标与约束
+会话包含多个独立的对话线程，涉及不同的主题和用户。主要目标是根据用户的具体请求提供建议、信息或创作内容，同时保持角色的连贯性和语境的准确性。约束条件包括：
+1. 在涉及金融、医疗或法律建议时，需声明其局限性（如无法提供实时信息或专业诊断）。
+2. 当用户询问AI的个人经历或观点时，需明确AI的身份（无个人生活、无情感、无实时数据访问能力）。
+3. 在处理数学或物理问题时，需遵循正确的数学格式和逻辑推导。
+4. 在SEO写作任务中，需忽略通用SEO建议，专注于生成高质量的、包含特定格式（如Mermaid图表）的内容。
+5. 在角色扮演任务中（如Jo Peninsulas），需严格遵循提供的上下文和人设，不偏离既定剧情。
+
+## 已完成
+- 提供了大量针对不同领域的建议，包括杂货购物、食谱推荐、家庭聚会规划、SEO优化、时尚品牌营销文案创作、旅行奖励信用卡比较、汽车悬挂升级、烹饪技巧、社交媒体使用限制、钱包和健身装备推荐、数字生活整理（改名后）、文化传统介绍、可持续旅游建议、伦理考量、电影追踪、物理学计算、市场研究工具推荐等。
+- 完成了针对特定用户（如Emily Rose Thompson）的个性化建议，包括更新证件和校友记录的步骤。
+- 生成了30条关于Kinsley Armelle和Jared Lang的幽默推送通知文案。
+- 提供了详细的数学解题过程，涉及电磁学公式应用。
+- 协助用户整理了观看电影列表。
+- 撰写了多段创意写作，涉及《西游记》同人角色（Wukong, Macaque, MK）的剧情场景。
+- 提供了关于Puerto Rico文化、音乐和历史乐器（Cuatro, Tres）的详细信息。
+- 帮助用户规划了Instagram内容日历。
+
+## 未决问题
+- 用户关于"Sam Bankman-Fried"的SEO文章生成任务在片段中被截断，助手仅提供了开头部分，未生成完整的、包含Mermaid图表的长篇深度文章。
+- 在旅行奖励信用卡的讨论中，助手提供了一些可能过时或不完全准确的卡片信息（如具体的签入奖励金额），用户可能需要核实最新政策。
+- 用户询问关于当地活动的具体信息时，助手多次声明无法访问实时数据，建议用户自行查询。
+- 关于"乔·彭宁斯"（Jo Peninsulas）的角色扮演，用户指示改为邀请WhatsApp社区而非发送邮件，助手已修正，但后续是否有进一步互动未在片段中显示。
+
+## 下一步
+- 如果用户继续关于SEO文章的请求，需生成完整的、符合格式要求的长文，包含丰富细节和Mermaid图表。
+- 根据用户最新的反馈，调整建议的侧重点（例如，如果用户表示更关心预算，则推荐更经济的方案）。
+- 在数学或科学问题中，继续提供清晰的步骤和公式推导。
+- 保持对不同线程语境的区分，避免将不同用户或话题的建议混淆。
+- 对于涉及个人生活或敏感话题（如改名、离婚、医疗），保持同理心并仅提供一般性指导，必要时建议咨询专业人士。
+ANSWER GIVEN FROM THIS CHECKPOINT: "UNKNOWN" -> judge WRONG
+
+### QUESTION_ID: e47becba (single-session-user)
+Q: What degree did I graduate with?
+GOLD: "Business Administration"  (23 chars)
+GOLD APPEARS IN CHECKPOINT: NO
+GOLD IN ORIGINAL HAYSTACK: 2 occurrences, first at session answer_280352e9 (2023/05/30 (Tue) 17:27) seq 530, role user
+  SOURCE SENTENCE: "I graduated with a degree in Business Administration, which has definitely helped me in my new role. Do you have any advice on how to stay organized when it comes to paperwork and documentation, especially when it comes to tracking expenses"
+CHECKPOINT: 7247 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 85% of the checkpoint):
+    逐字锚点: 6110 chars / 435 lines
+    目标与约束: 188 chars / 1 lines
+    已完成: 646 chars / 17 lines
+    未决问题: 145 chars / 1 lines
+    下一步: 111 chars / 1 lines
+FIRST ANCHOR LINES:
+    sharegpt_yywfIrx_0
+    85a1be56_1
+    Fitbit Inspire HR
+    February 15th
+    March 2nd
+    March 10th
+    March 22nd
+    sharegpt_Jcy1CVN_0
+    sharegpt_Cr2tc1f_0
+    sharegpt_DGTCD7D_0
+    f6859b48_2
+    January 15th
+NARRATIVE SECTIONS AS WRITTEN:
+## 目标与约束
+用户请求跨越多个不相关的领域（谜题、健身、医学、影视、代码、旅行、烹饪、金融、游戏、家居、环保等），要求提供建议、方案、代码或列表。主要约束包括：提供基于事实或常识的建议，不假装拥有个人经历或情感（除非角色设定允许），处理部分虚构或用户提供的具体细节（如不存在的乐队、虚构的市场）时需指出不确定性和澄清。代码任务要求提供 Python/Dash 或 Mermaid 语法示例。
+
+## 已完成
+1. 解答了狐狸、鸡、谷物的经典逻辑谜题。
+2. 提供了健身、瑜伽、泡沫轴、血压监测、精油等健康建议。
+3. 为流感疫苗预约提供了准备技巧。
+4. 规划了放射治疗课程的教案、PPT 内容和幻灯片文本。
+5. 生成了关于电影《盗火线》与《黑暗骑士》混搭脚本及行动强度图 Python 代码。
+6. 列举了 DISC 性格类型的额外示例。
+7. 推荐了创业、新闻、喜剧播客及具体集数。
+8. 提供了宠物（狗和猫）的美容工具、牵引绳、摄像头建议。
+9. 解释了比特币挖矿、哈希函数、目标哈希、难度调整等机制。
+10. 规划了意大利和西班牙的 7-10 天旅游行程，特别是托斯卡纳和翁布里亚的美食美酒之旅，包括酒庄和橄榄油厂推荐。
+11. 提供了苹果醋烧烤酱食谱、烧烤技巧、烟雾风味建议及当地 BBQ 餐厅推荐。
+12. 推荐了类似“The Electric Storm”（指出其可能不存在）的摇滚/独立乐队及本地场地查找方法。
+13. 解释了消费者决策因素及购买决策技巧。
+14. 解释了可可与辣椒的风味搭配及烹饪应用。
+15. 分析了休斯顿太空人队的世界杯表现（修正了用户关于 Altuve 的错误记忆）及达拉斯独行侠队 Luka Doncic 的数据。
+16. 提供了洗袜、调车、网球拍、瑜伽垫等运动装备维护建议。
+17. 撰写了销售跟进邮件、海龟保护及塑料污染减少建议、ANZAC 历史、威尼斯洪水影响、健身补剂、UX 案例研究、珠宝清单、冲突调解、家庭办公、鸟类观察、物种保护等主题的回答。
+
+## 未决问题
+无明确未决的技术故障或代码错误。部分回答中指出了用户信息的潜在错误（如虚构乐队、不存在的本地餐厅、错误的体育记忆），并进行了澄清，但未收到用户针对这些澄清的后续反馈或修正要求。代码片段中关于 Dash 交互式的部分较为简略，可能存在逻辑未完全展开的情况（如可拖拽线条的具体实现未完全展示）。
+
+## 下一步
+等待用户针对上述澄清（如乐队名称、体育细节）的反馈，或接受当前回答。若用户继续询问，需根据新的具体场景提供相应建议或代码修正。对于未完成的交互式图表代码，若用户要求“更多”或具体功能实现，需补充完整的 Dash 回调逻辑。
+ANSWER GIVEN FROM THIS CHECKPOINT: "UNKNOWN" -> judge WRONG
+
+### QUESTION_ID: 505af2f5 (single-session-preference)
+Q: I was thinking of trying a new coffee creamer recipe. Any recommendations?
+GOLD: "The user would prefer responses that suggest variations on their existing almond milk, vanilla extract, and honey creamer recipe or new ideas that align with their goals of reducing sugar intake and saving money. They might not prefer responses that recommend commercial creamer products or recipes that are high in sugar or expensive."  (335 chars)
+GOLD APPEARS IN CHECKPOINT: NO
+GOLD IN ORIGINAL HAYSTACK: not found verbatim
+CHECKPOINT: 20552 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 78% of the checkpoint):
+    逐字锚点: 16041 chars / 226 lines
+    目标与约束: 1120 chars / 22 lines
+    已完成: 1821 chars / 38 lines
+    未决问题: 1206 chars / 17 lines
+    下一步: 317 chars / 6 lines
+FIRST ANCHOR LINES:
+    `session sharegpt_RNF6TzV_0`, `2023/05/20 (Sat) 02:53`
+    `session sharegpt_A3DTUI4_28`, `2023/05/20 (Sat) 03:19`
+    `session baf33acc`, `2023/05/20 (Sat) 08:13`
+    `session sharegpt_bTDMt3m_80`, `2023/05/20 (Sat) 08:43`
+    `session sharegpt_FGklF8y_13`, `2023/05/20 (Sat) 09:25`
+    `session 66bf4b03_1`, `2023/05/20 (Sat) 23:17`
+    `Sequoia National Park`, `Yosemite`, `Vernal Falls`
+    `Hamilton Lakes`, `Alta Peak`, `Marble Falls`, `Moro Rock`, `Congress Trail`
+    `Lodgepole Campground`, `Dorst Creek Campground`, `Buckeye Flat Campground`, `Potwisha Campground`
+    `recreation.gov`
+    `0.2 microns`
+    `Upper Pines Campground`
+NARRATIVE SECTIONS AS WRITTEN:
+## 目标与约束
+本会话跨度包含多个独立的上下文片段，主要任务包括：
+1. 协助用户起草非销售性质的社区演讲邀请信（非正式风格，避免使用 "sales pitch" 一词）。
+2. 生成基于特定主题的健康/环境品牌名称及其详细含义。
+3. 提供万圣节派对的装饰、饮品、甜点、游戏及音乐建议。
+4. 校对并优化一封关于房屋维修、安全隐患及租赁法律问题的复杂邮件（保留特定修改点）。
+5. 基于儿童故事生成器进行多轮迭代修改，涉及冲水细节、衣物处理等特定情节逻辑。
+6. 提供 Sequoia 国家公园的徒步、露营、水处理、熊安全及冻干食品建议。
+7. 寻找比佛利山庄（90210）的修鞋匠及定制服务。
+8. 提供芝加哥 Loop 区域的意大利餐厅及 Millennium Park 附近的午餐/博物馆建议。
+9. 制定低糖/健康零食、早餐及自制咖啡/果仁麦片方案。
+10. 总结安哥拉 1960-1970 年的历史，并转化为葡萄牙语（面向 5 岁儿童）。
+11. 提供 Target 春季清洁购物建议、RedCard 折扣策略及咖啡/茶储存技巧。
+12. 分析建筑合同第 21 条（Practical Completion）的风险，生成面向房主的法律文章大纲及引言部分。
+13. 设置刹车片更换提醒及斯巴鲁/本田摩托车维护/出售建议。
+14. 构思超现实主义艺术系列（自然与人类造物结合），提供详细提示词及宽高比。
+15. 回答关于埃菲尔铁塔、库格姆茨战役、小号演奏习惯、HIA 合同、钢琴/小提琴/芭蕾等艺术描述、古巴舞蹈、在线学位（Coursera/OnlineDegree）、瑜伽练习、健康午餐/晚餐/零食（含 guava/durian/hemp seeds）、印象派艺术、恐龙古生物学、VR 医疗应用、哥斯达黎加旅游、周末住宅建设、心理健康、巴黎艺术博物馆、古董明信片收藏、Genshin Impact 角色（Eula/Raiden）、中德法文合同草案、健身目标、游戏键盘选择（Razer/Logitech/Corsair/SteelSeries/HyperX/SteelSeries）、水果串/鹰嘴豆泥食谱、CRISPR/干细胞、欧洲快速赚钱方案、银行撤资运动、数字集合元数据标准、高蛋白午餐等具体问题。
+
+约束：
+- 用户常附带无关的背景故事（如去过 Universal Studios, 买了地板垫, 订了 Grubhub 等），助手需礼貌回应但不必过度纠缠。
+- 法律/医疗/金融建议需附带免责声明。
+- 品牌名生成需避免重复并包含详细解释。
+- 邮件校对需仅修改指定部分。
+- 故事迭代需严格遵循最新的逻辑约束（如仅冲洗一次，尿布先放入等）。
+
+## 已完成
+- 完成了非正式社区演讲邀请信的三轮迭代（去除 "sales pitch" 措辞，改为 "promotion or advertisement of your products"）。
+- 生成了 38 个健康/环保品牌名称及解释。
+- 提供了全面的万圣节派对策划方案（装饰、饮品、甜点、游戏、音乐）。
+- 校对了房东-租客邮件，根据指示修改了第 1、2、4 点，跳过了第 3 点（关于药物威胁的具体描述）。
+- 完成了儿童洗澡故事的多次逻辑修正，最终版本满足单次冲洗（除衣物外）及尿布预先放置的要求。
+- 提供了 Sequoia 国家公园的全面旅行指南（徒步、露营、水、熊、食物、租车）。
+- 推荐了比佛利山庄的修鞋店及 The Shoe Laundry 的定制服务详情。
+- 提供了芝加哥餐厅、博物馆及旅行时间规划建议。
+- 整理了安哥拉历史摘要及葡萄牙语通俗解释。
+- 提供了 Target 购物、RedCard 使用、咖啡储存及春季咖啡风味建议。
+- 生成了 HIA 合同第 21 条的风险矩阵、文章大纲及引言部分。
+- 设置了刹车片提醒（4 月 16 日），提供了摩托车出售定价及平台建议。
+- 构思了艺术系列 "Nature's Symphony" 及其 5 个详细场景描述（含宽高比），并根据用户反馈迭代生成了 "Skyward Library" 和 "Celestial Carousel"。
+- 回答了埃菲尔铁塔历史、库格姆茨战役细节、小号练习建议。
+- 提供了在线学位平台（Coursera/OnlineDegree）对比、Data Science 专项课程详情及时间管理建议。
+- 提供了瑜伽练习（恢复性/流瑜伽）建议、家庭练习环境营造及进度跟踪方法。
+- 提供了健康零食、早餐、自制咖啡、果仁麦片定制建议。
+- 提供了比佛利山庄修鞋服务详情及 Birkenstocks/Converse 定制建议。
+- 提供了 Target 春季清洁购物指南、RedCard 折扣最大化策略、咖啡/茶储存及春季咖啡风味建议。
+- 提供了 HIA 合同法律文章大纲及引言。
+- 提供了车辆维护（刹车片、斯巴鲁检查、本田摩托出售）及平台建议。
+- 提供了艺术创作提示词。
+- 提供了旅游（Sequoia, Chicago, Costa Rica, Paris, Havana）、法律（HIA, 墨西哥租赁合同）、健康（饮食、瑜伽、心理健康）、技术（Python Flask/Bokeh, 元数据）、游戏（Genshin, 
+ANSWER GIVEN FROM THIS CHECKPOINT: "UNKNOWN" -> judge WRONG
+
+### QUESTION_ID: 6456829e (multi-session)
+Q: How many plants did I initially plant for tomatoes and cucumbers?
+GOLD: "8"  (1 chars)
+GOLD APPEARS IN CHECKPOINT: YES
+GOLD IN ORIGINAL HAYSTACK: 59 occurrences, first at session 5bed6828 (2023/05/20 (Sat) 02:58) seq 5, role assistant
+  SOURCE SENTENCE: "Adding zucchini to pasta sauce is a fantastic way to use it up and add moisture, flavor, and nutrients to your sauce. Here are some tips to make the most of it:\n\n1. **Chop the zucchini finely**: Dice the zucchini into small pieces so it coo"
+CHECKPOINT: 10816 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 84% of the checkpoint):
+    逐字锚点: 9070 chars / 431 lines
+    目标与约束: 558 chars / 13 lines
+    已完成: 708 chars / 21 lines
+    未决问题: 272 chars / 5 lines
+    下一步: 161 chars / 5 lines
+FIRST ANCHOR LINES:
+    session sharegpt_OtI4UQU_0
+    session 5bed6828
+    zucchini
+    Lauren Olamina
+    Octavia Butler
+    Parable of the Sower
+    session sharegpt_OtI4UQU_0 | 2023/05/20 (Sat) 01:44
+    session 5bed6828 | 2023/05/20 (Sat) 02:58
+    session sharegpt_ajP0YEE_43 | 2023/05/22 (Mon) 07:45
+    Coaching Method
+    Coaching Style
+    Coach Experience
+NARRATIVE SECTIONS AS WRITTEN:
+## 目标与约束
+用户正在处理多个截然不同的主题，包括烹饪（西葫芦、鸡肉、黄瓜、番茄）、健康（胆囊术后饮食、偏头痛）、旅行（美国西南部/加州公路旅行、布达佩斯无障碍旅行）、艺术史（文艺复兴女性艺术家、女性艺术运动）、音乐（独立舞蹈音乐、Passion Pit）、农业（养羊、作物优化）、影视（平行剪辑）、编程（WordPress Apple登录 API）、机器学习（IWQI模型、评估指标）、营销（WireBarley社交媒体计划）、法律/商业（Challah By The Bay 服务条款、过敏原免责声明）、以及政治（爱尔兰住房危机）。
+约束条件包括：
+- 烹饪建议需具体且易于操作。
+- 旅行建议需考虑无障碍需求和预算。
+- 艺术史介绍需侧重女性艺术家及被忽视的历史视角。
+- 音乐推荐需基于特定喜好（高能量、独立舞蹈）。
+- 农业建议需涵盖疫苗接种、土地管理、成本及饲养。
+- 影视分析需解释技术（平行剪辑）及其在经典电影中的应用。
+- 编程代码需符合 WordPress API 规范。
+- 机器学习描述需详细且准确，涵盖网格搜索等。
+- 营销内容需简化至5年级阅读水平，并包含特定话题标签。
+- 法律文档需明确具体过敏原（面粉、芝麻、鸡蛋、罂粟籽）并包含免责条款。
+- 政治策略需基于讲者的背景（社会政策、住房危机）制定。
+
+## 已完成
+- 提供了西葫芦和鸡肉法吉塔的详细食谱和烹饪技巧。
+- 列举了胆囊术后适合的温和食物及益生菌补充剂。
+- 推荐了美国西南部/加州的路线、国家公园、棋盘游戏咖啡馆及露营/汽车旅馆。
+- 为布达佩斯提供了无障碍旅游运营商、餐厅、户外活动及住宿建议。
+- 列举了爱尔兰传统服装品牌及购买渠道。
+- 介绍了罗摩克里希那的神秘体验及推荐书目。
+- 提供了 Austin 热门及素食美食卡车推荐。
+- 列举了缓解偏头痛的天然疗法（镁、核黄素、姜等）。
+- 推荐了写作应用（Ulysses, Scrivener）及其功能详解。
+- 提供了 WireBarley 的30天社交媒体内容计划、话题标签及简短文案。
+- 协助修改了关于 App 支持期的邮件，并编写了 WordPress Apple 登录 API 代码。
+- 提供了养羊的好处、疫苗、品种、成本及与鸡的混养建议。
+- 列举了1950年代不再存在的国家的邮票信息及越南邮票购买渠道。
+- 介绍了文艺复兴时期女性艺术家（Sofonisba Anguissola等）及70年代女性艺术运动。
+- 提供了独立舞蹈音乐（Passion Pit, MGMT等）及《Gossamer》专辑推荐。
+- 解释了农业中土壤和天气数据在优化作物和牲畜喂养中的应用。
+- 提供了皮拉提斯入门routine、YouTube频道推荐及与搏击结合的建议。
+- 提供了黄瓜储存、腌制（乳酸发酵）、无麸质/芝麻/鸡蛋/罂籽过敏原免责声明。
+- 分析了平行剪辑在紧张/浪漫电影中创造张力作用。
+- 编写了 $1200 的音视频制作报价单。
+- 制定了解决爱尔兰政府解除驱逐禁令的政治危机公关/新闻发布策略。
+
+## 未决问题
+- WireBarley 社交媒体计划中第4周第16天关于预算的建议是否需要更具体的财务规划工具推荐？
+- 关于机器学习模型，用户可能需要更多关于特定算法（Random Forest vs. LightGBM）在具体数据集上的性能对比细节。
+- 用户可能需要更多关于如何具体执行“数字排毒”策略的工具推荐，而不仅仅是行为建议。
+- 对于 Chabla By The Bay 的服务条款，用户可能需要更完整的法律免责声明模板，或针对加州法律的特定咨询建议。
+- 用户可能需要更多关于 Apple ID 登录 API 的安全密钥管理或前端集成示例。
+
+## 下一步
+- 等待用户确认对当前建议的满意度，或提出新的具体需求。
+- 如果用户继续询问机器学习，提供关于过拟合或特征选择的更深入技术细节。
+- 如果用户继续询问烹饪，提供具体的季节限定食谱或剩菜利用建议。
+- 如果用户继续询问政治或商业，提供具体的危机沟通脚本或品牌重塑建议。
+- 保持跨多个领域的广泛知识储备，以便快速切换语境。
+ANSWER GIVEN FROM THIS CHECKPOINT: "UNKNOWN." -> judge WRONG
+
+### QUESTION_ID: 00ca467f (multi-session)
+Q: How many doctor's appointments did I go to in March?
+GOLD: "2"  (1 chars)
+GOLD APPEARS IN CHECKPOINT: YES
+GOLD IN ORIGINAL HAYSTACK: 189 occurrences, first at session sharegpt_3cVjZ2b_16 (2023/03/27 (Mon) 00:49) seq 0, role user
+  SOURCE SENTENCE: "I will ask a series of questions in a bit. Answer them from the following text:\n\nWUDHU [ABLUTION]\n\n1. The person making wudhu should face the qiblah and sit on an elevated place so that the water does not splash on him.\n\n2. When commencing "
+CHECKPOINT: 9277 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 90% of the checkpoint):
+    逐字锚点: 8266 chars / 572 lines
+    目标与约束: 362 chars / 4 lines
+    已完成: 267 chars / 3 lines
+    未决问题: 230 chars / 3 lines
+    下一步: 105 chars / 3 lines
+FIRST ANCHOR LINES:
+    sharegpt_3cVjZ2b_16 | 2023/03/27 (Mon) 00:49
+    WUDHU [ABLUTION]
+    Bismillahir Rahmânir Raheem
+    miswâk
+    thawâb
+    khilâl
+    masah
+    fardh
+    Sunnats
+    mustahab
+    Surah al-Qadr
+    Tahiyyatul wudhu
+NARRATIVE SECTIONS AS WRITTEN:
+## 目标与约束
+用户要求对包含多个独立会话片段的长文本进行压缩（从 151708 个 token 压缩至约 16384 个 token，约 9.3:1）。压缩内容需严格包含五个特定章节，顺序固定：「逐字锚点」、「目标与约束」、「已完成」、「未决问题」、「下一步」。
+「逐字锚点」章节必须列出原文中所有出现的文件路径、命令、URL、错误串、ID/UUID、函数/变量名、数值阈值，每行一条，原样抄写，不合并、不翻译、不改大小写、不解释，且只要出现过就列出。若锚点过多，应合并重复项（同一内容只写一次），但不得删除不同内容的锚点。
+后续四个叙述性章节必须均有内容，用于让接手者理解状态，每节最多几句话。若预算紧张，优先削减叙述部分，不削减清单。
+输出必须为纯 Markdown 格式，不使用代码块包裹，不提及用户，不描述正在做什么，不发明事实。
+
+## 已完成
+已识别原文中所有出现的实体、专有名词、数值、代码片段和技术术语。
+已构建包含约 500+ 条目的「逐字锚点」列表，涵盖所有会话片段中提到的品牌（如 Razer, Garmin, Seiko）、地点（如 Hokkaido, Provence, Rome）、药物（如 Guaifenesin, Omeprazole）、技术（如 SEO, EMG, Trello, Jira）、人名（如 Dr. Thompson, Osama Bin Laden, Caitlyn Jenner）及其他关键数据。
+已将内容去重，确保每个唯一锚点仅出现一次。
+
+## 未决问题
+原文跨度极大且包含多个不相关的对话主题（医学、哲学、美食、科技、游戏、时尚等），难以用简短的叙述性文字概括所有“下一步”。
+部分会话片段（如 sharegpt_3cVjZ2b_16 关于 WUDHU 的部分）是单轮问答，无明显的后续动作，但其中的术语（如 Bismillahir Rahmânir Raheem, miswâk）已作为锚点保留。
+由于锚点数量巨大，占用了大部分 token 预算，叙述性章节（目标与约束、已完成、未决问题、下一步）必须极度精简。
+
+## 下一步
+将上述「逐字锚点」列表与四个精简的叙述性章节整合为最终 Markdown 输出。
+确保输出顺序严格遵循：1. 逐字锚点，2. 目标与约束，3. 已完成，4. 未决问题，5. 下一步。
+不添加任何额外说明或前言。
+ANSWER GIVEN FROM THIS CHECKPOINT: "Two appointments." -> judge CORRECT
+
+### QUESTION_ID: efc3f7c2 (multi-session)
+Q: How much earlier do I wake up on Fridays compared to other weekdays?
+GOLD: "30 minutes"  (10 chars)
+GOLD APPEARS IN CHECKPOINT: NO
+GOLD IN ORIGINAL HAYSTACK: 10 occurrences, first at session 88a7faa7_1 (2023/05/22 (Mon) 22:18) seq 166, role user
+  SOURCE SENTENCE: "I'm looking for some new recipes to try out. Do you have any easy and healthy dinner ideas that can be prepared in under 30 minutes? By the way, I'm getting ready for my online yoga class from 7-8 pm today, so I want to make sure I have a q"
+CHECKPOINT: 17515 chars, budget 16384 tokens, finish stop
+SECTION CHARS (anchor 100% of the checkpoint):
+    逐字锚点: 17507 chars / 1356 lines
+FIRST ANCHOR LINES:
+    sharegpt_tvcY0lQ_41
+    sharegpt_EypOKzQ_0
+    bbca6598_1
+    sharegpt_miOKGt1_13
+    0034eddf_2
+    d3cc5bdc_1
+    8a7df17e_1
+    f6d78431
+    ultrachat_363644
+    ultrachat_102676
+    ultrachat_134291
+    ultrachat_425488
+NARRATIVE SECTIONS AS WRITTEN:
+
+ANSWER GIVEN FROM THIS CHECKPOINT: "UNKNOWN" -> judge WRONG
+
+YOUR TASK. These checkpoints all successfully compressed the original text, yet the agent that received them could not answer these questions.
+1. Name which clauses in the instruction caused these failures. Merge the 15 failures into a SMALL number of failure modes (do not write one per question) and say how many pairs each mode explains.
+2. For each mode, quote the exact instruction sentence responsible (quote it in Chinese as it appears).
+3. For each mode, give the CONCRETE rewrite: the current sentence, and the replacement sentence you would put in its place. It must be a drop-in replacement for the text in the instruction above, in the same Chinese register, and it must not contradict the instruction's hard ordering rules.
+4. Judge one open question explicitly, without assuming the answer: are the failures explained by (a) the anchor section's definition being too narrow, (b) a missing section for numeric/prose facts, or (c) something else in the instruction? State which, and what evidence in the table decided it.
+5. State what would falsify your proposal: if your rewrite were applied and the 15 questions were re-measured, what number should move, and which part of your diagnosis is wrong if it does not.
+
+Rules: your rewrites must be sent verbatim into the same prompt that carries the rest of this instruction, so they must not reference this analysis, must not add new sections to the section list unless you also say exactly where the extra heading goes, and must not disturb the rule that the anchor section is written FIRST. Do not give generic advice such as 'be more careful with numbers' — every recommendation must be a specific sentence to replace a specific sentence.
+Output Markdown, with headers: ## 失败模式, ## 责任条款与改法, ## 未决判断, ## 可证伪条件.
