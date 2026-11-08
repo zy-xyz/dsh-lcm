@@ -1,0 +1,198 @@
+{
+ "ids": [
+  "e47becba",
+  "95bcc1c8",
+  "76d63226",
+  "00ca467f",
+  "81507db6",
+  "505af2f5",
+  "6456829e",
+  "0ea62687",
+  "efc3f7c2",
+  "gpt4_18c2b244",
+  "gpt4_98f46fc6",
+  "6613b389",
+  "06db6396",
+  "7e00a6cb",
+  "e3fc4d6e"
+ ],
+ "rows": [
+  {
+   "id": "e47becba",
+   "gold": "Business Administration",
+   "present": false,
+   "chars": 5579,
+   "sections": 3,
+   "anchorChars": 4929,
+   "shares": {
+    "## 逐字锚点": 4929,
+    "## 目标与约束": 293,
+    "## 已完成": 355
+   }
+  },
+  {
+   "id": "95bcc1c8",
+   "error": "TypeError: fetch failed"
+  },
+  {
+   "id": "76d63226",
+   "gold": "55-inch",
+   "present": false,
+   "chars": 14933,
+   "sections": 1,
+   "anchorChars": 14933,
+   "shares": {
+    "## 逐字锚点": 14933
+   }
+  },
+  {
+   "id": "00ca467f",
+   "error": "Error: gateway 502: {\"error\":{\"message\":\"sensenova/deepseek-flash: rate limit — "
+  },
+  {
+   "id": "81507db6",
+   "gold": "3",
+   "present": false,
+   "chars": 1081,
+   "sections": 1,
+   "anchorChars": 1081,
+   "shares": {
+    "## 逐字锚点": 1081
+   }
+  },
+  {
+   "id": "505af2f5",
+   "gold": "The user would prefer responses that sug",
+   "present": false,
+   "chars": 3617,
+   "sections": 5,
+   "anchorChars": 2144,
+   "shares": {
+    "## 逐字锚点": 2144,
+    "## 目标与约束": 375,
+    "## 已完成": 450,
+    "## 未决问题": 352,
+    "## 下一步": 292
+   }
+  },
+  {
+   "id": "6456829e",
+   "gold": "8",
+   "present": true,
+   "chars": 2918,
+   "sections": 5,
+   "anchorChars": 2045,
+   "shares": {
+    "## 逐字锚点": 2045,
+    "## 目标与约束": 229,
+    "## 已完成": 397,
+    "## 未决问题": 175,
+    "## 下一步": 68
+   }
+  },
+  {
+   "id": "0ea62687",
+   "gold": "2",
+   "present": true,
+   "chars": 13530,
+   "sections": 1,
+   "anchorChars": 13530,
+   "shares": {
+    "## 逐字锚点": 13530
+   }
+  },
+  {
+   "id": "efc3f7c2",
+   "gold": "30 minutes",
+   "present": false,
+   "chars": 7571,
+   "sections": 5,
+   "anchorChars": 6056,
+   "shares": {
+    "## 逐字锚点": 6056,
+    "## 目标与约束": 307,
+    "## 已完成": 801,
+    "## 未决问题": 200,
+    "## 下一步": 203
+   }
+  },
+  {
+   "id": "gpt4_18c2b244",
+   "gold": "First, I used a Buy One Get One Free cou",
+   "present": false,
+   "chars": 5008,
+   "sections": 5,
+   "anchorChars": 3141,
+   "shares": {
+    "## 逐字锚点": 3141,
+    "## 目标与约束": 163,
+    "## 已完成": 1188,
+    "## 未决问题": 250,
+    "## 下一步": 262
+   }
+  },
+  {
+   "id": "gpt4_98f46fc6",
+   "gold": "I participated in the charity bake sale ",
+   "present": false,
+   "chars": 7239,
+   "sections": 1,
+   "anchorChars": 7239,
+   "shares": {
+    "## 逐字锚点": 7239
+   }
+  },
+  {
+   "id": "6613b389",
+   "gold": "2",
+   "present": true,
+   "chars": 11115,
+   "sections": 1,
+   "anchorChars": 11115,
+   "shares": {
+    "## 逐字锚点": 11115
+   }
+  },
+  {
+   "id": "06db6396",
+   "gold": "5",
+   "present": true,
+   "chars": 10918,
+   "sections": 3,
+   "anchorChars": 9780,
+   "shares": {
+    "## 逐字锚点": 9780,
+    "## 目标与约束": 846,
+    "## 已完成": 290
+   }
+  },
+  {
+   "id": "7e00a6cb",
+   "gold": "International Budget Hostel",
+   "present": false,
+   "chars": 4026,
+   "sections": 5,
+   "anchorChars": 1814,
+   "shares": {
+    "## 逐字锚点": 1814,
+    "## 目标与约束": 140,
+    "## 已完成": 1655,
+    "## 未决问题": 223,
+    "## 下一步": 190
+   }
+  },
+  {
+   "id": "e3fc4d6e",
+   "gold": "Dr. Arati Prabhakar",
+   "present": false,
+   "chars": 13735,
+   "sections": 1,
+   "anchorChars": 13735,
+   "shares": {
+    "## 逐字锚点": 13735
+   }
+  }
+ ],
+ "presentCount": 4,
+ "total": 15
+}
