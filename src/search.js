@@ -20,7 +20,7 @@
  * @module dsh-lcm/search
  */
 import { estimateEntryTokens, renderEventBody, sanitize, truncateTokens } from "./compiler.js";
-import { resolveEventAt } from "./events.js";
+import { resolveEventAt, sessionEvents } from "./events.js";
 import { RRF_K, hybridRank, rankByVector, resolveVectorConfig } from "./vectors.js";
 
 /** Default cap on the number of matching events shown in one result. */
@@ -139,7 +139,7 @@ function eventBody(session, event) {
  * @returns the ordered candidates, the match population, and the last seq.
  */
 function collectHits(session, pattern, rankMode) {
-  const events = session.events;
+  const events = sessionEvents(session);
   const collected = [];
   let totalMatches = 0;
   let lastSeq = 0;
@@ -395,7 +395,7 @@ export async function searchSessionHybrid(session, patternSource, config, signal
 
 /** Every renderable event of one session, as embedding candidates. */
 function collectVectorItems(session) {
-  const events = Array.isArray(session.events) ? session.events : [];
+  const events = sessionEvents(session);
   const items = [];
   for (const event of events) {
     if (!Number.isSafeInteger(event?.seq)) continue;

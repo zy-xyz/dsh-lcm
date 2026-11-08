@@ -15,6 +15,32 @@
 const mapCache = new WeakMap();
 
 /**
+ * Read one session's events through whichever accessor it actually exposes.
+ *
+ * A real dsh `Session` has no `events` property: it owns an append-only `log`
+ * and the frozen `snapshotEvents()` accessor. Reading `session.events` therefore
+ * threw on the first real session it met — every automatic compaction, search
+ * and recall died on `undefined`, which the `events`-carrying test fixtures
+ * never showed. The array form stays first so fixtures and older callers keep
+ * working unchanged.
+ *
+ * `snapshotEvents()` returns a frozen copy, so callers must take it once into a
+ * local instead of calling this accessor inside a loop.
+ * @param session - session-shaped value.
+ * @returns the event array; empty when the value carries none.
+ */
+export function sessionEvents(session) {
+  if (session === null || session === undefined) return [];
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot = session.snapshotEvents();
+    if (Array.isArray(snapshot)) return snapshot;
+  }
+  if (Array.isArray(session.log)) return session.log;
+  return [];
+}
+
+/**
  * Build (and cache) a seq-indexed view of one events array.
  * @param events - session events in log order.
  * @returns the seq → event map.
@@ -43,7 +69,9 @@ export function resolveEventAt(session, seq) {
     const event = session.eventAt(seq);
     if (event !== undefined) return event;
   }
-  const events = session?.events;
-  if (!Array.isArray(events)) return undefined;
+  // `events` first, so the fixture shape needs no snapshot; anything that only
+  // exposes `snapshotEvents()`/`log` still resolves (the accessor is one copy).
+  const events = sessionEvents(session);
+  if (events.length === 0) return undefined;
   return seqMap(events).get(seq);
 }

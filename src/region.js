@@ -20,6 +20,7 @@ import { createUserMessage, errorChain } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { frameCheckpoint, joinCompiledEntries } from "./compiler.js";
+import { sessionEvents } from "./events.js";
 
 /**
  * Rejects a compiled checkpoint whose replacement boundaries are no longer
@@ -99,7 +100,8 @@ export function selectCompactableRange(session, measurement, retainTokens) {
 export async function compactSurfaceRegion(dependencies, session, start, end, agent, options, signal) {
   if (options.owner === null) signal?.throwIfAborted();
   const selection = validateSurfaceRegion(session, start, end);
-  const entryState = inspectCompactionEntryState(session.events);
+  const events = sessionEvents(session);
+  const entryState = inspectCompactionEntryState(events);
   assertCompactionInactive(entryState.unmatchedCompactionStart, entryState.latestEndSeedSeq, "compaction");
   let owner;
   if (options.owner === null) {
@@ -196,7 +198,7 @@ function assertCompactionInactive(unmatchedCompactionStart, latestEndSeedSeq, st
  * @param stage - operation label included in the busy diagnostic.
  */
 export function assertNoActiveCompaction(session, stage) {
-  const entryState = inspectCompactionEntryState(session.events);
+  const entryState = inspectCompactionEntryState(sessionEvents(session));
   assertCompactionInactive(entryState.unmatchedCompactionStart, entryState.latestEndSeedSeq, stage);
 }
 

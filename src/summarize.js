@@ -19,7 +19,7 @@
  * @module dsh-lcm/summarize
  */
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
-import { resolveEventAt } from "./events.js";
+import { resolveEventAt, sessionEvents } from "./events.js";
 import { renderEventBody } from "./compiler.js";
 
 /**
@@ -393,7 +393,8 @@ export function maxAbsorbedDepth(session, shadowedSeqs) {
 export function deriveDag(session) {
   const nodeBySeq = new Map();
   const summaries = [];
-  for (const event of session.events ?? []) {
+  const events = sessionEvents(session);
+  for (const event of events) {
     if (event.type === "compaction/summary") summaries.push(event);
   }
   // A compaction/summary is immediately followed by its replacement message.

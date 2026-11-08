@@ -15,7 +15,7 @@
  * @module dsh-lcm/recall
  */
 import { estimateEntryTokens, isCheckpointSource, projectMessageText, truncateTokens } from "./compiler.js";
-import { resolveEventAt } from "./events.js";
+import { resolveEventAt, sessionEvents } from "./events.js";
 
 /** Default total budget for one recall operation, in density-aware tokens. */
 export const DEFAULT_MAX_RECALL_TOKENS = 16000;
@@ -90,7 +90,8 @@ export function expandSelections(selections) {
  */
 export function findCheckpointSeqs(session) {
   const seqs = [];
-  for (const event of session.events) {
+  const events = sessionEvents(session);
+  for (const event of events) {
     if (event.type === "user/message" && isCheckpointSource(event.data?.source)) seqs.push(event.seq);
   }
   return seqs;
