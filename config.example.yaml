@@ -76,6 +76,12 @@ checkpointCap: 16384
 # 纯本地计算、零网络、零额外 token，所以默认 true；设 false 输出与不开启时逐字节相同。
 anchorPointers: true
 
+# 模型返回「一个 text block 都没有」（只有 reasoning 或干脆空）时，同 prompt 同路由再试几次。
+# 这是采样事故而不是确定性失败：吃到推理的后端会把预算全花在 reasoning 上，重试一次通常就有正文。
+# 只在空文本时重试；撞 maxTokens 的确定性截断仍然立即失败，不重试。
+# 默认 2（最多 3 次尝试）；设 0 关闭重试。
+emptySummaryRetries: 2
+
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 

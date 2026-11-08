@@ -55,6 +55,17 @@ const DEFAULT_CHECKPOINT_CAP = 16384;
  * from a lost citation into an index `lcm_expand` can follow directly.
  */
 const DEFAULT_ANCHOR_POINTERS = true;
+/**
+ * Extra attempts one summary gets when the model returns no text block at all.
+ *
+ * A reasoning-first backend can spend the whole completion budget on reasoning
+ * and emit zero text blocks; that is a sampling accident, not a deterministic
+ * failure, and the next attempt usually returns text. Two extra attempts (three
+ * total on the same prompt) buys that without turning a broken route into an
+ * unbounded spend. Rotation is deliberately not attempted: the prompt and the
+ * route stay fixed so the failure stays reproducible.
+ */
+const DEFAULT_EMPTY_SUMMARY_RETRIES = 2;
 
 /** Fields shared by top-level defaults and exact-target overrides (== basic). */
 const POLICY_KEYS = [
@@ -81,6 +92,7 @@ const LCM_KEYS = [
   "summaryFloorTokens",
   "checkpointCap",
   "anchorPointers",
+  "emptySummaryRetries",
   "debug",
   "debugLogPath",
   "vectorEnabled",
@@ -172,6 +184,7 @@ export function resolveConfig(config = {}) {
     summaryFloorTokens: config.summaryFloorTokens ?? DEFAULT_SUMMARY_FLOOR_TOKENS,
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
+    emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
     debug,
     debugLogPath,
     // ── optional vector recall (inert unless vectorEnabled) ──
@@ -341,6 +354,7 @@ function validatePolicy(config, name) {
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
+  if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);
   if (config.debug !== undefined && typeof config.debug !== "boolean") throw new Error(`${name}.debug must be a boolean`);
   if (config.debugLogPath !== undefined && typeof config.debugLogPath !== "string") throw new Error(`${name}.debugLogPath must be a string`);
   if (config.vectorEnabled !== undefined && typeof config.vectorEnabled !== "boolean") throw new Error(`${name}.vectorEnabled must be a boolean`);

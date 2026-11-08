@@ -114,6 +114,7 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     summaryFloorTokens: 512
     checkpointCap: 16384
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
+    emptySummaryRetries: 2     # retry a response with no text block (maxTokens is never retried)
     # ── optional vector recall (off by default) ──
     vectorEnabled: false       # both gates must open: this + rank=vector|hybrid
     vectorBaseUrl: "http://10.126.126.3:1234/v1"

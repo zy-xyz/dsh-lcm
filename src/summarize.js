@@ -21,6 +21,7 @@
 import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
 import { resolveEventAt, sessionEvents } from "./events.js";
 import { renderEventBody } from "./compiler.js";
+import { engineDebug } from "./debug.js";
 
 /**
  * Section skeleton the summary must follow.
@@ -163,7 +164,6 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   });
 
   const messages = system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
-  const assembler = new BlockAssembler();
   const options = {
     provider: target.provider,
     model: target.model,
@@ -174,22 +174,51 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     purpose: "compaction",
     ...(signal === undefined ? {} : { signal })
   };
-  for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk);
-  const finish = assembler.finish;
-  if (finish.kind === "error" || finish.kind === "aborted") throw finish.failure;
-  if (finish.kind === "max-tokens") {
-    const truncated = new Error("lcm: summary truncated at the token cap (incomplete checkpoint)");
-    truncated.code = "MAX_TOKENS";
-    throw truncated;
-  }
 
-  const raw = assembler.blocks();
-  const produced = raw
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
-  if (produced.length === 0) throw new Error("lcm: summarization produced no text content");
+  // An empty response is retried, a truncated one is not. The two failure
+  // modes look alike on the wire (a finish chunk and no usable text) but mean
+  // opposite things: "no text block" is a sampling accident — typically a
+  // reasoning-first backend that spent the whole completion budget thinking —
+  // while "max-tokens" is deterministic truncation that a second attempt
+  // reproduces exactly, at full price. So only the empty case loops, and it
+  // loops on the SAME prompt and route: changing either would make the one
+  // reproducible failure unreproducible.
+  const emptyRetries = config.emptySummaryRetries;
+  let attempts = 0;
+  let raw;
+  let produced = "";
+  let usage;
+  for (;;) {
+    attempts += 1;
+    signal?.throwIfAborted();
+    const assembler = new BlockAssembler();
+    for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk);
+    const finish = assembler.finish;
+    if (finish.kind === "error" || finish.kind === "aborted") throw finish.failure;
+    if (finish.kind === "max-tokens") {
+      const truncated = new Error("lcm: summary truncated at the token cap (incomplete checkpoint)");
+      truncated.code = "MAX_TOKENS";
+      throw truncated;
+    }
+    raw = assembler.blocks();
+    produced = raw
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+    if (produced.length > 0) {
+      usage = assembler.usage;
+      if (attempts > 1) engineDebug(config, `summarize empty-response retry succeeded attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind}`);
+      break;
+    }
+    engineDebug(
+      config,
+      `summarize empty-response attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind} blocks=${raw
+        .map((block) => block.type)
+        .join(",") || "none"} budget=${budgetTokens}`
+    );
+    if (attempts > emptyRetries) throw new Error("lcm: summarization produced no text content");
+  }
   // Pointers are attributed here, after the model call and before the
   // checkpoint is wrapped: the summarizer input stays the verbatim span (the
   // prefix-cache constraint above), and an anchor that the span never contained
@@ -204,7 +233,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     provider: options.provider,
     model: options.model,
     maxTokens: budgetTokens,
-    ...(assembler.usage === undefined ? {} : { usage: assembler.usage })
+    ...(usage === undefined ? {} : { usage })
   };
 }
 

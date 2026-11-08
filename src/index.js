@@ -14,11 +14,11 @@
  * @module dsh-lcm
  */
 import z from "@deepseek-ai/schemastery";
-import { appendFileSync } from "node:fs";
 import { CompactionEngine, ManualCompactionError } from "@deepseek-ai/dsh-compaction";
 import { CONTEXT_WINDOW_EXCEEDED_CODE } from "@deepseek-ai/dsh-llm";
 import { assertNever } from "@deepseek-ai/dsh-util-values";
 import { COMPILER_REV, estimateEntryTokens, isCheckpointSource } from "./compiler.js";
+import { engineDebug } from "./debug.js";
 import {
   TargetPressureConfigError,
   resolveCompactSpec,
@@ -94,26 +94,6 @@ const modelPolicy = z.object({
  * durable mutation strategy stay fixed so every pricing decision uses the
  * singleton token meter.
  */
-/**
- * Emit one engine-side debug line through the resolved sink when debug is on.
- * @param config - resolved configuration.
- * @param line - the diagnostic text.
- */
-function engineDebug(config, line) {
-  if (config.debug !== true) return;
-  const text = `[dsh-lcm] engine: ${line}`;
-  try {
-    console.error(text);
-  } catch {
-    /* stderr may be unavailable in embedded contexts */
-  }
-  try {
-    appendFileSync(config.debugLogPath, `${text}\n`, "utf8");
-  } catch {
-    /* a failing debug log must never break the engine */
-  }
-}
-
 export class LcmCompactionEngine extends CompactionEngine {
   static inject = [
     "llm",
