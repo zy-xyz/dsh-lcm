@@ -1,0 +1,847 @@
+{
+ "benchmark": "longmemeval-s/layer2-qa",
+ "harness": "dsh-lcm bench/layer2-qa.mjs",
+ "generatedAt": "2026-11-07T17:24:52.947Z",
+ "elapsedMs": 2061232,
+ "models": {
+  "answerer": {
+   "requested": "balanced-lite",
+   "resolved": null
+  },
+  "judge": {
+   "requested": "deepseek-v4-flash-auto",
+   "resolved": "deepseek-v4.1-flash-1017"
+  }
+ },
+ "dataset": {
+  "path": "/home/agent/workspaces/lcmx-study/data/longmemeval_s.json",
+  "bytes": 278025796,
+  "sha256": "08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894",
+  "revision": "2ec2a557f339b6c0369619b1ed5793734cc87533",
+  "split": "LongMemEval_S",
+  "totalQuestions": 500,
+  "scoredQuestions": 5,
+  "limit": 5,
+  "sample": null,
+  "typeMix": {
+   "single-session-user": 5
+  },
+  "questionIds": [
+   "e47becba",
+   "118b2229",
+   "51a45a95",
+   "58bf7951",
+   "1e043500"
+  ]
+ },
+ "config": {
+  "arms": [
+   "full-context",
+   "basic-oneshot",
+   "lcm-oneshot",
+   "lcm-agentic"
+  ],
+  "compression": "bench/summarize-arm.mjs prompt shape + engine defaultBudget (min(16384, max(512, floor(tokens*0.12))))",
+  "basicInstruction": "bench/fixtures/basic-instruction.txt (frozen built-in backend instruction)",
+  "lcmInstruction": "buildInstruction() from src/summarize.js, built at run time",
+  "answerMaxTokens": 256,
+  "agenticMaxSteps": 6,
+  "agenticSearch": {
+   "maxSearchHits": 20,
+   "maxRecallTokens": 40000,
+   "rank": "density"
+  },
+  "fullContextTruncation": "none (cap disabled)",
+  "sequential": "one model call at a time; the gateway degraded under 6-way parallelism (2 of 6 calls returned content), so arms are strictly serial"
+ },
+ "arms": {
+  "full-context": {
+   "n": 5,
+   "attempted": 5,
+   "judgeCorrect": 3,
+   "judgeAccuracy": 0.6,
+   "stringCorrect": 5,
+   "stringAccuracy": 1,
+   "meanTokens": 108943,
+   "meanPromptTokens": 107512,
+   "meanCompletionTokens": 88,
+   "meanContextTokensEst": 150469,
+   "meanElapsedMs": 34899,
+   "meanHaystackTokensEst": 150469,
+   "meanAgenticSteps": 0,
+   "failures": 0
+  },
+  "basic-oneshot": {
+   "n": 5,
+   "attempted": 5,
+   "judgeCorrect": 0,
+   "judgeAccuracy": 0,
+   "stringCorrect": 0,
+   "stringAccuracy": 0,
+   "meanTokens": 114627,
+   "meanPromptTokens": 110886,
+   "meanCompletionTokens": 2393,
+   "meanContextTokensEst": 1230,
+   "meanElapsedMs": 107103,
+   "meanHaystackTokensEst": 150469,
+   "meanAgenticSteps": 0,
+   "failures": 0
+  },
+  "lcm-oneshot": {
+   "n": 3,
+   "attempted": 5,
+   "judgeCorrect": 0,
+   "judgeAccuracy": 0,
+   "stringCorrect": 0,
+   "stringAccuracy": 0,
+   "meanTokens": 117611,
+   "meanPromptTokens": 112220,
+   "meanCompletionTokens": 4040,
+   "meanContextTokensEst": 1648,
+   "meanElapsedMs": 76964,
+   "meanHaystackTokensEst": 150803,
+   "meanAgenticSteps": 0,
+   "failures": 2
+  },
+  "lcm-agentic": {
+   "n": 4,
+   "attempted": 5,
+   "judgeCorrect": 2,
+   "judgeAccuracy": 0.5,
+   "stringCorrect": 3,
+   "stringAccuracy": 0.75,
+   "meanTokens": 134274,
+   "meanPromptTokens": 129096,
+   "meanCompletionTokens": 3792,
+   "meanContextTokensEst": 2692,
+   "meanElapsedMs": 54464,
+   "meanHaystackTokensEst": 150880,
+   "meanAgenticSteps": 2.25,
+   "failures": 1
+  }
+ },
+ "armFailures": {
+  "lcm-oneshot": 2,
+  "lcm-agentic": 1
+ },
+ "perQuestion": {
+  "full-context": [
+   {
+    "question_id": "e47becba",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "gold": "Business Administration",
+    "arm": "full-context",
+    "haystackTokensEst": 148023,
+    "contextTokensEst": 148023,
+    "truncation": null,
+    "compress": null,
+    "answer": "Business Administration",
+    "tokens": {
+     "prompt": 108899,
+     "completion": 3,
+     "total": 110244
+    },
+    "elapsedMs": 35046,
+    "judge": {
+     "verdict": "CORRECT",
+     "raw": "CORRECT",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1608
+    },
+    "stringCorrect": true,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "118b2229",
+    "question_type": "single-session-user",
+    "question": "How long is my daily commute to work?",
+    "gold": "45 minutes each way",
+    "arm": "full-context",
+    "haystackTokensEst": 151109,
+    "contextTokensEst": 151109,
+    "truncation": null,
+    "compress": null,
+    "answer": "45 minutes each way.",
+    "tokens": {
+     "prompt": 106753,
+     "completion": 139,
+     "total": 108237
+    },
+    "elapsedMs": 42994,
+    "judge": {
+     "verdict": null,
+     "raw": "",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1491
+    },
+    "stringCorrect": true,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "51a45a95",
+    "question_type": "single-session-user",
+    "question": "Where did I redeem a $5 coupon on coffee creamer?",
+    "gold": "Target",
+    "arm": "full-context",
+    "haystackTokensEst": 152738,
+    "contextTokensEst": 152738,
+    "truncation": null,
+    "compress": null,
+    "answer": "At Target, using the Cartwheel app.",
+    "tokens": {
+     "prompt": 105829,
+     "completion": 244,
+     "total": 107421
+    },
+    "elapsedMs": 38395,
+    "judge": {
+     "verdict": null,
+     "raw": "",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 788
+    },
+    "stringCorrect": true,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "58bf7951",
+    "question_type": "single-session-user",
+    "question": "What play did I attend at the local community theater?",
+    "gold": "The Glass Menagerie",
+    "arm": "full-context",
+    "haystackTokensEst": 148827,
+    "contextTokensEst": 148827,
+    "truncation": null,
+    "compress": null,
+    "answer": "The Glass Menagerie",
+    "tokens": {
+     "prompt": 106140,
+     "completion": 49,
+     "total": 107519
+    },
+    "elapsedMs": 23163,
+    "judge": {
+     "verdict": "CORRECT",
+     "raw": "CORRECT",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 2280
+    },
+    "stringCorrect": true,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "1e043500",
+    "question_type": "single-session-user",
+    "question": "What is the name of the playlist I created on Spotify?",
+    "gold": "Summer Vibes",
+    "arm": "full-context",
+    "haystackTokensEst": 151648,
+    "contextTokensEst": 151648,
+    "truncation": null,
+    "compress": null,
+    "answer": "Summer Vibes",
+    "tokens": {
+     "prompt": 109941,
+     "completion": 4,
+     "total": 111296
+    },
+    "elapsedMs": 34896,
+    "judge": {
+     "verdict": "CORRECT",
+     "raw": "CORRECT",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1860
+    },
+    "stringCorrect": true,
+    "trace": null,
+    "error": null
+   }
+  ],
+  "basic-oneshot": [
+   {
+    "question_id": "e47becba",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "gold": "Business Administration",
+    "arm": "basic-oneshot",
+    "haystackTokensEst": 148023,
+    "contextTokensEst": 1191,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 1191,
+     "promptTokens": 105778,
+     "completionTokens": 5976,
+     "totalTokens": 111754,
+     "finishReason": "stop",
+     "elapsedMs": 218207
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 107997,
+     "completion": 6099,
+     "total": 115447
+    },
+    "elapsedMs": 224154,
+    "judge": {
+     "verdict": "WRONG",
+     "raw": "WRONG",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1647
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "118b2229",
+    "question_type": "single-session-user",
+    "question": "How long is my daily commute to work?",
+    "gold": "45 minutes each way",
+    "arm": "basic-oneshot",
+    "haystackTokensEst": 151109,
+    "contextTokensEst": 995,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 995,
+     "promptTokens": 107092,
+     "completionTokens": 2907,
+     "totalTokens": 109999,
+     "finishReason": "stop",
+     "elapsedMs": 69087
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 109121,
+     "completion": 2909,
+     "total": 113372
+    },
+    "elapsedMs": 102239,
+    "judge": {
+     "verdict": null,
+     "raw": "",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 2458
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "51a45a95",
+    "question_type": "single-session-user",
+    "question": "Where did I redeem a $5 coupon on coffee creamer?",
+    "gold": "Target",
+    "arm": "basic-oneshot",
+    "haystackTokensEst": 152738,
+    "contextTokensEst": 2745,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 2745,
+     "promptTokens": 110237,
+     "completionTokens": 2058,
+     "totalTokens": 112295,
+     "finishReason": "stop",
+     "elapsedMs": 101463
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 113642,
+     "completion": 2060,
+     "total": 117044
+    },
+    "elapsedMs": 110029,
+    "judge": {
+     "verdict": null,
+     "raw": "",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 2270
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "58bf7951",
+    "question_type": "single-session-user",
+    "question": "What play did I attend at the local community theater?",
+    "gold": "The Glass Menagerie",
+    "arm": "basic-oneshot",
+    "haystackTokensEst": 148827,
+    "contextTokensEst": 476,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 476,
+     "promptTokens": 111018,
+     "completionTokens": 357,
+     "totalTokens": 111375,
+     "finishReason": "stop",
+     "elapsedMs": 43440
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 111511,
+     "completion": 359,
+     "total": 113216
+    },
+    "elapsedMs": 47153,
+    "judge": {
+     "verdict": "WRONG",
+     "raw": "WRONG",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1919
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "1e043500",
+    "question_type": "single-session-user",
+    "question": "What is the name of the playlist I created on Spotify?",
+    "gold": "Summer Vibes",
+    "arm": "basic-oneshot",
+    "haystackTokensEst": 151648,
+    "contextTokensEst": 744,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 744,
+     "promptTokens": 110280,
+     "completionTokens": 534,
+     "totalTokens": 110814,
+     "finishReason": "stop",
+     "elapsedMs": 44722
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 112160,
+     "completion": 536,
+     "total": 114058
+    },
+    "elapsedMs": 51940,
+    "judge": {
+     "verdict": "WRONG",
+     "raw": "WRONG",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 2949
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   }
+  ],
+  "lcm-oneshot": [
+   {
+    "question_id": "e47becba",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "gold": "Business Administration",
+    "arm": "lcm-oneshot",
+    "haystackTokensEst": 148023,
+    "contextTokensEst": 1161,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 1161,
+     "promptTokens": 106678,
+     "completionTokens": 7098,
+     "totalTokens": 113776,
+     "finishReason": "stop",
+     "elapsedMs": 99786
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 109586,
+     "completion": 7100,
+     "total": 118037
+    },
+    "elapsedMs": 107344,
+    "judge": {
+     "verdict": "WRONG",
+     "raw": "WRONG",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 62
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "118b2229",
+    "question_type": "single-session-user",
+    "question": "How long is my daily commute to work?",
+    "gold": "45 minutes each way",
+    "arm": "lcm-oneshot",
+    "haystackTokensEst": 151109,
+    "contextTokensEst": null,
+    "truncation": null,
+    "compress": null,
+    "answer": null,
+    "tokens": {
+     "prompt": 0,
+     "completion": 0,
+     "total": 0
+    },
+    "elapsedMs": 300760,
+    "judge": null,
+    "stringCorrect": null,
+    "trace": null,
+    "error": "fetch failed"
+   },
+   {
+    "question_id": "51a45a95",
+    "question_type": "single-session-user",
+    "question": "Where did I redeem a $5 coupon on coffee creamer?",
+    "gold": "Target",
+    "arm": "lcm-oneshot",
+    "haystackTokensEst": 152738,
+    "contextTokensEst": 1643,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 1643,
+     "promptTokens": 110238,
+     "completionTokens": 1835,
+     "totalTokens": 112073,
+     "finishReason": "stop",
+     "elapsedMs": 43481
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 112212,
+     "completion": 1837,
+     "total": 115391
+    },
+    "elapsedMs": 49184,
+    "judge": {
+     "verdict": null,
+     "raw": "WR",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1848
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   },
+   {
+    "question_id": "58bf7951",
+    "question_type": "single-session-user",
+    "question": "What play did I attend at the local community theater?",
+    "gold": "The Glass Menagerie",
+    "arm": "lcm-oneshot",
+    "haystackTokensEst": 148827,
+    "contextTokensEst": null,
+    "truncation": null,
+    "compress": null,
+    "answer": null,
+    "tokens": {
+     "prompt": 0,
+     "completion": 0,
+     "total": 0
+    },
+    "elapsedMs": 300708,
+    "judge": null,
+    "stringCorrect": null,
+    "trace": null,
+    "error": "fetch failed"
+   },
+   {
+    "question_id": "1e043500",
+    "question_type": "single-session-user",
+    "question": "What is the name of the playlist I created on Spotify?",
+    "gold": "Summer Vibes",
+    "arm": "lcm-oneshot",
+    "haystackTokensEst": 151648,
+    "contextTokensEst": 2141,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 2141,
+     "promptTokens": 110281,
+     "completionTokens": 3180,
+     "totalTokens": 113461,
+     "finishReason": "stop",
+     "elapsedMs": 70794
+    },
+    "answer": "UNKNOWN",
+    "tokens": {
+     "prompt": 114862,
+     "completion": 3182,
+     "total": 119406
+    },
+    "elapsedMs": 74364,
+    "judge": {
+     "verdict": "WRONG",
+     "raw": "WRONG",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 55
+    },
+    "stringCorrect": false,
+    "trace": null,
+    "error": null
+   }
+  ],
+  "lcm-agentic": [
+   {
+    "question_id": "e47becba",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "gold": "Business Administration",
+    "arm": "lcm-agentic",
+    "haystackTokensEst": 148023,
+    "contextTokensEst": 2549,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 2549,
+     "promptTokens": 109244,
+     "completionTokens": 3082,
+     "totalTokens": 112326,
+     "finishReason": "stop",
+     "elapsedMs": 152
+    },
+    "answer": "商学管理（Business Administration）。",
+    "tokens": {
+     "prompt": 119209,
+     "completion": 3152,
+     "total": 123767
+    },
+    "elapsedMs": 15716,
+    "judge": {
+     "verdict": null,
+     "raw": "",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1748
+    },
+    "stringCorrect": true,
+    "trace": [
+     {
+      "tool": "lcm_search",
+      "args": {
+       "pattern": "degree"
+      },
+      "resultChars": 710,
+      "resultPreview": "[search \"degree\": 3 matching event(s)]\n\n[seq 530: user]\n  1: I graduated with a degree in Business Administration, which has definitely helped me in my new role"
+     }
+    ],
+    "error": null,
+    "agenticSteps": 1
+   },
+   {
+    "question_id": "118b2229",
+    "question_type": "single-session-user",
+    "question": "How long is my daily commute to work?",
+    "gold": "45 minutes each way",
+    "arm": "lcm-agentic",
+    "haystackTokensEst": 151109,
+    "contextTokensEst": 4436,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 4436,
+     "promptTokens": 111031,
+     "completionTokens": 5703,
+     "totalTokens": 116734,
+     "finishReason": "stop",
+     "elapsedMs": 132970
+    },
+    "answer": "单程 45 分钟，往返共 90 分钟（据 seq 88 你自述）。\n\n注：seq 89 助手误写成「hour each way」，以你原话为准。",
+    "tokens": {
+     "prompt": 136598,
+     "completion": 6121,
+     "total": 144145
+    },
+    "elapsedMs": 161293,
+    "judge": {
+     "verdict": "CORRECT",
+     "raw": "CORRECT",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 1975
+    },
+    "stringCorrect": false,
+    "trace": [
+     {
+      "tool": "lcm_search",
+      "args": {
+       "pattern": "commute|commuting|commuted"
+      },
+      "resultChars": 2754,
+      "resultPreview": "[search \"commute|commuting|commuted\": 7 matching event(s)]\n\n[seq 88: user]\n  1: I've been listening to audiobooks during my daily commute, which takes 45 minute"
+     },
+     {
+      "tool": "lcm_expand",
+      "args": {
+       "id": "338-350",
+       "type": "seq"
+      },
+      "resultChars": 13563,
+      "resultPreview": "[seq 338: user]\nI like the Eisenhower Matrix, it's a helpful tool. I'll definitely try to apply it to my daily tasks. Speaking of daily tasks, I need to plan my"
+     }
+    ],
+    "error": null,
+    "agenticSteps": 2
+   },
+   {
+    "question_id": "51a45a95",
+    "question_type": "single-session-user",
+    "question": "Where did I redeem a $5 coupon on coffee creamer?",
+    "gold": "Target",
+    "arm": "lcm-agentic",
+    "haystackTokensEst": 152738,
+    "contextTokensEst": 1643,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 1643,
+     "promptTokens": 110238,
+     "completionTokens": 1835,
+     "totalTokens": 112073,
+     "finishReason": "stop",
+     "elapsedMs": 175
+    },
+    "answer": "You redeemed a $5 coupon on coffee creamer last Sunday at Target.",
+    "tokens": {
+     "prompt": 139671,
+     "completion": 2682,
+     "total": 143711
+    },
+    "elapsedMs": 33525,
+    "judge": {
+     "verdict": null,
+     "raw": "",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 2809
+    },
+    "stringCorrect": true,
+    "trace": [
+     {
+      "tool": "lcm_search",
+      "args": {
+       "pattern": "creamer|coupon"
+      },
+      "resultChars": 4425,
+      "resultPreview": "[search \"creamer|coupon\": 8 matching event(s)]\n\n[seq 440: user]\n  1: I'm trying to organize my coupons and receipts, do you have any tips on the best way to do "
+     },
+     {
+      "tool": "lcm_expand",
+      "args": {
+       "id": "440-448",
+       "type": "seq"
+      },
+      "resultChars": 7813,
+      "resultPreview": "[seq 440: user]\nI'm trying to organize my coupons and receipts, do you have any tips on the best way to do that?\n\n[seq 441: assistant]\nThe eternal quest for cou"
+     },
+     {
+      "tool": "lcm_search",
+      "args": {},
+      "resultChars": 57,
+      "resultPreview": "[tool error: invalid search pattern \"\": pattern is empty]"
+     },
+     {
+      "tool": "lcm_search",
+      "args": {
+       "pattern": "Target|Cartwheel|Sunday"
+      },
+      "resultChars": 12916,
+      "resultPreview": "[search \"Target|Cartwheel|Sunday\": 31 matching event(s)]\n\n[seq 314: user]\n  1: How do I incorporate the lentil soup I made on Sunday into my meal plan for the r"
+     },
+     {
+      "tool": "lcm_expand",
+      "args": {
+       "id": "444-446",
+       "type": "seq"
+      },
+      "resultChars": 1474,
+      "resultPreview": "[seq 444: user]\nI actually redeemed a $5 coupon on coffee creamer last Sunday, which was a nice surprise since I didn't know I had it in my email inbox.\n\n[seq 4"
+     }
+    ],
+    "error": null,
+    "agenticSteps": 5
+   },
+   {
+    "question_id": "58bf7951",
+    "question_type": "single-session-user",
+    "question": "What play did I attend at the local community theater?",
+    "gold": "The Glass Menagerie",
+    "arm": "lcm-agentic",
+    "haystackTokensEst": 148827,
+    "contextTokensEst": null,
+    "truncation": null,
+    "compress": null,
+    "answer": null,
+    "tokens": {
+     "prompt": 0,
+     "completion": 0,
+     "total": 0
+    },
+    "elapsedMs": 300831,
+    "judge": null,
+    "stringCorrect": null,
+    "trace": null,
+    "error": "fetch failed"
+   },
+   {
+    "question_id": "1e043500",
+    "question_type": "single-session-user",
+    "question": "What is the name of the playlist I created on Spotify?",
+    "gold": "Summer Vibes",
+    "arm": "lcm-agentic",
+    "haystackTokensEst": 151648,
+    "contextTokensEst": 2141,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "checkpointTokensEst": 2141,
+     "promptTokens": 110281,
+     "completionTokens": 3180,
+     "totalTokens": 113461,
+     "finishReason": "stop",
+     "elapsedMs": 145
+    },
+    "answer": "Summer Vibes",
+    "tokens": {
+     "prompt": 120906,
+     "completion": 3214,
+     "total": 125471
+    },
+    "elapsedMs": 7323,
+    "judge": {
+     "verdict": "CORRECT",
+     "raw": "CORRECT",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 26
+    },
+    "stringCorrect": true,
+    "trace": [
+     {
+      "tool": "lcm_search",
+      "args": {
+       "pattern": "Spotify|playlist"
+      },
+      "resultChars": 1609,
+      "resultPreview": "[search \"Spotify|playlist\": 3 matching event(s)]\n\n[seq 130: assistant]\n  6: 2. **Apple Music**: Apple Music has a vast collection of ambient and lo-fi music, an"
+     }
+    ],
+    "error": null,
+    "agenticSteps": 1
+   }
+  ]
+ },
+ "boundaries": [
+  "Not an official LongMemEval leaderboard number: this harness is a reimplementation, not the electricsheephq/memorybench-benchmark-tool fork METHODOLOGY.md names, and it does not run LongMemEval's per-question-type judge prompts (getJudgePromptForType). It runs one loose, uniform CORRECT/WRONG judge.",
+  "Judge is not gpt-4o, so the judged numbers are directional until a judge-parity rerun.",
+  "Dataset is LongMemEval_S, revision 2ec2a557f339b6c0369619b1ed5793734cc87533, head slice of the file (the split is grouped by question_type), not the full 500.",
+  "The string grader is exact normalized containment. Gold answers are short entities (median 11 chars), so it is the reproducible floor and systematically under-credits paraphrase.",
+  "Compression is a single-shot call over the whole haystack; the production engine compacts incrementally over a growing window, so this arm is a lower bound on production fidelity.",
+  "full-context is a ceiling arm, not a product configuration: it feeds the entire haystack uncompressed."
+ ]
+}
