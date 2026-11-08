@@ -16,6 +16,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { toolPairingBalancedBefore } from "@deepseek-ai/dsh-compaction";
+
 import { selectCompactableRange } from "../src/region.js";
 
 /** A session whose log holds `leaves` depth-1 checkpoints followed by a live tail. */
@@ -123,5 +125,42 @@ test("a mixed-depth run never merges a parent with its own children", () => {
       0,
       "no checkpoint is inside the leaf: a parent is never merged with its children"
     );
+  }
+});
+
+test("a leaf never opens on the result half of a tool pair", () => {
+  // The start used to be the first surface node, so this needed no guard. It moves
+  // now (past the existing checkpoints), and the same rule that protects the END
+  // has to hold at the beginning.
+  const events = [
+    { seq: 0, type: "system/message", data: { message: { role: "system", content: [{ type: "text", text: "sys" }] } } },
+    { seq: 1, type: "turn/start", data: { turn: 1 } },
+    { seq: 2, type: "compaction/summary", data: { compactionId: "c1", shadowedSeqs: [], shadowedTokenCount: 10 } },
+    { seq: 3, type: "user/message", data: { content: [{ type: "text", text: "cp" }], source: { kind: "compact-checkpoint", compactionId: "c1" } } },
+    // A step that is still open: a tool call whose result has not arrived.
+    { seq: 4, type: "assistant/message", data: { turn: 1, step: 1, message: { role: "assistant", content: [{ type: "tool-call", id: "t1", name: "bash", arguments: "{}" }] }, stream: [] } },
+    { seq: 5, type: "turn/end", data: { turn: 1 } },
+    { seq: 6, type: "user/message", data: { content: [{ type: "text", text: "tail a" }] } },
+    { seq: 7, type: "user/message", data: { content: [{ type: "text", text: "tail b" }] } }
+  ];
+  const bySeq = new Map(events.map((event) => [event.seq, event]));
+  const session = {
+    id: "pair",
+    events,
+    get surface() {
+      return { nodes: events.filter((event) => event.type !== "compaction/summary").map((event) => event.seq), replaceGeneration: 1 };
+    },
+    eventAt: (seq) => bySeq.get(seq),
+    deriveEventMessage: (event) => event.message ?? event.data?.message ?? (event.data?.content ? { role: "user", content: event.data.content } : null)
+  };
+  const nodes = session.surface.nodes;
+  const measurement = { nodes: nodes.map((seq) => ({ seq, tokens: 1000, heuristicTokens: 1000 })), totalTokens: nodes.length * 1000 };
+  const range = selectCompactableRange(session, measurement, 0, 0, 0, 4);
+  if (range !== null) {
+    assert.ok(
+      toolPairingBalancedBefore(session, range.start),
+      "the selected start is a balanced boundary, never the middle of a step"
+    );
+    assert.notEqual(range.start, 4, "it must not open on the assistant tool-call node");
   }
 });

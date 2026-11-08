@@ -146,6 +146,11 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
     let leafStart = firstIdx;
     const leading = new Set([...dag.nodeBySeq.keys()]);
     while (leafStart < keepFromIdx && leading.has(surfaceNodes[leafStart])) leafStart += 1;
+    // Moving the start is new, and the start used to be the first surface node, which
+    // needed no balance check. It does now: the same rule that stops the END from
+    // splitting a tool-call/result pair has to hold at the beginning, or a leaf could
+    // open on the result half of a pair.
+    while (leafStart < keepFromIdx && !toolPairingBalancedBefore(session, surfaceNodes[leafStart])) leafStart += 1;
     if (leafStart < keepFromIdx) firstIdx = leafStart;
     else return null;
   }
