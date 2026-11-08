@@ -13,13 +13,21 @@ Built on the [LCM paper](https://papers.voltropy.com/LCM) (Ehrlich & Blackman,
 2026-02) and on the durable-protocol work in
 [`dsh-compaction-instant`](https://github.com/TsFreddie/dsh-compaction-instant).
 
-> **Status: opt-in, not a replacement.** Measured against `dsh-compaction-basic`
-> with type-grouped verbatim recall on two corpora, this backend hands the model
-> **3.0–3.5× more of the exact literals** than `basic` does (7/14 vs 2/14 on a
-> 4.3k span, 15/24 vs 4/24 on an 8.1k span) and reaches **75%** of what the model
-> can still quote from the same text *uncompacted* (20/24), where `basic` reaches
-> 20%. Summary cost is not part of the verdict: the user's standing instruction is
-> that cost is not to be optimised for. See [bench/REPORT.md](bench/REPORT.md) §19.
+> **Status: passes the fidelity gate; installation is a deliberate step.**
+>
+> Measured against `dsh-compaction-basic` with type-grouped verbatim recall on two
+> corpora, this backend hands the model **3.0–3.5× more of the exact literals**
+> (7/14 vs 2/14 on a 4.3k span, 15/24 vs 4/24 on an 8.1k span) and reaches **75%**
+> of what the model can still quote from the same text *uncompacted*, where
+> `basic` reaches 20%. On LongMemEval_S its lexical search scores sR@5 **0.774**
+> against `lcm-x`'s own lexical arm at 0.20, and one full trace shows a 1 669-token
+> checkpoint answering a question whose evidence was compressed away, via a single
+> `lcm_search`.
+>
+> Installing it replaces `compaction-basic` for the whole profile, so it stays a
+> deliberate choice rather than a default. See [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md)
+> for the gate table and [bench/REPORT.md](bench/REPORT.md) for every number, including
+> the two measurement bugs that reversed earlier conclusions.
 
 ## What is measured, and what is not
 
@@ -28,7 +36,7 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 57 tests, identical defaults and budget math |
+| configuration is a drop-in superset of basic | **verified** — 80 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
 | **a dropped fact stays recoverable** | **verified on production data** — see below |
 | **the summary keeps more exact literals** | **verified** — 2 corpora, same instrument: **7/14 vs 2/14**, **15/24 vs 4/24** |
