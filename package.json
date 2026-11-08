@@ -32,6 +32,9 @@
     "./command": {
       "default": "./src/command.js"
     },
+    "./gate": {
+      "default": "./gate/index.js"
+    },
     "./package.json": "./package.json",
     "./config": {
       "default": "./src/config.js"
@@ -39,6 +42,7 @@
   },
   "files": [
     "src",
+    "gate",
     "cordis.patch.yml",
     "README.md"
   ],
