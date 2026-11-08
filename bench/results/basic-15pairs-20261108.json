@@ -1,0 +1,128 @@
+{
+ "ids": [
+  "e47becba",
+  "95bcc1c8",
+  "76d63226",
+  "00ca467f",
+  "81507db6",
+  "505af2f5",
+  "6456829e",
+  "0ea62687",
+  "efc3f7c2",
+  "gpt4_18c2b244",
+  "gpt4_98f46fc6",
+  "6613b389",
+  "06db6396",
+  "7e00a6cb",
+  "e3fc4d6e"
+ ],
+ "rows": [
+  {
+   "id": "e47becba",
+   "chars": 7245,
+   "gold": "Business Administration",
+   "answer": "Business Admin",
+   "ok": true
+  },
+  {
+   "id": "95bcc1c8",
+   "chars": 6887,
+   "gold": "10",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "76d63226",
+   "chars": 7138,
+   "gold": "55-inch",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "00ca467f",
+   "chars": 5012,
+   "gold": "2",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "81507db6",
+   "chars": 5466,
+   "gold": "3",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "505af2f5",
+   "chars": 3046,
+   "gold": "The user would prefer response",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "6456829e",
+   "chars": 1654,
+   "gold": "8",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "0ea62687",
+   "chars": 1645,
+   "gold": "2",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "efc3f7c2",
+   "chars": 3194,
+   "gold": "30 minutes",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "gpt4_18c2b244",
+   "chars": 5094,
+   "gold": "First, I used a Buy One Get On",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "gpt4_98f46fc6",
+   "chars": 2089,
+   "gold": "I participated in the charity ",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "6613b389",
+   "chars": 2313,
+   "gold": "2",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "06db6396",
+   "chars": 4428,
+   "gold": "5",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "7e00a6cb",
+   "chars": 6992,
+   "gold": "International Budget Hostel",
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "e3fc4d6e",
+   "chars": 1897,
+   "gold": "Dr. Arati Prabhakar",
+   "answer": "UNKNOWN",
+   "ok": false
+  }
+ ],
+ "ok": 1,
+ "total": 15
+}
