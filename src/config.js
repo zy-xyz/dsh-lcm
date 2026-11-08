@@ -61,6 +61,15 @@ const DEFAULT_SUMMARY_FLOOR_TOKENS = 512;
  */
 const DEFAULT_LEAF_SPAN_TOKENS = 24000;
 /**
+ * How many same-depth checkpoints trigger a condensation into one higher node.
+ *
+ * lcm-x's `condensation_fanin` default is 4. Without a fanin the surface keeps a
+ * flat row of depth-1 leaves: every checkpoint is independent and nothing ever
+ * produces a rollup, so the assembled context grows linearly with history instead
+ * of logarithmically.
+ */
+const DEFAULT_CONDENSATION_FANIN = 4;
+/**
  * Ceiling on one summary's TARGET length.
  *
  * Not a request cap and not a post-hoc gate: the summarizer sends no
@@ -117,6 +126,7 @@ const LCM_KEYS = [
   "summaryFloorTokens",
   "checkpointCap",
   "leafSpanTokens",
+  "condensationFanin",
   "anchorPointers",
   "emptySummaryRetries",
   "debug",
@@ -218,6 +228,7 @@ export function resolveConfig(config = {}) {
     summaryFloorTokens: config.summaryFloorTokens ?? DEFAULT_SUMMARY_FLOOR_TOKENS,
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
     leafSpanTokens: config.leafSpanTokens ?? DEFAULT_LEAF_SPAN_TOKENS,
+    condensationFanin: config.condensationFanin ?? DEFAULT_CONDENSATION_FANIN,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
     debug,
@@ -392,6 +403,7 @@ function validatePolicy(config, name) {
   if (config.checkpointCap !== undefined) assertPositiveInteger(`${name}.checkpointCap`, config.checkpointCap);
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
   if (config.leafSpanTokens !== undefined) assertPositiveInteger(`${name}.leafSpanTokens`, config.leafSpanTokens);
+  if (config.condensationFanin !== undefined) assertPositiveInteger(`${name}.condensationFanin`, config.condensationFanin);
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);

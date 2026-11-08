@@ -20,6 +20,11 @@ import { createUserMessage, errorChain } from "@deepseek-ai/dsh-llm";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { frameCheckpoint, joinCompiledEntries } from "./compiler.js";
+// Step 3 of lcm-x's pipeline ("Condense - merge same-depth nodes into higher-depth
+// summaries") needs to know each checkpoint's depth. deriveDag is the pure function
+// that computes it, and the dependency runs one way only: summarize.js does not
+// import this module, so there is no cycle.
+import { deriveDag } from "./summarize.js";
 import { sessionEvents } from "./events.js";
 
 /**
@@ -73,7 +78,7 @@ function systemHead(session, headSeq) {
  *   whole compactable prefix.
  * @returns the inclusive positional seq range to compact, or `null`.
  */
-export function selectCompactableRange(session, measurement, retainTokens, minTokens = 0, maxSpanTokens = 0) {
+export function selectCompactableRange(session, measurement, retainTokens, minTokens = 0, maxSpanTokens = 0, fanin = 0) {
   const pricedNodes = measurement.nodes;
   if (pricedNodes.length === 0) return null;
   const surfaceNodes = session.surface.nodes;
@@ -97,6 +102,31 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
     keepFromIdx -= 1;
   }
   if (keepFromIdx <= firstIdx) return null;
+  if (fanin > 1) {
+    // Step 3 of lcm-x's pipeline: when enough checkpoints sit at the SAME depth,
+    // condense them into one node of the next depth instead of taking the oldest
+    // bytes again. Without this the surface accumulates a flat row of depth-1
+    // leaves forever: deriveDag computes depth, but nothing ever uses it to raise
+    // the level, so the summary never condenses and the assembled context keeps
+    // N separate leaves instead of one rollup.
+    //
+    // Only a LEADING run at one depth qualifies. A run that mixes depths would
+    // merge a parent with its own children, which is not condensation - it is
+    // summarising a summary of itself.
+    const dag = deriveDag(session);
+    const run = [];
+    for (let index = firstIdx; index < keepFromIdx; index += 1) {
+      const node = dag.nodeBySeq.get(surfaceNodes[index]);
+      if (node === undefined) break;
+      if (run.length === 0 || node.depth === run[0].depth) run.push({ index, depth: node.depth });
+      else break;
+    }
+    if (run.length >= fanin) {
+      let endIdx = run[fanin - 1].index;
+      while (endIdx > firstIdx && !toolPairingBalancedAfter(session, surfaceNodes[endIdx])) endIdx -= 1;
+      if (endIdx >= firstIdx) return { start: surfaceNodes[firstIdx], end: surfaceNodes[endIdx] };
+    }
+  }
   if (maxSpanTokens > 0) {
     // Cap the span so each compaction produces ONE leaf over a bounded stretch,
     // starting from the OLDEST node. Borrowed from lcm-x: it condenses in leaf
