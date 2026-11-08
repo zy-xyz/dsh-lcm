@@ -942,6 +942,61 @@ out (HTTP 504); Agent2API/hy4free: provi…
 对照整段一次压那一轮（15 题）：**2/15**，其中 5 题只写出一节、gold 常常不在。
 
 **差别不在指令，在压缩单位。** 同一套 `buildInstruction`、同一模型、同一数据，只把跨度从「整段 147k」换成「每片 24k」，可答性从 0/4 变成 4/4。
+---
+
+## 33. 为什么原程序（lcm-x）能过，我们过不了：一个具体题的解剖
+
+拿 `00ca467f`（multi-session，问「三月去了几次医生」）把它摊开，答案就清楚了。
+
+haystack 49 个 session，含 appointment 相关字样的一共 9 条，散在 s1 / s6 / s13 / s37 / s42。**gold 是 2**，而真正算数的只有两条：
+
+```
+s1  user: follow-up appointment with my orthopedic surgeon, Dr. Thompson, on March 20th,
+         and it was a relief to hear that my knee is healing well.        ← 已发生 + 三月 → 算
+s42 user: I finally went to see my primary care physician, Dr. Smith, on March 3rd      ← 已发生 + 三月 → 算
+```
+
+其余七条都是**干扰项**，而且干扰的方式各不相同：
+
+```
+s1  user: I'm considering scheduling an appointment with Dr. Patel…        ← 只是「在考虑」，没发生
+s13 user: I had an appointment with my primary care physician, but…       ← 没日期，凭上下文是更早
+s6  assistant / s37 user                                                  ← 八竿子打不着
+```
+
+### 这一步需要什么能力
+
+答对这题 = **对九条原文逐条判断「有没有发生在三月」再数**。判据是「已发生 / 在考虑 / 无日期」，而这三个判据**只有拿到原句才判得出**。
+
+### 所以 lcm-x 为什么能过
+
+**因为它从来不让摘要去回答这个问题。** 它的设计是：
+
+1. **原始消息永不删除**（append-only，`lossless means lossless`），摘要是**索引**不是**替代品**
+2. 答题时对原始 store 做检索（13 个工具默认可见），拿到那九条，**自己逐条判**
+3. 它的断言库还额外把 `kind` / `polarity` / `event_at` / `valid_from` / `cancels` 分开存，所以「在考虑」和「发生过」在库里就是不同的行
+
+**换句话说：原程序能过，是因为它把「需要逐题判断」这件事留到了答题时做；我们 oneshot 臂试图在压缩时预先把答案算好。**
+
+而压缩时**不知道会问什么** —— 不知道要按三月筛、不知道要区分「在考虑」和「已发生」。任何指令都补不上这个信息差。
+
+### 这解释了我们那张表，也定死了结论
+
+| 配置 | 有没有「答题时看原文」 | 结果 |
+|---|---|---|
+| `lcm-agentic` | **有**（`lcm_search` + `lcm_expand` 取原文） | **70%**（天花板 75%） |
+| `lcm-oneshot` | 无 | 0% |
+| `basic-oneshot` | 无 | 0% |
+| lcm-x | **有**（检索原始 store） | 它的常态 |
+
+**所以 oneshot 那个 0% 不是「我们比 lcm-x 差」，是「这个配置在所有后端都会归零，包括原程序如果关掉检索」。** 而我们真正要对齐的那个配置（agentic）已经是 70%，贴着天花板。
+
+### 对指令改动的意义
+
+这一轮改的「事件行要带日期和状态」**方向是对的但不够**：它能让 checkpoint 里区分「已发生/已取消/计划中」，把九条干扰压到接近两条；但**它仍然要猜题目问的是哪个窗口**。在 agentic 配置下这条规则价值更大，因为检索拿回原文后，checkpoint 里的事实行能帮模型定位到「三月」这个窗口。
+
+**结论：不再指望 oneshot 追平。** 要做的是把 agentic 那条路做扎实（检索命中率、`lcm_expand` 取原文的粒度），以及保证生产环境默认就是这个形状。
+
 
 ### 这与 §26「分片无用」的矛盾怎么解释
 

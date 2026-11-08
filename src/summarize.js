@@ -99,6 +99,15 @@ const ANCHOR_RULE = [
   "  例：`user.degree = Business Administration | fact`、`user.watched_amateur_comedians = 10 | number`、`user.new_tv_size = 55 inch | number`、`user.friday_wakeup_earlier = 30 minutes | time`、`user.creamer_preference = +variations on almond milk + vanilla + honey; -commercial products; -high sugar | preference`、`world.event_order = 1) Walmart coupon 2) Ibotta cashback 3) ShopRite signup | event`。",
   "  **值必须原样取自原文、保持原文语言**（原文是英文就写 Business Administration，不要译成中文）；谓词用英文小写下划线。",
   "  **一个值只出现在上面的锚点清单里、没有出现在这类带类型的行里，等于没记住** —— 接手的人看到孤零零的 10 不知道它在数什么。凡是这段里出现过的、关于用户自己、用户做过的事、以及任何带数值或先后的结论，都要在这里写成一行。",
+  // Counting across the whole history is the failure leaf compaction introduced:
+  // two of six measured questions asked "how many X" and the answering model
+  // over-counted (four appointments where two happened, two ceremonies where three
+  // happened). A count is only derivable if each occurrence is a separate dated row
+  // AND a rescheduled or cancelled one is marked, otherwise mentions inflate the
+  // total. lcm-x carries exactly this via independent `polarity` and its
+  // cancels/supersedes/reverses relations; the cheap version here is a dated event
+  // row with an explicit status.
+  "  **会被数数的事，一次一行、带日期和状态**：`user.event = <日期> <发生了什么> | event`，并在行尾标 `<已发生>`、`<已取消>`、`<已改期>`、`<计划中>` 之一。**同一次事件只写一行**；改期就把新旧合并成一行并标 `<已改期>`；取消的仍要写出来并标 `<已取消>` —— 否则接手的人会把还没发生的、以及被取消的也数进去。",
   "其余四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。",
   "如果锚点太多，**合并重复**（同一个路径反复出现只写一次），而不是删小节、也不是删掉锚点。"
 ].join("");
