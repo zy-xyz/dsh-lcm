@@ -9,11 +9,26 @@
 成本不测；先小规模验证再放大；不设 max token 上限；思考 token 不计入尺寸。（均为用户明确指示）
 
 ## 仓库
-https://github.com/zy-xyz/dsh-lcm ｜ **0.6.0** ｜ **136 测试全绿**
+https://github.com/zy-xyz/dsh-lcm ｜ **0.7.0** ｜ **147 测试全绿**
 关键文档：`docs/ACCEPTANCE.md`（门禁 + 校准更正）、`bench/REPORT.md`（28 节实测）、`bench/METHODOLOGY.md`（照原项目结构）、`RESEARCH-INDUSTRY.md`、`docs/G0-RUNBOOK.md`
 
 ## 一句话现状
-**能换。** Layer 2 端到端：`lcm-agentic` 70% vs `basic-oneshot` 0%，天花板 75%。只压缩不给检索时两个后端都 0%，这一维打平。契约按 dsh 0.2.2-rc.1 修了 11 处。
+**能换，且 0.7.0 之后结构上更接近 LCM 原始设计。** Layer 2 端到端：`lcm-agentic` 70% vs `basic-oneshot` 0%，天花板 75%。同题对照自带压缩：**我们 4–5/15，自带 1/15**（G2.10）。契约按 dsh 0.2.2-rc.1 修了 11 处。
+
+### 0.7.0 的六步对齐（照 `lcm-x/docs/architecture.md`）
+
+| 步 | 状态 |
+|---|---|
+| 1 Ingest | ✅ dsh 会话日志本身就是 append-only，我们只读 |
+| 2 Compact → 叶 | ✅ `leafSpanTokens` 24 000，从最老节点起 |
+| 3 Condense 同深度合并 | ✅ `condensationFanin` 4，只合并同 depth 的**前导连续段** |
+| 4 Escalate 降级阶梯 | ✅ 正常 → 半预算重试 → **确定性截断（不抛错）** |
+| 5 Assemble 最高层优先 | ⚠️ 受 dsh「单条替换」约束（§21），一个 replace 一个节点 |
+| 6 Retrieve | ✅ `lcm_search` + `lcm_expand` |
+
+外加从 lcm-x 借的 **stall hold**（`stallCooldownMs` 60 s）：压不动就保持，不要每步重问一遍。
+
+**重要立场**：摘要是**索引**，不是替代品（`Raw messages remain source truth`）。所以别再靠调摘要措辞提分——§34 复盘已经证明那是把力气用错地方；该做的第 3、4 步已经补齐了。
 
 ## 判决性数字（Layer 2，n=20，LongMemEval_S，judge/answerer 分开披露）
 
