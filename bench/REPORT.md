@@ -578,6 +578,39 @@ objective 里那句「不能比原版 lcm 更差」需要先说清楚**能比哪
 1. **不能说「比原版 lcm 更好」，只能说「在它能比的维度上不差」** —— 词面检索那一条我们领先，但那是**它的 fts 实现**弱，不是它的架构弱（它的强项在嵌入）。
 2. **Layer 2 我们做了原项目没做的事**。这不是加分项，是**补空缺**：所以那一层的结论只能是「我们自己测得怎样」，不能是「比它好」。
 3. 真正站得住的比较对象是 **`dsh-compaction-basic`** —— 同一个宿主、同一个契约、同一份 config、可 A/B、有已发布的基线行为。objective 里「不能比 dsh 自带压缩更差」这一条，才是能被证据支撑的那一条。
+---
+
+## 25. 一次完整的 agentic 轨迹：薄 checkpoint + 一次检索 = 答对
+
+`bench/results/layer2-probe-agentic.json`，题 `e47becba`（gold: Business Administration），一次完整调用：
+
+```
+haystack      148 023 tok
+checkpoint      1 669 tok   （预算 16 384，模型只写了 10%）
+
+模型动作：
+  lcm_search({"pattern": "graduate|degree"}) → 3 条命中，719 字符
+    其中 [seq 530: user] 就是 "I graduated with a degree in Business Administration…"
+
+回答：工商管理学士（Business Administration）。依据 seq 530…
+判分：CORRECT（模型判分与字符串判分一致）
+```
+
+### 这条轨迹证明了三件事，且都不是推测
+
+1. **checkpoint 薄不影响答对。** 1 669 tok 的摘要里没有这个事实（它是被压掉的），但模型照样拿到了正确原文。这就是「压缩是有损的、指针才是资产」在我们自己手上的实证。
+2. **一次检索就够。** 全部工具调用只有 1 次 `lcm_search`，没有 `lcm_expand`。也就是说锚点/查询命中的那一条摘要片段已经足够回答 —— 取回原文是**可选**的第二步，不是必需的第一步。
+3. **查询形状的引导真的起作用。** 模型写的是 `graduate|degree`，一个 `a|b` 交替，而不是把问题原句 `What degree did I graduate with?` 贴进去。这正是 0.4.1 改工具描述和零命中提示想让它做的事（同一份数据上，贴原句的零命中率是 99.8%）。**这是一条因果链，不是相关性**：改的是描述，变的是它写出来的 pattern。
+
+### 但它只是 1 题
+
+n=1，题目类型是 single-session-user（最简单的一类：答案就一句自述）。它证明**链路通、机制对**，不证明 20 题上 agentic 一定优于 oneshot。那个数字在跑，跑完单独记。
+
+### 顺带确认的两个数字
+
+- `ratioAsked = 9`（指令要求 9:1），实际 `148 023 / 1 669 ≈ 88.7:1`。再次印证模型不按预算写。
+- `meanCheckpointChars = 4 839` 字符 → 1 669 token，即约 2.9 字符/token，是英文为主的典型密度。
+
 
 
 

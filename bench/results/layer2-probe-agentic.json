@@ -1,0 +1,137 @@
+{
+ "benchmark": "longmemeval-s/layer2-qa",
+ "harness": "dsh-lcm bench/layer2-qa.mjs",
+ "generatedAt": "2026-11-08T00:17:38.569Z",
+ "elapsedMs": 71302,
+ "models": {
+  "answerer": {
+   "requested": "balanced-lite",
+   "resolved": null
+  },
+  "judge": {
+   "requested": "deepseek-v4-flash-auto",
+   "resolved": "deepseek-v4.1-flash-1017"
+  }
+ },
+ "dataset": {
+  "path": "/home/agent/workspaces/lcmx-study/data/longmemeval_s.json",
+  "bytes": 278025796,
+  "sha256": "08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894",
+  "revision": "2ec2a557f339b6c0369619b1ed5793734cc87533",
+  "split": "LongMemEval_S",
+  "totalQuestions": 500,
+  "scoredQuestions": 1,
+  "limit": 1,
+  "sample": null,
+  "typeMix": {
+   "single-session-user": 1
+  },
+  "questionIds": [
+   "e47becba"
+  ]
+ },
+ "config": {
+  "arms": [
+   "lcm-agentic"
+  ],
+  "compression": "bench/summarize-arm.mjs prompt shape + engine defaultBudget (min(16384, max(512, floor(tokens*0.12))))",
+  "basicInstruction": "bench/fixtures/basic-instruction.txt (frozen built-in backend instruction)",
+  "lcmInstruction": "buildInstruction() from src/summarize.js, built at run time",
+  "answerMaxTokens": 256,
+  "agenticMaxSteps": 6,
+  "agenticSearch": {
+   "maxSearchHits": 20,
+   "maxRecallTokens": 40000,
+   "rank": "density"
+  },
+  "fullContextTruncation": "none (cap disabled)",
+  "sequential": "one model call at a time; the gateway degraded under 6-way parallelism (2 of 6 calls returned content), so arms are strictly serial"
+ },
+ "arms": {
+  "lcm-agentic": {
+   "n": 1,
+   "attempted": 1,
+   "judgeCorrect": 1,
+   "judgeAccuracy": 1,
+   "stringCorrect": 1,
+   "stringAccuracy": 1,
+   "judgeFailed": 0,
+   "judgeFailedIds": [],
+   "armErrors": 0,
+   "armErrorIds": [],
+   "meanTokens": 120672,
+   "meanPromptTokens": 117160,
+   "meanCompletionTokens": 2016,
+   "meanContextTokensEst": 1669,
+   "meanElapsedMs": 71281,
+   "meanHaystackTokensEst": 148023,
+   "meanAgenticSteps": 1,
+   "meanCheckpointChars": 4839,
+   "meanCheckpointTokensEst": 1669,
+   "meanBudget": 16384,
+   "failures": 0
+  }
+ },
+ "armFailures": {},
+ "perQuestion": {
+  "lcm-agentic": [
+   {
+    "question_id": "e47becba",
+    "question_type": "single-session-user",
+    "question": "What degree did I graduate with?",
+    "gold": "Business Administration",
+    "arm": "lcm-agentic",
+    "haystackTokensEst": 148023,
+    "contextTokensEst": 1669,
+    "truncation": null,
+    "compress": {
+     "budget": 16384,
+     "ratioAsked": 9,
+     "checkpointChars": 4839,
+     "checkpointTokensEst": 1669,
+     "promptTokens": 109244,
+     "completionTokens": 1949,
+     "totalTokens": 111193,
+     "finishReason": "stop",
+     "elapsedMs": 60382
+    },
+    "answer": "工商管理学士（Business Administration）。\n\n依据 seq 530，你自述：“I graduated with a degree in Business Administration, which has definitely helped me in my new role.”",
+    "tokens": {
+     "prompt": 117160,
+     "completion": 2016,
+     "total": 120672
+    },
+    "elapsedMs": 71281,
+    "judge": {
+     "verdict": "CORRECT",
+     "raw": "CORRECT",
+     "model": "deepseek-v4.1-flash-1017",
+     "elapsedMs": 3644,
+     "attempts": 1,
+     "viaReasoning": false
+    },
+    "stringCorrect": true,
+    "trace": [
+     {
+      "tool": "lcm_search",
+      "args": {
+       "pattern": "graduate|degree"
+      },
+      "resultChars": 719,
+      "resultPreview": "[search \"graduate|degree\": 3 matching event(s)]\n\n[seq 530: user]\n  1: I graduated with a degree in Business Administration, which has definitely helped me in my"
+     }
+    ],
+    "error": null,
+    "agenticSteps": 1
+   }
+  ]
+ },
+ "boundaries": [
+  "Not an official LongMemEval leaderboard number: this harness is a reimplementation, not the electricsheephq/memorybench-benchmark-tool fork METHODOLOGY.md names, and it does not run LongMemEval's per-question-type judge prompts (getJudgePromptForType). It runs one loose, uniform CORRECT/WRONG judge.",
+  "Judge is not gpt-4o, so the judged numbers are directional until a judge-parity rerun.",
+  "Dataset is LongMemEval_S, revision 2ec2a557f339b6c0369619b1ed5793734cc87533, head slice of the file (the split is grouped by question_type), not the full 500.",
+  "The string grader is exact normalized containment. Gold answers are short entities (median 11 chars), so it is the reproducible floor and systematically under-credits paraphrase.",
+  "Compression is a single-shot call over the whole haystack; the production engine compacts incrementally over a growing window, so this arm is a lower bound on production fidelity.",
+  "full-context is a ceiling arm, not a product configuration: it feeds the entire haystack uncompressed."
+ ]
+}
