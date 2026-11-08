@@ -317,7 +317,11 @@ export class LcmCompactionEngine extends CompactionEngine {
         prune.pruneSession(agent.session);
         measurement = meter.measure(agent.session);
       }
-      const range = selectCompactableRange(agent.session, measurement, 0);
+      // Overflow recovery is still an AUTOMATIC reduction, so the same
+      // "not worth a summary call" floor applies: a span the summary budget
+      // could never undercut would burn one model call and then fail the shrink
+      // guarantee, which is strictly worse than preserving the original error.
+      const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens);
       if (range === null) return null;
       return this.compactRegion(range.start, range.end, agent, signal);
     }
@@ -348,7 +352,11 @@ export class LcmCompactionEngine extends CompactionEngine {
     if (measurement.totalTokens < spec.thresholdTokens) return null;
     let result = null;
     for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
-      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens);
+      // The span floor is what stops the "span=1 seqs=24-24 shadowedTokens=428
+      // budget=512" attempt: at 428 tokens the resolved budget is clamped to
+      // summaryFloorTokens (512), so the checkpoint could never be smaller and
+      // the call was guaranteed to fail after paying for it.
+      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens);
       if (range === null) {
         /* v8 ignore else -- concrete replacement preserves a compactable checkpoint; subclass hooks cannot mutate it. */
         if (result === null) return null;

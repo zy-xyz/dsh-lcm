@@ -44,12 +44,34 @@ function systemHead(session, headSeq) {
  * This is `dsh-compaction-basic`'s exact selection rule, so switching backends
  * compacts the same span for the same tokens.
  *
+ * Selection is pure and budget-agnostic, so it cannot know what one summary
+ * will cost. `minTokens` lets a caller that DOES know (the engine, which resolves
+ * `summaryFloorTokens`) refuse a span the summary could never be smaller than:
+ * below the floor, `resolveSummaryBudget` clamps the budget UP to the floor, so
+ * the "checkpoint is smaller than the shadowed content" guarantee rejects the
+ * commit and the attempt has already spent a model call. The observed failure
+ * was exactly that — `span=1 seqs=24-24 shadowedTokens=428 budget=512` — where the
+ * checkpoint was itself the summary of the previous run.
+ *
+ * The comparison is `<=`, not `<`: at `spanTokens === minTokens` the budget is
+ * exactly the span, and the framed replacement (header + footer + intro, ~100
+ * estimated tokens) is always larger, so equality is a guaranteed failure rather
+ * than a gamble. A one-node span is refused too: re-summarizing a lone node is
+ * the nested-checkpoint loop that produced the incident, and it buys no
+ * cross-node structure to fold.
+ *
+ * `minTokens` defaults to 0, which disables the guard entirely, so every caller
+ * that does not opt in keeps the historical selection byte for byte (the manual
+ * `/compact` path relies on that: it must compact whatever the user asked for).
+ *
  * @param session - session supplying authoritative current surface positions.
  * @param measurement - unified pressure and surface measurement.
  * @param retainTokens - minimum recent tail budget retained verbatim.
+ * @param minTokens - floor below which a selected span is not worth a summary
+ *   call; 0 (default) disables the guard.
  * @returns the inclusive positional seq range to compact, or `null`.
  */
-export function selectCompactableRange(session, measurement, retainTokens) {
+export function selectCompactableRange(session, measurement, retainTokens, minTokens = 0) {
   const pricedNodes = measurement.nodes;
   if (pricedNodes.length === 0) return null;
   const surfaceNodes = session.surface.nodes;
@@ -73,6 +95,16 @@ export function selectCompactableRange(session, measurement, retainTokens) {
     keepFromIdx -= 1;
   }
   if (keepFromIdx <= firstIdx) return null;
+  if (minTokens > 0) {
+    // The justified rule is arithmetic, not shape: the summary budget is
+    // clamped UP to summaryFloorTokens, so a span at or below that floor can
+    // never shrink and would fail the shrink guarantee after paying for a model
+    // call. A single-node span is not refused on count - one 40k-token tool
+    // result is exactly what compaction is for, and it does shrink.
+    let spanTokens = 0;
+    for (const node of pricedNodes.slice(firstIdx, keepFromIdx)) spanTokens += node.tokens;
+    if (spanTokens <= minTokens) return null;
+  }
   return {
     start: surfaceNodes[firstIdx],
     end: surfaceNodes[keepFromIdx - 1]
