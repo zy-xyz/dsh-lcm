@@ -47,6 +47,14 @@
 - insert:
     - id: compaction-lcm
       name: dsh-lcm
+      # Vector recall layer. Off by default in the engine; enabled here so the
+      # semantic arm is exercised in production, with the endpoint, model and
+      # dimension that were measured to answer 200 with 4096 floats.
+      config:
+        vectorEnabled: true
+        vectorBaseUrl: http://10.126.126.3:1234/v1
+        vectorModel: text-embedding-qwen3-vl-embedding-8b
+        vectorDim: 4096
     - id: tool-lcm-expand
       name: dsh-lcm/tool
     - id: command-lcm-search
