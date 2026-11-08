@@ -374,6 +374,12 @@ compaction/end     seq 42
 |---|---|
 | G6.1 | 状态面暴露 depth / 节点数 / 实时 CR / 累计节省 token |
 | G6.2 | 任何静默降级（如装不下缩水）必须打 warn，不许无声退回不压缩 |
+| G6.3 | **压不动时必须保持，不许每步重问**。超阈值但无区间可压的会话，`stallCooldownMs`(60s) 内不再测量/选择；只有「存下 checkpoint / 长满一片叶(`leafSpanTokens`) / 超时」三者任一才重新判定。手动 `/compact` 与模型切换豁免。对齐 lcm-x `_no_progress_hold`（`engine.py:2204`）。✅ `test/stall-hold.test.js` |
+| G6.4 | **摘要超长必须降级，不许失败**。三级阶梯：正常 → 半预算重试 → **确定性截断（不调模型，保证收敛）**，返回降级 checkpoint 并标注 `truncated`。对齐 lcm-x `escalation.py`：`Level 3 Deterministic truncation — no LLM, guaranteed convergence`。✅ `test/shrink-retry.test.js` |
+| G6.5 | **叶块压缩不得被 provider 截断**。147k 跨度切 7 片分别压：7/7 全 `finish=stop`、六节齐全；整段一次压时 15 题里 5 题只剩一节。✅ `bench/REPORT.md` §32 |
+| G6.6 | **同深度叶必须能合并，混合深度不得合并**。4 片同 depth → 合并成一个范围；3 片 → 不变；混合 depth 前导段 → 不合并（否则等于对摘要的摘要再摘要）。✅ `test/fanin.test.js` |
+| G6.7 | **checkpoint 跟随跨度的语言**，引用值逐字保留原语言。实测中文指令曾产出 `三场`/`六月` 对英文 gold。✅ `test/lcm.test.js` |
+| G6.8 | **provider 的完成上限必须够高**。不传 `maxTokens` 时被 provider 默认值截断（7 734 字符只剩锚点节）；传 `max(4096, 2×目标)` 后 8 817 字符六节齐全。✅ `bench/REPORT.md` §31 前对照 |
 
 ---
 
