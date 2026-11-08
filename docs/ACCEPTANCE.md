@@ -372,7 +372,7 @@ compaction/end     seq 42
 
 | ID | 判据 |
 |---|---|
-| G6.1 | 状态面暴露 depth / 节点数 / 实时 CR / 累计节省 token |
+| G6.1 | 状态面暴露 depth / 节点数 / 实时 CR / 累计节省 token。✅ `/lcm-status`：surface 节点数、checkpoint 数 + max depth + depth 直方图、压缩次数、shadowed→kept、累计节省。**全部从日志读，不在内存养计数器**（扛重启、描述持久化后的会话）。做成命令而非工具：回答操作员的问题，不该占每次请求的模型注意力 |
 | G6.2 | 任何静默降级（如装不下缩水）必须打 warn，不许无声退回不压缩 |
 | G6.3 | **压不动时必须保持，不许每步重问**。超阈值但无区间可压的会话，`stallCooldownMs`(60s) 内不再测量/选择；只有「存下 checkpoint / 长满一片叶(`leafSpanTokens`) / 超时」三者任一才重新判定。手动 `/compact` 与模型切换豁免。对齐 lcm-x `_no_progress_hold`（`engine.py:2204`）。✅ `test/stall-hold.test.js` |
 | G6.4 | **摘要超长必须降级，不许失败**。三级阶梯：正常 → 半预算重试 → **确定性截断（不调模型，保证收敛）**，返回降级 checkpoint 并标注 `truncated`。对齐 lcm-x `escalation.py`：`Level 3 Deterministic truncation — no LLM, guaranteed convergence`。✅ `test/shrink-retry.test.js` |
