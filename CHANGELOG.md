@@ -1,7 +1,93 @@
 # Changelog
 
-## 0.5.1 — 2026-11-08 — the anchor rule stops sacrificing the narrative
+## 0.6.0 — 2026-11-08 — fitted to dsh 0.2.2-rc.1, and one poison found by fitting it
 
+### Fixed — contract defects found by auditing against the installed dsh
+
+Eleven, each with a test that was reverted once to confirm it fails. The one that
+mattered most poisoned the harness rather than the summariser:
+
+- **`shadowedTokenCount` carried the ROUTE price** while `dsh-token-meter` uses it
+  as a shadow price and subtracts it from heuristic surface totals. Surface
+  pressure was therefore permanently under-counted and the compaction threshold
+  could never fire. Now split into `shadowedTokenCount` (heuristic) and
+  `shadowedRouteTokenCount` (route); the shrink gate compares against the route.
+- `compaction/summary` wrote `targetTokens`, which the released event validator
+  rejects. The contract name is `maxTokens`; it keeps that name and now carries
+  the instruction's target length.
+- A summarisation failure threw the provider's frozen plain object, so the
+  `instanceof LlmError` check in `dsh-compaction-image-offload` never matched.
+- The `compaction/summary-error` waterfall was missing entirely, so the same
+  image-offload recovery listener could never fire.
+- Peer ranges `^0.2.0` do not accept `0.2.2-rc.1` (prereleases); now `^0.2.2-0`.
+- `Config.simplify` silently dropped nine keys the schema never declared, so a
+  `fiber.update` round-trip lost `anchorPointers`, `emptySummaryRetries` and all
+  seven vector settings.
+- `toolHistory` was missing from the summariser request, defeating prefix reuse.
+- The `agent/request` model-switch compaction path did not exist; listener count
+  is now 5, matching basic.
+- Per-model `summarizationProvider`/`Model` were accepted and ignored.
+- A non-system `surface[0]` was treated as a system head, so that message appeared
+  twice in the summariser input.
+
+### Fixed — the plugin had never compacted in a real session
+
+A real `Session` exposes `log` and `snapshotEvents()`, **not** `events`. Six read
+sites assumed the latter and got `undefined`, so the first thing every automatic
+compaction did was throw `Cannot read properties of undefined`. The failure is
+swallowed by design (`continuing the turn`), so nothing surfaced, and 100 green
+tests could not catch it because every fixture had `events`.
+
+Found by booting a profile, not by a test. `sessionEvents()` now resolves
+`events -> snapshotEvents() -> log -> []`, and the swallowed failure is written to
+the debug log.
+
+### Changed — no completion cap on the summary
+
+`ctx.llm.stream` receives no `maxTokens`; the provider's own default applies.
+Reasoning-first backends bill hidden reasoning against the same ceiling, so a
+summary-sized cap was spent entirely on thinking and the response finished
+`max-tokens` with zero text - a compression that fails for a reason the caller
+cannot fix. The instruction still names a target length, because a model told
+nothing writes a 400-token stub.
+
+Three failures the cap had been masking, all fixed: the instruction never forbade
+tool calls (the request forwards the conversation's tools, so a tool call is a
+legal completion, and the model took it three times in a row); a summary longer
+than its own span got one retry with the bound restated as a hard rule; and the
+min-span guard now requires twice the floor, since at 1.79:1 an ordinary overshoot
+trips the shrink gate after paying for the call.
+
+### Changed — a value is not a fact
+
+Across the 15 paired Layer 2 failures (full context answered, the checkpoint did
+not), the golds were 7 numeric/time, 6 short prose facts, 2 long prose and **zero
+identifiers** - exactly the one category the anchor list collected. Widening the
+list is necessary but not sufficient: two failures carried their gold in the anchor
+list already and still answered UNKNOWN, because a bare value among 250 does not
+say what it counts. The skeleton gains a 用户事实 section for facts as sentences
+that carry their value.
+
+### Fixed — an unreachable threshold is not a failure
+
+With the trigger below the non-compactable baseline (system prompt, tool
+definitions, retained tail) the engine compacted everything compactable, stayed
+above, and threw on every step afterwards. It now distinguishes 'could not get
+below' from 'nothing left to compact' and logs a diagnosis in the second case.
+
+### Measured (Layer 2, n=20, LongMemEval_S, judge and answerer disclosed)
+
+| arm | judge | string |
+|---|---|---|
+| `full-context` (ceiling) | 15/20 = 75% | 8/20 = 40% |
+| `basic-oneshot` | 0/19 = 0% | 1/19 = 5% |
+| `lcm-oneshot` | 0/20 = 0% | 0/20 = 0% |
+| **`lcm-agentic`** | **14/20 = 70%** | **11/20 = 55%** |
+
+Compress-only scores zero for both backends, so the summary axis ties at the
+floor. Retrieval takes this package to 70% of a ceiling that is itself only 75%.
+
+## 0.5.1 — 2026-11-08 — the anchor rule stops sacrificing the narrative
 ### Fixed
 
 - **`ANCHOR_RULE` told the model to cut the four narrative sections before the
