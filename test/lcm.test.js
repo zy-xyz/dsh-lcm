@@ -251,6 +251,32 @@ test("deriveDag nests a checkpoint that absorbed an earlier one", () => {
   assert.equal(dag.nodeBySeq.get(5).depth, 2);
 });
 
+test("deriveDag reads several sibling leaves, then a merge above them", () => {
+  // The shape leaf-sized compaction produces: three independent leaves at depth 1,
+  // then a later compaction that absorbs two of them into one depth-2 node. Before
+  // leaf compaction the surface only ever held ONE checkpoint, so breadth was
+  // impossible and deriveDag had depth without siblings to report. lcm-x builds the
+  // same shape with fanin 4.
+  const events = [
+    { seq: 0, type: "user/message", data: {} },
+    { seq: 1, type: "compaction/summary", data: { compactionId: "c1", shadowedSeqs: [0], shadowedTokenCount: 100 } },
+    { seq: 2, type: "user/message", data: { source: { kind: "compact-checkpoint", compactionId: "c1" } } },
+    { seq: 3, type: "assistant/message", data: {} },
+    { seq: 4, type: "compaction/summary", data: { compactionId: "c2", shadowedSeqs: [3], shadowedTokenCount: 200 } },
+    { seq: 5, type: "user/message", data: { source: { kind: "compact-checkpoint", compactionId: "c2" } } },
+    { seq: 6, type: "user/message", data: {} },
+    { seq: 7, type: "compaction/summary", data: { compactionId: "c3", shadowedSeqs: [6], shadowedTokenCount: 300 } },
+    { seq: 8, type: "user/message", data: { source: { kind: "compact-checkpoint", compactionId: "c3" } } },
+    { seq: 9, type: "compaction/summary", data: { compactionId: "c4", shadowedSeqs: [2, 5, 9], shadowedTokenCount: 400 } },
+    { seq: 10, type: "user/message", data: { source: { kind: "compact-checkpoint", compactionId: "c4" } } }
+  ];
+  const dag = deriveDag(fakeSession(events, [10]));
+  const depths = [...dag.nodeBySeq.values()].map((node) => node.depth).sort((a, b) => a - b);
+  assert.equal(dag.checkpoints, 4, "three leaves plus the merge");
+  assert.equal(dag.maxDepth, 2, "the merge sits above the leaves");
+  assert.deepEqual(depths, [1, 1, 1, 2], "three siblings at depth 1, one node above them");
+});
+
 test("maxAbsorbedDepth reports the deepest checkpoint in the span", () => {
   const events = [
     { seq: 0, type: "user/message", data: {} },
