@@ -185,6 +185,10 @@ export class LcmCompactionEngine extends CompactionEngine {
         }
         const message = error instanceof Error ? error.message : String(error);
         ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`);
+        // Also to the debug log: ctx.logger.warn is invisible from a headless
+        // run's stderr, and "compaction silently never fires" looked exactly
+        // like "compaction fired and failed" until this line existed.
+        engineDebug(this.config, `step compaction failed: ${message}`);
       }
       return next();
     }));
@@ -316,6 +320,7 @@ export class LcmCompactionEngine extends CompactionEngine {
    */
   async compactIfNeeded(agent, trigger, signal) {
     const target = routedTarget(agent.session);
+    engineDebug(this.config, `compactIfNeeded trigger=${trigger} target=${target === undefined ? "none" : target.provider + "/" + target.model} auto=${String(this.config.auto)}`);
     if (target === undefined) return null;
     const policy = resolveTargetPolicy(this.config, target);
     const meter = this.ctx.tokenMeter;
@@ -347,6 +352,13 @@ export class LcmCompactionEngine extends CompactionEngine {
       policy,
       context.contextWindow,
       reservedCompletionTokens(agent.session.requestHeader(), info.defaultMaxTokens)
+    );
+    // Observability for the one decision that silently does nothing: G6 asks for a
+    // state surface, and "compaction never fired" was indistinguishable from
+    // "compaction fired and failed" without this line.
+    engineDebug(
+      this.config,
+      `pressure: measured=${measurement.totalTokens} threshold=${spec.thresholdTokens} window=${context.contextWindow} retain=${spec.retainTokens}`
     );
     if (measurement.totalTokens < spec.thresholdTokens) return null;
     if (prune !== undefined) {
