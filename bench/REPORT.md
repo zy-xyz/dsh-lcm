@@ -1432,3 +1432,54 @@ import { complete } from "./llm.mjs";                      ← 压缩调用是 h
 
 在那之前，凡是引用 70% 的地方都要带上这个限定。**这类「仪器测的不是产品」的缺口，比数字高低重要得多 —— 它会让所有后续优化都对着错误的靶子。**
 
+
+
+---
+
+## 40. 部署到 `web` profile 的真实阻塞：G5.1 不是理论问题
+
+用户要求「dsh 真实环境测试没问题就部署到 web profile 生产环境」。**装不了，原因是结构性的，证据如下。**
+
+### web 与 lcmverify 的结构差异
+
+`lcmverify`（验证通过的那个 profile）里 `compaction-basic` 在**顶层**，所以 `- id: compaction-basic / disabled: true` + `insert: compaction-lcm` 直接生效。
+
+`web` 不一样：它开了 **agent preset**（`agent-preset-registry`，`selectedDefault: ptc`），每个 preset 内部有一个 `cordis:group`：
+
+```yaml
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+    - id: command-compact
+    - id: tool-result-pruner
+```
+
+组合后的 `web` 配置里 **`compaction-basic` 出现 7 次**：1 个顶层 + **6 个分别在 preset 的隔离组里**，且这 6 个**都不是 disabled**。
+
+### 两次实测（都只做 compose，不启动）
+
+1. 顶层禁 basic + 顶层 insert lcm → compose 里顶层 `compaction-basic: disabled: true` ✓、三个 lcm 行在列 ✓，**但 preset 里的 6 个 basic 仍然活跃**。也就是说：会话仍由 basic 压缩，lcm 形同虚设 —— **最坏的部署结果：看起来装上了，实际没生效**。
+2. 按官方补丁方言，用 `- id: compaction` + 整段 `config` 重述（basic disabled + lcm 加入）想整体替换这 6 个组 → compose 结果 **6 个 basic 全部仍活跃、lcm 行 0 个**。**补丁层够不到 preset 内部的行。**
+
+两次都已回滚，`web` 的 `cordis.patch.yml` 与备份**逐字节相同**，包也已 `plugin remove`，生产 profile 保持原样。
+
+### 这意味着什么
+
+**G5.1 是真实的部署阻塞，不是待办事项的措辞。** 验收表里那句「开 `bili-compaction-gate` 后引擎与 `/compact` 不消失（现在 gate 会递归 disable 所有叫 compaction-basic/command-compact 的行）」正是这个问题的描述 —— 而那个 gate 已于 2026-11-07 退役。
+
+### 三条可行路径
+
+| 路径 | 代价 | 状态 |
+|---|---|---|
+| A 用一个**不带 agent preset** 的 profile | 放弃 preset 能力 | **已验证可用**（`lcmverify`） |
+| B **重写 gate 插件**：loader 层递归把每个 `compaction` 组里的 `compaction-basic`/`command-compact` 置 disabled 并塞入 lcm | 要写插件 + 测 | 唯一能让 `web` 带 preset 换引擎的路 |
+| C 关掉 preset registry 的默认 preset | 影响所有会话的 preset 能力，风险高 | 不建议 |
+
+**结论：`web` 要换引擎，必须先做 B。**
+
