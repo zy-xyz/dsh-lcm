@@ -854,6 +854,38 @@ relations                                            cancels|confirms|contradict
 最新的 15 题可答性（三处修复都在）：**2/15**，改前 0/15。**但其中 5 题仍然只写出一个分节**（截断或模型提前收尾），所以这个 2/15 是下界，不是这套指令的真实上限。
 
 **停止调 oneshot 指令**：它不是我们被比较的配置，继续调它是在优化一个 lcm-x 不参与的项目。
+---
+
+## 31. 测量环境本身在恶化：网关 429/504，最近的数不能当结论
+
+把 `bench/llm.mjs` 从 `fetch` 换成 `node:http`（`fetch` 的 undici 有 300 秒 headers 超时，`AbortController` 改不动它；150k prompt 经常第一字节就要几分钟）之后，**真正的错误浮出来了**，原文：
+
+```
+gateway 502: sensenova/deepseek-flash: rate limit — All credentials for model
+deepseek-flash are cooling down (HTTP 429);
+openai-compatible-chat-conn:8c0fc9d3/agnes-3.0-flash: provider — Model ... timed
+out (HTTP 504); Agent2API/hy4free: provi…
+```
+
+也就是说：**过去几轮里的 `ERROR` 行、`fetch failed`、以及一部分「只写出一节」的 checkpoint，可能来自网关降级而不是模型行为。** 我之前把它们当成模型问题在调指令，这是一个真实的归因错误。
+
+### 影响范围（哪些数要打折）
+
+| 数 | 是否受影响 | 说明 |
+|---|---|---|
+| Layer 2 四臂 20 题（§27） | **不受影响** | 那次是严格串行、有重试、有 `armErrors` 计数的，且当时网关正常 |
+| 保真 7/14、15/24（§3） | 不受影响 | 更早、网关正常 |
+| 外部检索基准（§20） | 不受影响 | 检索为主，无长 prompt 生成 |
+| **15 题可答性 2/15（§29、§30）** | **受影响** | 中途多次 `ERROR` 行与分节缺失；2/15 只能当**下界**，且改前改后的差不能归因给指令 |
+
+### 处置
+
+1. 传输层已修（`node:http`，超时归调用方）
+2. **这一轮不再跑长 prompt 测量** —— 网关冷却中，继续打只会得到更多 429，并把噪声记成结论
+3. 重跑的正确姿势：等网关冷却，或把 `--sample` 调小、串行、并把 `finish_reason` 与 `usage` 逐题落盘（`acon-final.mjs` 已经这么做，只差把 error 行也写进 JSON）
+
+**这一节的教训比数字重要**：连续几小时对同一个网关打 150k-token 的 prompt，会把「模型表现」和「网关排期」混成一个数。以后长 prompt 的 A/B 必须先确认网关健康（成功一次小请求 + 看一次 `usage`），再开始计分。
+
 
 
 （原注：gold 缺失是另一个问题）
