@@ -291,7 +291,14 @@ export const CHECKPOINT_CLOSE_TAG = "</compacted-checkpoint>";
  * that the log is append-only and how to restore exact originals.
  */
 export const RECALL_GUIDE =
-  'RECALL: the session log is append-only — nothing is lost. This checkpoint is a summary, not the only copy. Use `lcm_expand` to restore exact original content by reference: type "seq", id "3-7,15"; or type "result", id "3" for a tool result. Use `lcm_search` to find anything by keyword or regex, including content this checkpoint omitted.';
+  'RECALL: the session log is append-only — nothing is lost. This checkpoint is a summary, not the only copy. Use `lcm_expand` to restore exact original content by reference: type "seq", id "3-7,15"; or type "result", id "3" for a tool result. Use `lcm_search` to find anything by keyword or regex, including content this checkpoint omitted.' +
+  // The passive form was not enough. Measured: answering from a checkpoint alone
+  // scores 0% on counting questions whose evidence is scattered across sessions,
+  // while answering with retrieval scores 70% - and the difference is entirely
+  // whether the model searches. A summary cannot pre-answer a question it cannot
+  // see (it does not know the window is "in March", or that planned visits must be
+  // excluded), so the one thing that must be said is WHEN to search.
+  ' Before you answer "I don\'t know", "unknown", a count, a date, or anything a summary might have dropped: SEARCH FIRST. A bare number in this checkpoint does not say what it counts; search for the noun and read the original lines.';
 
 /** Build marker for this backend revision, so debug logs prove which code ran. */
 export const COMPILER_REV = "lcm-summary-1";

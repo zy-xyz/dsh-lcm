@@ -1,0 +1,107 @@
+{
+ "ids": [
+  "00ca467f",
+  "81507db6",
+  "505af2f5",
+  "6456829e",
+  "efc3f7c2",
+  "gpt4_18c2b244",
+  "gpt4_98f46fc6",
+  "6613b389",
+  "06db6396",
+  "7e00a6cb",
+  "e3fc4d6e"
+ ],
+ "rows": [
+  {
+   "id": "00ca467f",
+   "leaves": 7,
+   "chars": 25346,
+   "badLeaves": 1,
+   "answer": "Four doctor's appointments in March.",
+   "ok": false
+  },
+  {
+   "id": "81507db6",
+   "leaves": 7,
+   "chars": 35643,
+   "badLeaves": 1,
+   "answer": "Two",
+   "ok": false
+  },
+  {
+   "id": "505af2f5",
+   "leaves": 7,
+   "chars": 30896,
+   "badLeaves": 0,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "6456829e",
+   "leaves": 7,
+   "chars": 27154,
+   "badLeaves": 3,
+   "answer": "3 plants",
+   "ok": false
+  },
+  {
+   "id": "efc3f7c2",
+   "leaves": 7,
+   "chars": 48717,
+   "badLeaves": 1,
+   "answer": "1小时",
+   "ok": false
+  },
+  {
+   "id": "gpt4_18c2b244",
+   "leaves": 7,
+   "chars": 19353,
+   "badLeaves": 1,
+   "answer": "1) I used a Buy One Get One Free coupon on Luvs diapers at Walmart\n2) I signed u",
+   "ok": false
+  },
+  {
+   "id": "gpt4_98f46fc6",
+   "leaves": 7,
+   "chars": 23332,
+   "badLeaves": 2,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "6613b389",
+   "leaves": 7,
+   "chars": 77548,
+   "badLeaves": 4,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "06db6396",
+   "leaves": 7,
+   "chars": 31626,
+   "badLeaves": 0,
+   "answer": "4",
+   "ok": false
+  },
+  {
+   "id": "7e00a6cb",
+   "leaves": 7,
+   "chars": 26445,
+   "badLeaves": 1,
+   "answer": "ClinkNOORD Hostel",
+   "ok": false
+  },
+  {
+   "id": "e3fc4d6e",
+   "leaves": 7,
+   "chars": 35098,
+   "badLeaves": 0,
+   "answer": "UNKNOWN",
+   "ok": false
+  }
+ ],
+ "ok": 0,
+ "total": 11
+}

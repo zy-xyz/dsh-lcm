@@ -76,8 +76,92 @@
    "chars": 11707,
    "answer": "Almond milk with vanilla extract and honey",
    "ok": false
+  },
+  {
+   "id": "6456829e",
+   "type": "multi-session",
+   "gold": "8",
+   "sections": 6,
+   "hasFacts": true,
+   "chars": 13173,
+   "answer": "5 tomato plants and 3 cucumber plants.",
+   "ok": false
+  },
+  {
+   "id": "0ea62687",
+   "error": "compress: TypeError: fetch failed"
+  },
+  {
+   "id": "efc3f7c2",
+   "type": "multi-session",
+   "gold": "30 minutes",
+   "sections": 1,
+   "hasFacts": false,
+   "chars": 7248,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "gpt4_18c2b244",
+   "type": "temporal-reasoning",
+   "gold": "First, I used a Buy One Get One Free cou",
+   "sections": 2,
+   "hasFacts": true,
+   "chars": 8663,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "gpt4_98f46fc6",
+   "type": "temporal-reasoning",
+   "gold": "I participated in the charity bake sale ",
+   "sections": 6,
+   "hasFacts": true,
+   "chars": 5472,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "6613b389",
+   "type": "temporal-reasoning",
+   "gold": "2",
+   "sections": 6,
+   "hasFacts": true,
+   "chars": 4836,
+   "answer": "Two months.",
+   "ok": false
+  },
+  {
+   "id": "06db6396",
+   "type": "knowledge-update",
+   "gold": "5",
+   "sections": 6,
+   "hasFacts": true,
+   "chars": 13346,
+   "answer": "5项",
+   "ok": true
+  },
+  {
+   "id": "7e00a6cb",
+   "type": "single-session-assistant",
+   "gold": "International Budget Hostel",
+   "sections": 1,
+   "hasFacts": false,
+   "chars": 9284,
+   "answer": "UNKNOWN",
+   "ok": false
+  },
+  {
+   "id": "e3fc4d6e",
+   "type": "single-session-assistant",
+   "gold": "Dr. Arati Prabhakar",
+   "sections": 6,
+   "hasFacts": true,
+   "chars": 9878,
+   "answer": "UNKNOWN",
+   "ok": false
   }
  ],
- "ok": 2,
+ "ok": 3,
  "total": 15
 }
