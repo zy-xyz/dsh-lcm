@@ -1407,3 +1407,28 @@ lcm status
 
 
 
+
+
+---
+
+## 39. 一个必须先说清的仪器缺口：**验收数字还没测到产品本身**
+
+检查 `bench/layer2-qa.mjs` 的导入：
+
+```
+import { buildInstruction } from "../src/summarize.js";   ← 真
+import { searchSession } from "../src/search.js";          ← 真
+import { recallSession } from "../src/recall.js";          ← 真
+import { complete } from "./llm.mjs";                      ← 压缩调用是 harness 自己发的
+```
+
+所以 Layer 2 的 70% / 0% 验证的是**指令 + 检索**，**不是引擎**。0.7.0 加的四个结构机制 —— 叶块切分（`leafSpanTokens`）、降级阶梯、同深度合并（`condensationFanin`）、停顿保持（`stallCooldownMs`）—— **没有任何一个 bench 测到过**。
+
+这不是数字错了，是**数字的适用范围比看起来小**。G2.9 的正确表述是「指令与检索层 70%」，不是「插件 70%」。
+
+### 处置
+
+建 `bench/engine-compress.mjs`：让 bench 通过**真引擎路径**（`prepareCompaction` + `compactSurfaceRegion` + 真 `compile`）压缩，而不是自己发模型调用。有了它，同一批题才是在测产品。
+
+在那之前，凡是引用 70% 的地方都要带上这个限定。**这类「仪器测的不是产品」的缺口，比数字高低重要得多 —— 它会让所有后续优化都对着错误的靶子。**
+
