@@ -526,6 +526,23 @@ export class LcmCompactionEngine extends CompactionEngine {
       measurement = meter.measure(agent.session, header);
       if (measurement.totalTokens < spec.thresholdTokens) return result;
     }
+    // Still above threshold after the allowed attempts. Before calling that a
+    // failure, ask whether any further compaction is even possible: when the
+    // threshold sits below the non-compactable baseline (system prompt, tool
+    // definitions, retained tail) there is nothing left to compact, and
+    // reporting a failure every step forever is not a diagnosis - it is noise
+    // that hides real ones. Measured: thresholdRatio 0.002 puts the threshold at
+    // 512 tokens under a ~9k baseline, and the engine retried every single step.
+    // Same floor the loop above uses: without it this probe reports the tiny
+    // range the loop just refused as "still compactable" and the error survives.
+    const remaining = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens);
+    if (remaining === null) {
+      engineDebug(
+        this.config,
+        `pressure exhausted: ${measurement.totalTokens} >= ${spec.thresholdTokens} but nothing is compactable (baseline is above the threshold; lower it or accept this size)`
+      );
+      return result;
+    }
     throw new Error(`compaction still above threshold after ${spec.compactionRetries + 1} compaction attempts (${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`);
   }
   /**
