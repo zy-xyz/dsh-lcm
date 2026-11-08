@@ -1,92 +1,74 @@
 # SESSION-STATE —— 交接/压缩锚点
 
-> 写于 2026-11-07 深夜。**任何后续会话先读这个文件**，再读 bench/REPORT.md。
+> 写于 2026-11-08 凌晨。**任何后续会话先读这个文件**，再读 bench/REPORT.md 与 docs/ACCEPTANCE.md。
 > 所有数字都可用仓库内脚本复现，不要相信本文件以外的口头叙述。
 
 ## 目标
-团队模式、领导者不做执行。优雅实现 / 上传 GitHub / **不能比原版 lcm 更差** / **比较方法参考原项目 METHODOLOGY.md** / **不能比 dsh 自带压缩更差** / 遵循验收标准。
+团队模式、领导者不做执行。优雅实现 / 上传 GitHub / **不能比原版 lcm 更差** / **比较方法参考原项目 METHODOLOGY.md** / **不能比 dsh 自带压缩更差** / 遵循验收标准 / **验收标准不能降低**。
 
-**成本不是判据**（用户明示：成本不需要压制，成本相关的也不需要测）。
-**先小规模验证，确认没问题再跑大批量**（用户明示）。
+成本不测（用户明示）。先小规模验证再放大（用户明示）。
 
 ## 仓库
-https://github.com/zy-xyz/dsh-lcm ｜ 版本 **0.4.2** ｜ **76 测试全绿**
-本地：`/home/agent/workspaces/lcmx-study/dsh-lcm`
-验收标准：`/home/agent/workspaces/lcmx-study/ACCEPTANCE-dsh-lcm.md`
-方法论（照原项目结构写的）：`bench/METHODOLOGY.md`
+https://github.com/zy-xyz/dsh-lcm ｜ **0.4.2** ｜ **100 测试全绿**
+关键文档：`docs/ACCEPTANCE.md`（门禁表）、`bench/REPORT.md`（26 节实测）、`bench/METHODOLOGY.md`（照原项目结构）、`RESEARCH-INDUSTRY.md`、`docs/G0-RUNBOOK.md`（怎么在隔离 profile 里复现 G0）
 
 ## 一句话现状
-**保真这一门过了（lcm 摘要把 3.0–3.5 倍逐字事实交给模型，达到模型复用上限的 75%，basic 20%）；外部基准（LongMemEval_S）词面臂 sR@5 0.774 vs lcm-x 的 fts 0.20；向量臂小样本 sR@5 0.850。真装载需用户点头。**
+**G0 已用真引擎真会话跑通；G0.2/G0.3/G0.4/G1/G2.6/G2.8/G3/G4/G5/G6 全绿；G2.4 仍记不达标（但 basic 同样不达标，本门不区分后端）；G2.5 按用户指示未测。**
 
-## 唯一可采信的保真指标
-类型分组逐字召回（`bench/qa-recall.mjs`），输出上限 8000，全臂 `stop`：
+## G0 是本轮最大收获（它抓到的东西比门禁本身重要）
+用 headless 模板开隔离 profile（`dsh --profile lcmhead --from-default-profile headless`）装插件跑真任务。**没有碰用户的 web profile。**
 
-| 语料 | 跨度 | basic | lcm | 天花板 |
-|---|---|---|---|---|
-| `s` | 4302 tok | 2/14 = 14.3% | **7/14 = 50.0%** | 未测 |
-| `c2` | 8065 tok | 4/24 = 16.7% | **15/24 = 62.5%** | **20/24 = 83.3%** |
+会话日志实测两次完整压缩（`compaction/start|summary|end` + `surfaceOp replace 8-11 / 24-31`），checkpoint 858 / 963 字符，锚点真的带 `(seq N)`。
 
-## 外部基准（照 METHODOLOGY 的 Layer 1）
-LongMemEval_S 500 题，pin revision `2ec2a557`，每题全新 store：
+**它抓到：插件在此之前从未在真实 dsh 会话里成功压缩过一次。** 真实 `Session` 有 `log` + `snapshotEvents()`，**没有 `events`**；6 处读 `session.events` 全 undefined，第一次自动压缩就抛 `Cannot read properties of undefined`，而错误被 `continuing the turn` 吞掉。100 个测试全绿也拦不住 —— 所有夹具都有 `events`。
+
+## 由 G0 牵出的三个健壮性修复（都有测试）
+1. **空摘要**：模型只返回 reasoning 无 text → `emptySummaryRetries`（默认 2）同 prompt 重试；`max-tokens` 不重试。
+2. **推理吃光预算**：reasoning 优先后端把预算全花在思考上 → 无 text 的 `max-tokens` 预算翻倍一次，**instruction 里的上限同步重建**（否则告诉模型 512 却允许 1024）。
+3. **压不能缩小的跨度**：引擎会去压刚生成的 checkpoint（428 tok，预算钳到 512）→ `selectCompactableRange` 加 `minTokens` 守卫，自动路径传 `summaryFloorTokens`。修复后真引擎日志里 `span=1` 出现 **0** 次。
+
+## 保真（唯一可采信的口径）
+类型分组逐字召回，输出上限 8000 全臂 stop：
+
+| 语料 | basic | lcm | 天花板 |
+|---|---|---|---|
+| `s`（4302 tok） | 2/14 = 14.3% | **7/14 = 50.0%** | 未测 |
+| `c2`（8065 tok） | 4/24 = 16.7% | **15/24 = 62.5%** | **20/24 = 83.3%** |
+
+## 外部基准（LongMemEval_S，照 METHODOLOGY Layer 1）
+500 题、pin revision、每题全新 store：
 
 | 查询构造 | sR@5 | sR@10 | sNDCG@10 |
 |---|---|---|---|
 | 问题原文（METHODOLOGY 原样） | 0.002 | 0.002 | 0.001 |
-| tokenOr（与 lcm-x 的 fts 同构造） | **0.774** | **0.874** | **0.602** |
-| lcm-x 的 `fts` 臂 | 0.20 | 0.36 | 0.204 |
+| tokenOr（与 lcm-x `fts` 同构造） | **0.774** | **0.874** | **0.602** |
+| lcm-x `fts` 臂 | 0.20 | 0.36 | 0.204 |
 
-问题原文那行 499/500 零命中，是**查询形状不匹配**，不是检索质量 —— 两张表都报。
+## 一条完整的 agentic 轨迹（这是架构的实证）
+150k haystack → **1 669 tok checkpoint（预算的 10%，且不含答案）** → 模型调用 `lcm_search({"pattern":"graduate|degree"})` **一次** → 命中 seq 530 → 答对，两个判分器一致。
+模型写的是 `a|b` 交替而不是整句 —— 这正是 0.4.1 改工具描述与零命中提示想让它做的事。**描述变了，pattern 变了，这是因果不是相关。**
 
-## 向量臂（小规模验证，n=20，未放大）
-热缓存 sR@5 0.850 / sR@10 0.950 / sNDCG 0.865；冷缓存 0.750 / 0.850 / 0.765。
-**n=20 不足以排序方案**（同 20 题上 tokenOr.score 是 0.900，反而更高）。
-
-## 可恢复性（架构级，不靠 benchmark）
-生产 436 194 tok 跨度：摘要只携带 12.5% 锚点，`lcm_expand` 逐字取回 **21/21，0 丢失**，模型可得 **100%**。
-
-## 检索可达性（三份真实压缩日志，density 默认）
-跨日志均值 recall@1 **0.730** / @5 **0.969** / MRR **0.831** / NDCG@10 **0.870**；时间序 0.382 / 0.941 / 0.628 / 0.711。
-显著性：log1 9:2 p=0.065（边缘）、log2 6:5 p=1.0（持平）、log3 18:2 p=0.0004。**不是三份都显著。**
+## 被实测否掉的方向
+1. **叙述节 ≤20 行上限**（为压成本）→ `s` 语料 7/14 掉到 3/14。已回滚。
+2. **「别压太狠」的下限条款** → 31k 上 1927 → 1881 token，无实质变化。
+3. **分片摘要**（n=1 时看似能保住整段丢的事实）→ n=3 复现后 **A 1/3、B 1/3**，且**承载 gold 那一片也只保住 0/5**。分片贵 3.5 倍且不更准。
+   附带发现：整段臂的输出 **56% 是隐藏 reasoning**（7264/12953），可见摘要只有 5689 —— 「模型写太短」要修正为「它在花大预算思考」。
 
 ## 仪器事实（别再重学）
-1. 同一 prompt 重跑 → **逐字节相同**（网关缓存）。跑 3 次是假重复，N=1。
-2. 命中数**不随输出上限单调**：c2 全跨度 1500→10/24、3000→4/24、8000→20/24。
-3. `lcm` 臂在 8000 上限下退化过两次（重复短语 30+ 次）。单次调用不是结论。
-4. `max_tokens` 是否执行**取决于路由**：`deepseek-v4-flash-auto` 忽略，`balanced-lite`/`best` 执行。
-5. **`--limit N` 不是分层抽样**：LongMemEval_S 按题型成组存放，`--limit 20` 全是 single-session-user。必须用 `--sample N`。
-6. 输出文件名现在带作用域（`-sampleN`/`-limitN`），部分跑批不会覆盖全量结果。
-
-## 已修的真 bug（都带回归测试）
-1. `surfaceOp` 写成 `{op,start,end}` → harness 要 `{op,startSeq,endSeq}`；插件曾从未成功压缩过一次（0.2.2）
-2. `compactNow` 引用越界 `spec` → `/compact` 必抛 ReferenceError（0.2.2）
-3. `session.events[seq]` 错位 → recall/search/deriveDag 全部查不到（0.2.3/0.2.4）
-4. 锚点清单排在末节 → 截断时被砍光（0.2.7）
-5. `retrieval.mjs` 把 rank 加了两遍 → 排序结论一度是反的（0.2.8）
-6. 指令自称「最后一节」而骨架早已把锚点提到第一节（0.3.0）
-7. `compose.test.js` 用包名匹配引擎行，改名后匹配到 0 条，断言反而「通过」（0.3.0）
-8. 嵌入批处理**整批失败**：一条毒文本拖垮整道题（实测 1–3/20）→ 改为二分定位 + 单条降级（0.4.2）
-9. `--sample 3` 验证跑覆盖了 500 题结果文件（17k 行删除）→ 输出名带作用域（0.4.2）
-
-## 被实测否掉的想法
-- **给叙述节加「合计不超过 20 行」上限压成本** → `s` 语料 7/14 掉到 3/14。已回滚，测试留了反向断言。
-- **加「别压太狠」的下限条款** → 31k haystack 上输出 1927 → 1881 token，无实质变化。模型不是被预算逼着压，是自己判断可以压。
-
-## 行业对齐（`RESEARCH-INDUSTRY.md`）
-五条主线（Anthropic context engineering / Letta filesystem-as-memory / memory-bench agentic grep / SUMER 目标导向搜索 / ACON 失败驱动优化指引）在一点汇合：**压缩是有损的，赢的是保留轻量指针 + 运行时按需取回**。我们的架构正站在这里。
-
-已做的对齐动作：① 锚点自带 `(seq N)` 指针（0.4.1，归因 3.06ms/1200 事件）② 零命中给可执行建议 + 工具描述教查询形状（0.4.1）③ Layer 2 四臂基准（在建）
+1. 同一 prompt 重跑 → 逐字节相同（网关缓存）。N≠重复。
+2. 命中数**不随输出上限单调**。只有同上限横向比较和 `stop` 绝对值有意义。
+3. **`--limit N` 不是分层抽样**：数据集按题型成组，必须用 `--sample N`。输出文件名已带作用域，部分跑批不会覆盖全量结果。
+4. `max_tokens` 是否执行取决于**路由**。`balanced-lite` 是别名，一次 run 会落到 5 个后端。
+5. **嵌入端点有输入敏感缺陷**：特定字符串稳定 400 `invalid_type expected number received nan`。已按单条二分降级。
 
 ## 未完成
-1. **G0 真装载**（`dsh plugin add` + 重启 dsh）—— 需用户点头；装进 profile 会 disable `compaction-basic`
-2. Layer 2 判分链路有缺陷（judge 返回空串被记未判、fetch failed 无重试）—— 修好后才能跑 20 题
-3. 向量臂放大到 `--sample 100`（冷缓存约 60 分钟，热约 1.5 分钟）
-4. ACON 式「用失败配对反向优化摘要指引」—— 依赖 2
-5. 跨会话检索（`session_scope`）—— P1
+1. **Layer 2 四臂 20 题**（在跑，ETA 数小时）。已确认 `lcm-agentic` 真调用工具、judge 空串问题已修
+2. **向量臂放大**到 `--sample 100`（热缓存 1.5 分钟）
+3. ACON 式「用失败配对反向优化摘要指引」—— 依赖 2
+4. 跨会话检索（`session_scope`）—— P1
 
 ## 网络
-**拉取优先用自建镜像** `git.acezy.top`（前缀 + 完整原 URL）：clone 1.20s / raw 1.18s / tarball 1.62s。**不要**用 `github.com/OWNER/REPO/raw/...` 形式（15s 超时或 404）。
-**推送必须直连** + `-c http.version=HTTP/1.1`（HTTP/2 报 framing 错误）。代理 `192.168.2.121:7890` 不可用。
+拉取优先 `https://git.acezy.top/` + 完整原 URL（clone 1.2s）。**不要**用 `github.com/OWNER/REPO/raw/...` 形式。推送必须直连 + `-c http.version=HTTP/1.1`。
 
 ## 嵌入端点
-`http://10.126.126.3:1234/v1`，`text-embedding-qwen3-vl-embedding-8b`，4096 维，32 条 981ms，无鉴权。
-**已知缺陷**：对特定文本稳定返回 400 `invalid_type expected number received nan`（`import x from 'rn-maps';` 失败，前置空格即成功）。已按单条降级。
+`http://10.126.126.3:1234/v1`，`text-embedding-qwen3-vl-embedding-8b`，4096 维，32 条 981ms。
