@@ -1,7 +1,67 @@
 # Changelog
 
-## 0.6.0 — 2026-11-08 — fitted to dsh 0.2.2-rc.1, and one poison found by fitting it
+## 0.7.0 — 2026-11-08 — compact in leaves, not in one ever-deeper checkpoint
 
+### Changed — the compression unit
+
+Borrowed from lcm-x, which condenses in leaf chunks of `leaf_chunk_tokens`
+(24 000) with a ~2 000-token target each and keeps every leaf, assembling several
+of them per request.
+
+One pass over the whole compactable prefix meant the surface never held more than
+one checkpoint: `deriveDag` had depth without breadth, and a 400k-token span was
+summarised in a single call whose response the provider truncated before the
+sections were finished. Measured on 147k tokens: one pass produced 1 section on 5
+of 15 questions with the response cut mid-word; 7 leaves of 20-23k each produced
+all six sections 7 times out of 7, each finishing `stop`.
+
+`selectCompactableRange` takes an optional `maxSpanTokens`; the automatic paths
+pass `leafSpanTokens` (default 24 000). The leaf starts at the OLDEST node, matching
+lcm-x's oldest-leaf-first order, and the end walks back until the boundary is
+balanced so a replacement never splits a tool-call/result pair. `0` keeps the
+historical whole-prefix selection byte for byte, which manual `/compact` relies on.
+
+### Measured effect on answers
+
+Same four questions from the paired failures, same instruction, same model; only
+the compression unit changed:
+
+| question | gold | one span | 7 leaves |
+|---|---|---|---|
+| `e47becba` | `Business Administration` | UNKNOWN | **correct** |
+| `95bcc1c8` | `10` | UNKNOWN | **`10 amateur comedians`** |
+| `76d63226` | `55-inch` | UNKNOWN | **`55-inch 4K smart TV`** |
+| `0ea62687` | `2` | UNKNOWN | matched, but the answer opens with `Unknown` |
+
+Costs: ⌈span/24k⌉ model calls instead of one (147k is 7; a production 436k span
+would be ~19), checkpoint text 31-37k characters instead of at most 13.8k, and the
+calls are serial. Still 147k → ~12k tokens, the ratio lcm-x targets per leaf.
+
+### Corrected — an earlier conclusion of mine
+
+The leaf-chunks experiment that "proved" chunking useless gave every chunk a share
+of ONE total budget and concatenated the results, so each piece was starved and the
+whole was still bounded by one output ceiling. The variable was never "split or
+not"; it was "does each piece own a complete target".
+
+### Fixed — smaller, all found on real runs
+
+- A ceiling the model never reaches: with no `maxTokens` the provider applies its
+  own smaller default and truncates silently. Now `max(4096, 2x target)`, because
+  reasoning is billed against the same number and measured at roughly half of it.
+- The checkpoint follows the SPAN's language, not the instruction's. A Chinese
+  instruction produced Chinese checkpoints for English conversations, and the
+  answering model mirrored it: `三场` for 3, `六月` for June.
+- Facts are typed rows (`subject.predicate = value | kind`) instead of prose. The
+  vocabulary is lcm-x's assertion kinds: a count needs its unit and what it counts,
+  an ordering needs the events kept apart, a preference needs its polarity.
+- The anchor list stays a flat word list. Widening it to hold facts turned it into
+  Chinese prose and destroyed the one property it exists for: a string you can
+  paste into `lcm_search`.
+- An unreachable threshold is a diagnosis, not a failure: when the trigger sits
+  below the non-compactable baseline the engine used to throw on every step.
+
+## 0.6.0 — 2026-11-08 — fitted to dsh 0.2.2-rc.1, and one poison found by fitting it
 ### Fixed — contract defects found by auditing against the installed dsh
 
 Eleven, each with a test that was reverted once to confirm it fails. The one that
