@@ -4,3 +4,7 @@ node_modules/
 bench/.embed-cache*/
 .lcm-vectors/
 .lcm-vectors*/
+
+# throwaway probes
+probe-*.mjs
+*.probe.mjs
