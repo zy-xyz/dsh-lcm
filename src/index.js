@@ -56,6 +56,69 @@ function reservedCompletionTokens(header, defaultMaxTokens) {
 
 // ── shrink-retry wording ───────────────────────────────────────────────────
 
+/**
+ * Level 3 of the escalation ladder: deterministic truncation, no model call.
+ *
+ * lcm-x's fallback rung ("Level 3 (Fallback): Deterministic truncation — no LLM,
+ * guaranteed convergence"). The alternative - and what this package did before -
+ * is to throw SUMMARY_NOT_SHRINKING, which turns "the model wrote too much" into
+ * "the compaction fails": the whole span loses its summary and the failure repeats
+ * on the next step. lcm-x's invariant is the opposite: prefer degraded coverage
+ * over failure.
+ *
+ * The anchor section is emitted FIRST for exactly this reason, so truncation costs
+ * the narrative tail and keeps every pointer the agent needs to drill back in. The
+ * cut lands on a line boundary and the result says it was truncated, so a reader is
+ * never misled about completeness.
+ * @param text - the summary body that overran.
+ * @param limit - token budget it must fit under.
+ * @returns the truncated body, labelled.
+ */
+function truncateToBudget(text, limit) {
+  const full =
+    "\n\n[truncated to fit: the tail of this checkpoint was cut deterministically. The original span is intact in the log — use lcm_search or lcm_expand for anything missing here.]";
+  const terse = "\n[truncated; see lcm_search]";
+  // A note that eats most of the budget defeats the purpose. Fall back to a terse
+  // one, and if even that does not fit, return the plain cut.
+  const note = estimateEntryTokens(full) * 4 <= limit ? full : estimateEntryTokens(terse) * 4 <= limit ? terse : "";
+  const available = Math.max(1, limit - estimateEntryTokens(note));
+  if (estimateEntryTokens(text) <= available) return text + note;
+  const lines = text.split("\n");
+  const kept = [];
+  let used = 0;
+  for (const line of lines) {
+    const cost = estimateEntryTokens(line) + 1;
+    if (used + cost > available) break;
+    kept.push(line);
+    used += cost;
+  }
+  // Never return an empty body: the first line is the section header, which is the
+  // cheapest useful thing to keep, and the bound is still enforced below.
+  if (kept.length === 0) kept.push(lines[0] ?? "");
+  let out = kept.join("\n") + note;
+  // Hard guarantee: the escalation rung exists to converge, so trim characters
+  // until the estimate fits rather than trusting the per-line arithmetic.
+  while (estimateEntryTokens(out) > limit && out.length > 16) out = out.slice(0, Math.max(16, out.length - Math.ceil(out.length / 8)));
+  return out;
+}
+
+/**
+ * Token cost of the fixed header that prefixes every checkpoint body.
+ *
+ * The shrink bound is checked against the assembled ENTRY, not the body, so the
+ * truncation rung has to reserve this. Measured: a 100-token bound with an
+ * unreserved ~30-token header put the entry back over and the escalation stopped
+ * converging.
+ * @param prepared - the priced span snapshot.
+ * @param bodyTokens - current body size (used in the header text).
+ * @returns the header's token cost.
+ */
+function headerTokens(prepared, bodyTokens) {
+  return estimateEntryTokens(
+    `[lcm leaf summary · ${prepared.shadowedSeqs.length} nodes · seqs ${prepared.start}-${prepared.end} · ~${prepared.shadowedTokenCount} → ~${bodyTokens} tokens · anchors below carry (seq N): restore with lcm_expand, or find anything else with lcm_search]\n`
+  );
+}
+
 /** Join one summarizer result's text blocks into the checkpoint body. */
 function summaryBodyOf(result) {
   return result.summary.map((block) => block.text ?? "").join("\n");
@@ -376,18 +439,31 @@ export class LcmCompactionEngine extends CompactionEngine {
       // reported with both numbers. No loop — a model that overruns twice on a
       // restated hard bound is not going to fit on attempt four, and every
       // attempt is a full-price call.
-      result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal, hardShrinkConstraint(tokens, limit));
+      // Level 2 — aggressive: half the budget and a bullet-point shape. lcm-x
+      // calls this the aggressive rung of its three-level escalation
+      // (escalation.py: "Level 2 (Aggressive): LLM bullet-point summary at half
+      // the token budget").
+      const aggressiveBudget = Math.max(128, Math.floor(budget / 2));
+      result = await summarizeLeaf(this.ctx, this.config, prepared, agent, aggressiveBudget, signal, hardShrinkConstraint(tokens, limit));
       signal?.throwIfAborted();
       text = summaryBodyOf(result);
       tokens = estimateEntryTokens(text);
       if (tokens >= limit) {
-        const error = new Error(
-          `lcm: summary body is still not shorter than the span it replaces (${tokens} estimated tokens >= ${limit} allowed after 2 attempts; the second stated a hard bound of ${limit} tokens)`
-        );
-        error.code = "SUMMARY_NOT_SHRINKING";
-        throw error;
+        // Level 3 — deterministic truncation, no model call, guaranteed to
+        // converge. lcm-x: "Level 3 (Fallback): Deterministic truncation — no LLM,
+        // guaranteed convergence", and its invariant is to prefer degraded
+        // coverage over failure. Our previous behaviour threw SUMMARY_NOT_SHRINKING
+        // here, which turned "the model wrote too much" into "the compaction fails"
+        // and repeated on every step. The anchor section is emitted FIRST precisely
+        // so that truncation costs the narrative and keeps the pointers.
+        // The checkpoint header below is prepended to this body, so the body must
+        // leave room for it or the entry lands over the bound again.
+        text = truncateToBudget(text, Math.max(32, limit - headerTokens(prepared, tokens)));
+        tokens = estimateEntryTokens(text);
+        engineDebug(this.config, `summarize escalated to deterministic truncation tokens=${tokens} shadowed=${limit} (degraded coverage, not a failure)`);
+      } else {
+        engineDebug(this.config, `summarize aggressive retry done tokens=${tokens} shadowed=${limit}`);
       }
-      engineDebug(this.config, `summarize shrink retry done tokens=${tokens} shadowed=${limit}`);
     }
     const entries = [
       {

@@ -996,6 +996,71 @@ s6  assistant / s37 user                                                  ← �
 这一轮改的「事件行要带日期和状态」**方向是对的但不够**：它能让 checkpoint 里区分「已发生/已取消/计划中」，把九条干扰压到接近两条；但**它仍然要猜题目问的是哪个窗口**。在 agentic 配置下这条规则价值更大，因为检索拿回原文后，checkpoint 里的事实行能帮模型定位到「三月」这个窗口。
 
 **结论：不再指望 oneshot 追平。** 要做的是把 agentic 那条路做扎实（检索命中率、`lcm_expand` 取原文的粒度），以及保证生产环境默认就是这个形状。
+---
+
+## 34. 复盘：拿 LCM 的六步流水线逐条对，然后改一处
+
+用户指出「再复盘一下 lcm 的设计思路和行为准则再行动」。读了 `lcm-x/docs/architecture.md`，它把设计写成六步流水线，逐条对照如下。
+
+### LCM-X 的六步（原文）
+
+```
+1. Ingest   - persist each message in SQLite with FTS metadata
+2. Compact  - summarize older messages outside the fresh tail into D0 leaf nodes
+3. Condense - merge same-depth nodes into higher-depth summaries
+4. Escalate - shrink oversize summaries from detailed to bullets to deterministic truncate
+5. Assemble - combine system prompt, highest-depth summaries, and fresh tail
+6. Retrieve - use LCM tools to drill into compacted history
+```
+
+外加一条行为准则（写在它的 `AGENTS.md` 不变量里）：**prefer degraded coverage, a safe no-op, explicit warnings, or a tracked repair over destructive recovery**。
+
+### 我们逐条对
+
+| 步 | LCM-X | 我们 | 判定 |
+|---|---|---|---|
+| 1 Ingest | SQLite + FTS，append-only | dsh 的会话日志本身就是 append-only，我们只读它、不删 | ✅ 等价（由宿提供） |
+| 2 Compact | 叶块切 D0 | `leafSpanTokens` 24 000，叶从最老节点起 | ✅ 本轮补上 |
+| 3 Condense | 同深度合并成更高层 | **没有**。我们只是反复压前缀，depth 靠吸收自增，没有同深度合并 | ❌ **仍缺** |
+| 4 Escalate | detailed → bullets → 确定性截断 | 原来是「重试一次然后抛错」 | ❌ → ✅ **本轮修** |
+| 5 Assemble | system + **最高层摘要优先** + 新鲜尾 | 一个 replace 换成一个节点，组装是隐含的 | ⚠️ 部分（受单条替换约束，见 §21） |
+| 6 Retrieve | 13 个工具 | `lcm_search` + `lcm_expand` | ✅ |
+
+### 第 4 步是我这段一直在踩的坑
+
+LCM 的三级阶梯原文：
+
+```
+Level 1 (Normal):    LLM summary preserving details
+Level 2 (Aggressive): LLM bullet-point summary at half the token budget
+Level 3 (Fallback):   Deterministic truncation — no LLM, guaranteed convergence
+```
+
+**我们原来是：超长了 → 重试一次（同预算、加一句硬约束）→ 还超长就抛 `SUMMARY_NOT_SHRINKING`。** 这直接违反了「宁可降级覆盖也不要失败」：一次写超长变成整次压缩失败、整段跨度失去摘要，而且下一步还会再犯。真引擎日志里反复出现的 `summary body is still not shorter…`、`summary truncated at the token cap`、`一起 compaction failed` 都是这一条的后果。
+
+### 改法（已实现）
+
+```
+Level 1  正常生成（目标 budget）
+Level 2  超长 → 重试用一半预算 + 硬约束文案
+Level 3  仍超长 → 确定性截断：从尾部按行切到放得下，不调模型，保证收敛
+```
+
+两处细节是必须的，否则阶梯不收敛：
+
+1. **截断要预留 header 的 token。** 收缩闸比的是**整条 entry**（header + 正文），我第一次没预留，100 token 的界加 30 token 的 header 又超了，等于截断白做。加了 `headerTokens()` 先扣。
+2. **注记要能缩短。** 完整注记约 40 token，在小预算下它自己就吃掉一半；改成「放得下就用完整注记，放不下用 `[truncated; see lcm_search]`，再放不下就不带注记」，最后再加一个**按字符硬收敛**的循环兜底 —— 否则「保证收敛」只是口号。
+
+**为什么截断安全**：锚点节是被刻意排在最前面的（§19 的 0/14 vs 2/14 那组数据），所以从尾部截断**先丢叙述、后丢锚点**。这正是当初把锚点前置的理由，而我之前从没真正用上它。
+
+### 复盘还指出的一个方法论错误
+
+LCM 的立场是「摘要是索引，不是替代品」（`Raw messages remain source truth. Summaries … are derived layers`）。**按这个立场，摘要文本的措辞根本不值得我花那么多轮去调** —— 指针和可检索性才是资产。我在 §29–§33 里反复改摘要指令，方向是偏的；真正缺的是第 3 步（同深度合并）和第 4 步（降级阶梯）。
+
+### 剩下的真实差距
+
+只剩第 3 步：**同深度叶合并成更高层**。现在叶会一直平铺，`deriveDag` 能算出 depth 但没人触发合并。lcm-x 是 `fanin = 4`。这一条要改的是「压缩时优先选同深度的相邻叶来合并」，而不是现在的「从最老节点顺序切」。
+
 
 
 ### 这与 §26「分片无用」的矛盾怎么解释

@@ -126,23 +126,29 @@ test("an over-long summary is re-asked once and the retry succeeds", async () =>
   );
 });
 
-test("a summary that overruns twice throws after exactly two calls, naming both numbers", async () => {
+test("a summary that overruns twice degrades deterministically instead of failing", async () => {
+  // Reversed deliberately. Throwing SUMMARY_NOT_SHRINKING turned "the model wrote
+  // too much" into "the compaction fails": the span lost its summary and the error
+  // repeated every step. lcm-x's ladder ends in deterministic truncation ("no LLM,
+  // guaranteed convergence") because its invariant is to prefer degraded coverage
+  // over failure, and this package puts the anchor list FIRST precisely so a
+  // truncation costs the narrative tail and keeps the pointers.
   const stub = stubLlm([() => withText(OVERSIZE)]);
   const engine = engineWith(stub);
-  const actual = estimateEntryTokens(OVERSIZE);
+  const out = await engine.compile(prepared(), { session: prepared().session, options: {} }, undefined);
+  const body = out.entries.map((entry) => entry.text).join("\n");
 
-  await assert.rejects(
-    engine.compile(prepared(), { session: prepared().session, options: {} }, undefined),
-    (error) => {
-      assert.equal(error.code, "SUMMARY_NOT_SHRINKING");
-      assert.match(error.message, /still not shorter than the span it replaces/);
-      assert.ok(error.message.includes(actual + " estimated tokens"), "the error reports the actual length");
-      assert.ok(error.message.includes(">= " + SHADOWED + " allowed"), "the error reports the upper bound");
-      assert.match(error.message, /after 2 attempts/, "the attempt count is named, so the retry budget is visible");
-      return true;
-    }
-  );
-  assert.equal(stub.calls.length, 2, "no third attempt: the retry is bounded");
+  assert.equal(stub.calls.length, 2, "one normal attempt plus one aggressive retry - both bounded");
+  assert.ok(estimateEntryTokens(body) <= SHADOWED, "the degraded checkpoint still fits the shrink bound");
+  // The note shortens when the bound is tight (this fixture's bound is 100 tokens,
+  // so the terse form is used), but it must always say the body was cut.
+  assert.match(body, /truncated/i, "the result says it was cut, so a reader is not misled");
+  assert.match(body, /lcm_search|lcm_expand/, "and it names the recovery path");
+  // The cut starts from the TOP: the summary's first lines are the anchor section,
+  // so truncation costs the narrative tail. This fixture has no section headers, so
+  // the property to assert is prefix preservation, not a heading match.
+  assert.ok(body.includes("- src/file0.js"), "the first line survives: truncation cuts from the tail");
+  assert.ok(!body.includes("- src/file119.js"), "and the last line is gone");
 });
 
 test("a first attempt that already fits costs one call", async () => {
