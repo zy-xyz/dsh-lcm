@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.5.1 — 2026-11-08 — the anchor rule stops sacrificing the narrative
+
+### Fixed
+
+- **`ANCHOR_RULE` told the model to cut the four narrative sections before the
+  anchor list.** On 20 real questions it complied: one checkpoint was 99.7%
+  anchor list with the other four sections **entirely absent**, another 91.3%.
+  Those four sections are how a resuming agent knows where it is. The rule now
+  requires all four to have content and asks for de-duplication when the anchor
+  list grows. Same question, same target: anchors 6.9% → 36.7%, 目标与约束
+  6.3% → 20.2%, five sections present, output 866 → 2 620 tokens.
+
+### Added
+
+- `describeError()` in `src/debug.js`. Non-Error throws from the provider and the
+  harness rendered as `step compaction failed: [object Object]` in a real run,
+  which names nothing an operator can act on. It extracts a message, reason,
+  code, name or type, then falls back to JSON.
+- The min-span guard now requires **twice** the summary floor. At 1.79:1 an
+  ordinary overshoot (span 918, target 512, summary 932) tripped the shrink
+  guarantee after paying for the call. Two-to-one leaves room for a normal
+  summary.
+
+### Measured (Layer 2, n=20, LongMemEval_S)
+
+| arm | judge | string |
+|---|---|---|
+| `full-context` (ceiling) | 15/20 = 75% | 8/20 = 40% |
+| `basic-oneshot` | 0/19 = 0% | 1/19 = 5% |
+| `lcm-oneshot` | 0/20 = 0% | 0/20 = 0% |
+| **`lcm-agentic`** | **14/20 = 70%** | **11/20 = 55%** |
+
+Compress-only scores zero for **both** backends, so the summary axis is a tie at
+the floor. Retrieval takes this package to 70% — 93% of a ceiling that is itself
+75% because the model answers wrong from full context on 4 of 20. `basic` has no
+equivalent: its checkpoint carries no `seq` pointers and it ships no recall tool.
+
+Three caveats recorded with the numbers: the oneshot zero is a budget-allocation
+defect (now fixed), the agentic string score is depressed by answer-language
+drift, and the judge is more lenient on long answers.
+
 ## 0.5.0 — 2026-11-08 — the summary request carries no completion cap
 
 ### Changed
