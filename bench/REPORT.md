@@ -796,6 +796,65 @@ relations                                            cancels|confirms|contradict
 **3 题由不可答变可答、4 题仍不可答**，n 太小且中途改过两次指令，**不能据此宣称改进**。要判定得把整套指令固定下来、对 15 题跑一次完整的 before/after（`bench/acon-loop.mjs --instruction-module=bench/snapshots/summarize-head.mjs` 就是为此准备的）。
 
 **一条更硬的观察**：`95bcc1c8` 的 gold `10` 在改前的锚点表里就有（单独一行），模型仍答 UNKNOWN；改成类型化行 `user.watched_amateur_comedians = 10 | number` 之后才答对。**同一个值，有没有谓词和类型，决定它可不可答。** 这一条比任何聚合数字都有说服力，且在两种形态上各测过一次。
+---
+
+## 30. 为什么 lcm-x 更好：不是提示词，是「压缩当索引」而不是「压缩当替换」
+
+用户问「如果效果没有 lcm-x 好，就看看它怎么做的」。读了它的 `engine.py` / `compaction.py` / `config.py`，结论是**它的差别不在摘要指令，在架构**。
+
+### 硬证据：它没有「只给摘要」这种模式
+
+`engine.py:10362` `_assemble_context` 的注释就写着组装结构：
+
+```
+[leading anchors: system and, when proven, the sole real user]
+[highest-depth summary nodes first, then lower]
+[fresh tail messages]
+```
+
+也就是说模型每次看到的上下文 = **多层摘要节点（深先浅后）+ 新鲜尾部**，而不是一份压平的摘要。再加上检索工具默认可见 13 个（共 16 个）。**它根本不构造「只有摘要」的配置。**
+
+### 两边的默认参数对照（`config.py`）
+
+| | lcm-x | 本插件 |
+|---|---|---|
+| 触发 | `context_threshold = 0.75` | `thresholdRatio = 0.8`（与 basic 相同） |
+| 叶块大小 | **`leaf_chunk_tokens = 24 000`**（再被 0.4×ctx 夹住） | **整段可压前缀一次压完** |
+| 叶目标 | **2 000 token** | 跨度的 12%（上限 16 384） |
+| 合并 | **`fanin = 4`，`incremental_max_depth = 3`** | 无显式 fanin；吸收旧 checkpoint 时 depth+1 |
+| 新鲜尾部 | `fresh_tail_count = 24` / 24 000 token | 保留尾部按 `retainRatio` |
+| 上下文来源 | **多层摘要 + 尾 + 检索** | checkpoint + 尾（+ agentic 臂才检索） |
+
+一句话（我自己上一轮的笔记里就有这句，这次才真的用上）：**标准压缩把压缩当替换，LCM 把压缩当索引化** —— 摘要降级为「缩小搜索范围」的指针，不是「替代原文」的唯一副本。
+
+### 这直接解释了我们那张表
+
+| 配置 | 对应 lcm-x 的什么 | 我们测到 |
+|---|---|---|
+| `lcm-agentic` | **lcm-x 的常态**（摘要 + 检索） | **70%**（天花板 75%） |
+| `lcm-oneshot` | **lcm-x 没有这个模式** | 0% |
+| `basic-oneshot` | 同上 | 0% |
+
+所以「不如 lcm-x」这个判断**在可比的配置上不成立** —— 我们的 agentic 臂就是它的常态形状，70% 已经贴着天花板。**oneshot 那个 0% 没有 lcm-x 的对应物可被比下去。**
+
+### 但它确实指出了一个真实的架构差距
+
+我们每次压缩产出**一个** checkpoint 节点（`compile()` 返回 `entries: [{ seq, text, kind: "checkpoint" }]`），lcm-x 产出**多个**、按 depth 组织、`fanin=4` 合并。我们的 `deriveDag` 能**推导** depth，但**从来没生产过多个叶**。
+
+这是下一步该做的事，而且和之前被否掉的「分片摘要」不是同一件事：那次是「切块、各自压、拼成一份」，拼完还是一份，检索目标还是一个；正确做法是「切块、各自压、**各自成为一个 surface 节点**」，这样检索有多个目标、DAG 有东西可合并。**我之前的实验测错了对象，所以结论「分片无用」只对「拼成一份」那种做法成立。**
+
+### 指令层面的改动：保留有证据的，停止没有证据的调参
+
+这一轮在 oneshot 指令上改了很多，其中**有证据支持的只有三条**，其余都是没测出差异的调参：
+
+1. **值必须原文语言、逐字**（`76d63226`：译成中文时错，逐字 `55-inch` 时对）
+2. **事实要带谓词和类型**（`95bcc1c8`：`10` 单独一行时答不出，`user.watched_amateur_comedians = 10 | number` 才答得出）
+3. **给 provider 一个够高的上限**（无上限时被 provider 默认值截断：7 734 字符只剩锚点节；显式 32 768 时 8 817 字符六节齐全）
+
+最新的 15 题可答性（三处修复都在）：**2/15**，改前 0/15。**但其中 5 题仍然只写出一个分节**（截断或模型提前收尾），所以这个 2/15 是下界，不是这套指令的真实上限。
+
+**停止调 oneshot 指令**：它不是我们被比较的配置，继续调它是在优化一个 lcm-x 不参与的项目。
+
 
 （原注：gold 缺失是另一个问题）
 ---
