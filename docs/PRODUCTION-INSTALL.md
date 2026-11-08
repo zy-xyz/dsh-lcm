@@ -44,6 +44,22 @@ Expected: `compaction-basic` carries `disabled: true`, and the other three are
 present. If `compaction-basic` is not disabled, stop — booting would mount two
 engines.
 
+### The peer-dependency warning is expected
+
+`pnpm` prints a `[WARN]` that the linked package lists `@deepseek-ai/dsh-*` as
+peer dependencies which "will not resolve the peer dependencies from the target
+node_modules". That is normal here: dsh supplies those modules at runtime, not from
+the profile's own tree. Verified on a scratch profile — `dsh plugin add` links it,
+the profile boots, and the engine constructs:
+
+```
+[dsh-lcm] engine: constructed rev=lcm-summary-1 debugLog=… summaryRatio=0.12 cap=16384
+OK
+```
+
+Do not "fix" it by switching to the `file:` protocol, which the warning suggests; a
+copied tree stops tracking the working copy.
+
 ## After the restart, in order
 
 1. **The engine loaded.** `~/.dsh/logs` or the profile's stdout should not contain
