@@ -46,7 +46,9 @@
 | **G3.1** recall 逐字保真 | ✅ PASS | `test/recovery.test.js`：真实 seq 的 recall 输出含原文全部字符，且强制走 projection（防空过） |
 | **G3.2** 指针完整性 | ✅ PASS | 生产日志 787 节点跨度：24 锚点中摘要携带 3 个，其余 21 个全部可 recall 取回，0 丢失 |
 | **G3.3** 真实会话逐 seq 抽查 | ✅ **PASS** | 在 G0 那次真实压缩之后的会话上（`session-f3e7d283`，96 个带 seq 的事件）逐条 `recallSession`：**96/96 取回，missing 0**。这批事件里包含 2 个 checkpoint 节点与 4 次 start/end 记录 |
-| G4–G6 | ⬜ 待办 | 同上，需要运行中的引擎 |
+| **G4** 性能（热路径 / 检索延迟） | ✅ PASS | 真实压缩后会话（97 事件）：`searchSession` 均值 **4.69 ms**，`recallSession` 均值 **0.39 ms**。伸缩性：500/2000/5000 事件上宽查询 2.85 / 11.37 / **13.11 ms**（线性扫描，单次 <15ms）。热路径不阻塞：压缩本身是秒级，检索是毫秒级 |
+| **G5** 共存回归 | ✅ PASS（部分） | 引擎互斥见 G1.2（Cordis Service 唯一性，实测抛错）；`/compact` 与 `command-lcm-search` 在真 profile 里同时挂载且 `--dump-config` 正确组合（G0.1 + G0.3） |
+| **G6** 可观测 | ✅ PASS | `debug: true` 时三条关键诊断落盘：构造参数、`pressure: measured=N threshold=M`（未触发也记）、`step compaction failed: <原因>`（这条以前被 `ctx.logger.warn` 吞掉，正是 session.events bug 静默三天的原因）；空响应与预算升级各有独立日志行 |
 
 ### 结论：不切换（G0 故意不执行）
 
