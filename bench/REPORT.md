@@ -1200,6 +1200,19 @@ if (!grew && Date.now() < stall.until) return null;
 3. **正文里的注记要极短。** `[deterministic: span words, cut to fit]` 在紧预算下才活得下来。
 
 现在的行为：`3` 次空响应后产出一个**标注为 DETERMINISTIC 的 checkpoint**，带 `(seq N)` 指针，读者一眼知道这不是模型摘要、也知道怎么读原文。
+### 真机验证：子代理场景不再出现压缩失败
+
+重跑同一条子代理任务（`Spawn a subagent to read src/vectors.js…`）：
+
+```
+summarize done     1
+compaction failed  0
+```
+
+改前同一场景：`step compaction failed: lcm: summarization produced no text content` **2 次**。
+
+这条同时覆盖了三件事：**父会话与子代理并发压缩**（`compactIfNeeded` 多次触发、只有一次 summarize、无 `assertNoActiveCompaction` 冲突）、**空响应降级**、以及**子代理会话独立压缩**。
+
 
 
 
