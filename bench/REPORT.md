@@ -1142,6 +1142,43 @@ pressure declined: 14372 >= 13616 but no range passed the guards
 
 探针的价值在这里体现得很清楚：**用真实会话 + 真 meter + 真选择器跑一次，两分钟就能把「疑似 bug」变成「预期行为」**，比读代码猜快得多。以后再遇到「应该有动作却没有」，先做这个探针。
 
+### 改法：不是加日志，是加「保持」（照 lcm-x 的 `_no_progress_hold`）
+
+用户指出只加一行日志是治标。查了 lcm-x 的实现：
+
+```python
+# engine.py:2204
+def _no_progress_hold_active(self, *, managed_scope=False):
+    """#651: never latches; it ends at its time (a stored leaf clears it in compress())."""
+    if time.monotonic() < self._no_progress_hold[0]:
+        return True
+```
+
+```python
+# engine.py:2527 — the gate consults it BEFORE doing any work
+return tokens >= self.threshold_tokens and not self._sweep_budget_hold_applies(tokens, managed_scope=True)
+```
+
+配套还有 `_zero_leaf_streaks`（#1162：连续「超阈值但没存下叶」的计数）。**四个要点**：① 保持是**时间截止**的，不会永久闩死；② **存下一个叶就清除**；③ 在**做任何工作之前**判定，所以不会每步重新计价；④ 手动/紧急路径豁免（`_sweep_budget_hold_applies` 明确不放行超过 survival ceiling 的调用）。
+
+我们原来是**每一步都把整条评估重跑一遍**：meter 测量 → 模型信息查询 → 区间选择 → 拒绝 → 记日志，然后下一步再来一遍。**真正的问题在于：一个已经有答案的问题被每一步重新问了一次，仅加日志并不能解决。**
+
+### 现在的实现
+
+```js
+const stall = this.stallBySession.get(session.id);
+const grew = measurement.totalTokens >= stall.tokens + this.config.leafSpanTokens;
+if (!grew && Date.now() < stall.until) return null;
+```
+
+- **arm**：区间选择返回 null 时记 `{tokens, until: now + stallCooldownMs}`
+- **release**：存下一个 checkpoint、**长了另一整片叶那么多新内容**、或超过 `stallCooldownMs`（默认 60 s）
+- **exempt**：`requireBelowThreshold` 为真时永不保持 —— 那是手动 `/compact` 和模型切换；操作员要的是答案，「没东西可压」就是答案
+- `stallCooldownMs: 0` 完全关闭保持
+
+**为什么用「长了一片叶」而不是「长了任意内容」**：叶块大小正是「多出来一块值得单独压的东西」的最小单位。任意增长会让保持形同虚设，纯时间截止又可能让本该压的东西拖到 60 秒后。这个阈值和 `leafSpanTokens` 同源，不是新拍的数字。
+
+
 
 
 

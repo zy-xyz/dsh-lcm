@@ -209,6 +209,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     summaryFloorTokens: maxTokensSchema,
     leafSpanTokens: maxTokensSchema,
     condensationFanin: maxTokensSchema,
+    stallCooldownMs: maxTokensSchema,
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
     compactionRetries: compactionRetriesSchema,
@@ -252,6 +253,9 @@ export class LcmCompactionEngine extends CompactionEngine {
     engineDebug(this.config, `constructed rev=${COMPILER_REV} debugLog=${this.config.debugLogPath} summaryRatio=${this.config.summaryRatio} cap=${this.config.checkpointCap}`);
     this._autoDisposer = null;
     this._autoActive = false;
+    // Per-session stall hold: { tokens, until }. See compactPressure for why a hold
+    // exists at all rather than re-deciding every step.
+    this.stallBySession = new Map();
     this._syncAuto();
   }
   /** Register or dispose the automatic-compaction listeners with the `auto` flag. */
@@ -583,7 +587,28 @@ export class LcmCompactionEngine extends CompactionEngine {
       prune.pruneSession(agent.session);
       measurement = meter.measure(agent.session, header);
     }
-    if (measurement.totalTokens < spec.thresholdTokens) return null;
+    if (measurement.totalTokens < spec.thresholdTokens) {
+      // Below the gate: whatever stalled is irrelevant now, and the next crossing
+      // must be evaluated fresh.
+      this.stallBySession.delete(agent.session.id);
+      return null;
+    }
+    // lcm-x holds a stalled session instead of re-deciding it on every step:
+    // `_no_progress_hold` is a monotonic deadline, and while it is armed
+    // `should_compress` returns False before any work happens ("never latches; it
+    // ends at its time, a stored leaf clears it"). We simply re-ran the whole
+    // evaluation every step and logged the same decline each time - which is why
+    // "over threshold with nothing worth compacting" looked like a hang.
+    //
+    // The hold is released by any of three real changes: a stored checkpoint, the
+    // session growing by another leaf's worth (new material to compact), or the
+    // deadline expiring.
+    const stall = this.stallBySession.get(agent.session.id);
+    if (stall !== undefined && !requireBelowThreshold) {
+      const grew = measurement.totalTokens >= stall.tokens + this.config.leafSpanTokens;
+      if (!grew && Date.now() < stall.until) return null;
+      this.stallBySession.delete(agent.session.id);
+    }
     let result = null;
     for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
       // The span floor is what stops the "span=1 seqs=24-24 shadowedTokens=428
@@ -599,8 +624,17 @@ export class LcmCompactionEngine extends CompactionEngine {
         // session stays over its threshold and nothing happens, correctly.
         engineDebug(
           this.config,
-          `pressure declined: ${measurement.totalTokens} >= ${spec.thresholdTokens} but no range passed the guards (retain=${spec.retainTokens} floor=${this.config.summaryFloorTokens} leaf=${this.config.leafSpanTokens} fanin=${this.config.condensationFanin})`
+          `pressure stalled: ${measurement.totalTokens} >= ${spec.thresholdTokens} but no range passed the guards (retain=${spec.retainTokens} floor=${this.config.summaryFloorTokens} leaf=${this.config.leafSpanTokens} fanin=${this.config.condensationFanin}); holding until a stored checkpoint, +${this.config.leafSpanTokens} tokens, or ${this.config.stallCooldownMs}ms`
         );
+        // Arm the hold so the next steps do not re-decide the same question. A
+        // manual request (requireBelowThreshold) is never held: the operator asked
+        // for an answer, and "nothing to compact" is that answer.
+        if (!requireBelowThreshold) {
+          this.stallBySession.set(agent.session.id, {
+            tokens: measurement.totalTokens,
+            until: Date.now() + this.config.stallCooldownMs
+          });
+        }
         // A step-boundary attempt that cannot make progress is a no-op; a model
         // switch that cannot is a refusal, because admitting the new model would
         // send an over-threshold request.
@@ -610,6 +644,10 @@ export class LcmCompactionEngine extends CompactionEngine {
         break;
       }
       result = await this.compactRegion(range.start, range.end, agent, signal);
+      // A stored checkpoint is the one unambiguous progress signal, and lcm-x clears
+      // its hold on exactly that. Anything that reaches here has a new node on the
+      // surface, so the session is no longer stalled.
+      this.stallBySession.delete(agent.session.id);
       measurement = meter.measure(agent.session, header);
       if (measurement.totalTokens < spec.thresholdTokens) return result;
     }

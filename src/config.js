@@ -70,6 +70,17 @@ const DEFAULT_LEAF_SPAN_TOKENS = 24000;
  */
 const DEFAULT_CONDENSATION_FANIN = 4;
 /**
+ * How long a stalled session stays held after a pass found nothing worth compacting.
+ *
+ * Borrowed from lcm-x's `_no_progress_hold`: a monotonic deadline armed when a
+ * pass makes no progress, checked before any work happens, cleared by a stored
+ * leaf. Re-deciding the same unanswerable question on every step produced the same
+ * decline line each time and made "nothing to compact" indistinguishable from a
+ * hang. Sixty seconds is long enough that a stalled session stops being re-priced
+ * on every step, short enough that it resumes on its own.
+ */
+const DEFAULT_STALL_COOLDOWN_MS = 60000;
+/**
  * Ceiling on one summary's TARGET length.
  *
  * Not a request cap and not a post-hoc gate: the summarizer sends no
@@ -127,6 +138,7 @@ const LCM_KEYS = [
   "checkpointCap",
   "leafSpanTokens",
   "condensationFanin",
+  "stallCooldownMs",
   "anchorPointers",
   "emptySummaryRetries",
   "debug",
@@ -229,6 +241,7 @@ export function resolveConfig(config = {}) {
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
     leafSpanTokens: config.leafSpanTokens ?? DEFAULT_LEAF_SPAN_TOKENS,
     condensationFanin: config.condensationFanin ?? DEFAULT_CONDENSATION_FANIN,
+    stallCooldownMs: config.stallCooldownMs ?? DEFAULT_STALL_COOLDOWN_MS,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
     debug,
