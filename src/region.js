@@ -69,9 +69,11 @@ function systemHead(session, headSeq) {
  * @param retainTokens - minimum recent tail budget retained verbatim.
  * @param minTokens - floor below which a selected span is not worth a summary
  *   call; 0 (default) disables the guard.
+ * @param maxSpanTokens - ceiling on the selected span; 0 (default) keeps the
+ *   whole compactable prefix.
  * @returns the inclusive positional seq range to compact, or `null`.
  */
-export function selectCompactableRange(session, measurement, retainTokens, minTokens = 0) {
+export function selectCompactableRange(session, measurement, retainTokens, minTokens = 0, maxSpanTokens = 0) {
   const pricedNodes = measurement.nodes;
   if (pricedNodes.length === 0) return null;
   const surfaceNodes = session.surface.nodes;
@@ -95,6 +97,29 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
     keepFromIdx -= 1;
   }
   if (keepFromIdx <= firstIdx) return null;
+  if (maxSpanTokens > 0) {
+    // Cap the span so each compaction produces ONE leaf over a bounded stretch,
+    // starting from the OLDEST node. Borrowed from lcm-x: it condenses in leaf
+    // chunks of leaf_chunk_tokens (24 000) with a ~2 000-token target each, and
+    // keeps every leaf, assembling several of them per request. Compacting the
+    // whole compactable prefix instead produces a single ever-deeper node - there
+    // is only ever one checkpoint on the surface, so deriveDag has depth but no
+    // breadth, and the summary of a 400k-token span is asked to carry everything.
+    // A bounded leaf also keeps the summariser prompt small, which matters because
+    // the failure mode observed on real runs was the provider truncating a large
+    // response before the sections were finished.
+    let span = 0;
+    let endIdx = firstIdx;
+    for (let index = firstIdx; index < keepFromIdx; index += 1) {
+      span += pricedNodes[index].tokens;
+      endIdx = index;
+      if (span >= maxSpanTokens) break;
+    }
+    // Never end the leaf mid-step: walk the boundary back until it is balanced.
+    while (endIdx > firstIdx && !toolPairingBalancedAfter(session, surfaceNodes[endIdx])) endIdx -= 1;
+    if (endIdx < firstIdx) return null;
+    keepFromIdx = endIdx + 1;
+  }
   if (minTokens > 0) {
     // The justified rule is arithmetic, not shape. Two thresholds, both from the
     // same fact: the summary target is clamped UP to summaryFloorTokens, so a

@@ -50,6 +50,17 @@ const DEFAULT_SUMMARY_RATIO = 0.12;
 /** Lower bound for one summary, so a small span still yields a usable note. */
 const DEFAULT_SUMMARY_FLOOR_TOKENS = 512;
 /**
+ * Ceiling on one compaction's span, in tokens.
+ *
+ * Borrowed from lcm-x, which condenses in leaf chunks of `leaf_chunk_tokens`
+ * (24 000) with a ~2 000-token target each and keeps every leaf. Compacting the
+ * whole compactable prefix instead yields one ever-deeper checkpoint: the surface
+ * never holds more than one, so the DAG has depth and no breadth, and a 400k-token
+ * span is summarised in a single pass whose response the provider may truncate
+ * before the sections are done. 24 000 also keeps each summariser prompt small.
+ */
+const DEFAULT_LEAF_SPAN_TOKENS = 24000;
+/**
  * Ceiling on one summary's TARGET length.
  *
  * Not a request cap and not a post-hoc gate: the summarizer sends no
@@ -105,6 +116,7 @@ const LCM_KEYS = [
   "summaryRatio",
   "summaryFloorTokens",
   "checkpointCap",
+  "leafSpanTokens",
   "anchorPointers",
   "emptySummaryRetries",
   "debug",
@@ -205,6 +217,7 @@ export function resolveConfig(config = {}) {
     summaryRatio: config.summaryRatio ?? DEFAULT_SUMMARY_RATIO,
     summaryFloorTokens: config.summaryFloorTokens ?? DEFAULT_SUMMARY_FLOOR_TOKENS,
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
+    leafSpanTokens: config.leafSpanTokens ?? DEFAULT_LEAF_SPAN_TOKENS,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
     debug,
@@ -378,6 +391,7 @@ function validatePolicy(config, name) {
   validateSummarizationPair(config, name);
   if (config.checkpointCap !== undefined) assertPositiveInteger(`${name}.checkpointCap`, config.checkpointCap);
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
+  if (config.leafSpanTokens !== undefined) assertPositiveInteger(`${name}.leafSpanTokens`, config.leafSpanTokens);
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);

@@ -144,6 +144,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     checkpointCap: checkpointCapSchema,
     summaryRatio: z.number(),
     summaryFloorTokens: maxTokensSchema,
+    leafSpanTokens: maxTokensSchema,
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
     compactionRetries: compactionRetriesSchema,
@@ -453,7 +454,7 @@ export class LcmCompactionEngine extends CompactionEngine {
         // "not worth a summary call" floor applies: a span the summary budget
         // could never undercut would burn one model call and then fail the shrink
         // guarantee, which is strictly worse than preserving the original error.
-        const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens);
+        const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens, this.config.leafSpanTokens);
         if (range === null) return null;
         return this.compactRegion(range.start, range.end, agent, signal);
       }
@@ -512,7 +513,7 @@ export class LcmCompactionEngine extends CompactionEngine {
       // budget=512" attempt: at 428 tokens the resolved budget is clamped to
       // summaryFloorTokens (512), so the checkpoint could never be smaller and
       // the call was guaranteed to fail after paying for it.
-      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens);
+      const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens, this.config.leafSpanTokens);
       if (range === null) {
         // A step-boundary attempt that cannot make progress is a no-op; a model
         // switch that cannot is a refusal, because admitting the new model would
@@ -535,7 +536,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     // 512 tokens under a ~9k baseline, and the engine retried every single step.
     // Same floor the loop above uses: without it this probe reports the tiny
     // range the loop just refused as "still compactable" and the error survives.
-    const remaining = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens);
+    const remaining = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens, this.config.leafSpanTokens);
     if (remaining === null) {
       engineDebug(
         this.config,
