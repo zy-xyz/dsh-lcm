@@ -165,7 +165,14 @@ test("buildInstruction states the budget and an enumerated anchor section", () =
   assert.match(text, /## 逐字锚点/);
   assert.match(text, /每行一条，原样抄写/);
   assert.match(text, /只要出现过就列出来/);
-  assert.match(text, /预算不够时先压后面四节/);
+  // The old wording told the model to cut the four narrative sections first, and
+  // on 20 real questions it obeyed: one checkpoint was 99.7% anchor list with the
+  // other four sections absent. Those sections are what a resuming agent reads to
+  // know where it is, so the instruction now protects them and asks for
+  // de-duplication instead of section removal.
+  assert.match(text, /后面四节\*\*必须都有内容\*\*/);
+  assert.match(text, /合并重复/);
+  assert.doesNotMatch(text, /先压后面四节/);
   // Anchors come FIRST, and no line of the instruction may call them last: that
   // contradiction survived a skeleton reorder once and cost nothing but confusion.
   assert.match(text, /第一节「逐字锚点」/);

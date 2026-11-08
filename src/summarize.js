@@ -56,7 +56,14 @@ export const SUMMARY_SKELETON = [
  */
 const ANCHOR_RULE = [
   "第一节「逐字锚点」不是散文，是一张清单：把这整段里出现过的所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值，**每行一条，原样抄写**。",
-  "不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。这一节宁长勿短；预算不够时先压后面四节，不要压这一节。"
+  "不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。",
+  // Measured on 20 LongMemEval questions: with the old wording ("prefer long, cut
+  // the later sections first") the anchor list reached 91% and 99.7% of one
+  // checkpoint, and in the 99.7% case the other four sections were ABSENT. Those
+  // four sections are what a resuming agent reads to know where it is, so the
+  // instruction now protects them and asks for grouping instead of dropping.
+  "后面四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。",
+  "如果锚点太多，**合并重复**（同一个路径反复出现只写一次），而不是删小节、也不是删掉锚点。"
 ].join("");
 
 /**
