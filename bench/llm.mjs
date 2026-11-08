@@ -15,6 +15,8 @@
  * @module bench/llm
  */
 import fs from "node:fs";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import os from "node:os";
 import path from "node:path";
 
@@ -51,23 +53,42 @@ export async function complete(options) {
   const baseUrl = options.baseUrl ?? process.env.OMNIROUTE_BASE_URL ?? DEFAULT_BASE_URL;
   const model = options.model ?? DEFAULT_MODEL;
   const timeoutMs = options.timeoutMs ?? 180_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const started = Date.now();
-  try {
-    const response = await fetch(baseUrl.replace(/\/$/, "") + "/chat/completions", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer " + key },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: options.prompt }],
-        max_tokens: options.maxTokens,
-        temperature: options.temperature ?? 0
-      }),
-      signal: controller.signal
+  {
+    // node:http, not fetch. A 150k-token prompt can take minutes before the first
+    // response byte, and undici applies its own 300s headers timeout that no
+    // AbortController can extend - measured as UND_ERR_HEADERS_TIMEOUT aborting
+    // calls this harness had already waited minutes for. node:http has a socket
+    // timeout the caller owns.
+    const payload = JSON.stringify({
+      model,
+      messages: [{ role: "user", content: options.prompt }],
+      max_tokens: options.maxTokens,
+      temperature: options.temperature ?? 0
     });
-    const body = await response.text();
-    if (!response.ok) throw new Error("gateway " + response.status + ": " + body.slice(0, 300));
+    const body = await new Promise((resolve, reject) => {
+      const url = new URL(baseUrl.replace(/\/$/, "") + "/chat/completions");
+      const request = (url.protocol === "https:" ? httpsRequest : httpRequest)({
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer " + key, "content-length": Buffer.byteLength(payload) },
+        timeout: timeoutMs
+      }, (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          if (response.statusCode !== undefined && response.statusCode >= 400) reject(new Error("gateway " + response.statusCode + ": " + text.slice(0, 300)));
+          else resolve(text);
+        });
+      });
+      request.on("timeout", () => request.destroy(new Error("gateway timeout after " + timeoutMs + "ms")));
+      request.on("error", reject);
+      request.write(payload);
+      request.end();
+    });
     const parsed = JSON.parse(body);
     const usage = parsed.usage ?? {};
     // Hidden reasoning is billed inside completion_tokens against the same
@@ -85,8 +106,6 @@ export async function complete(options) {
       finishReason: parsed.choices?.[0]?.finish_reason ?? "unknown",
       elapsedMs: Date.now() - started
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
