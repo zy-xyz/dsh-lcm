@@ -36,7 +36,7 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 102 tests, identical defaults and budget math |
+| configuration is a drop-in superset of basic | **verified** — 152 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
 | **a dropped fact stays recoverable** | **verified on production data** — see below |
 | **the summary keeps more exact literals** | **verified** — 2 corpora, same instrument: **7/14 vs 2/14**, **15/24 vs 4/24** |
@@ -79,7 +79,7 @@ from the model's reach.
 | | `dsh-compaction-basic` | `dsh-compaction-instant` | **`dsh-lcm`** |
 |---|---|---|---|
 | summarizer | LLM | deterministic compiler | **LLM** |
-| summary shape | free-form prose | verbatim excerpts | **4 narrative sections + an enumerated anchor list** |
+| summary shape | free-form prose | verbatim excerpts | **5 narrative sections + an enumerated anchor list** |
 | original text after compaction | log only, no model-side path | `(seq N)` + recall tool | **`(seq N)` + `lcm_expand`** |
 | checkpoint self-check | `framed < shadowed` | `framed < shadowed` | `framed < shadowed` |
 | summary-DAG depth | 1 | 1 | **derived from the log, unbounded** |

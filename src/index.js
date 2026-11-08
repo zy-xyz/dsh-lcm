@@ -189,7 +189,7 @@ function hardShrinkConstraint(writtenTokens, limitTokens) {
     `HARD CONSTRAINT — the previous attempt was rejected: it produced a summary LONGER than the span it replaced (${writtenTokens} estimated tokens against ${limitTokens}).`,
     `The summary body MUST be shorter than ${limitTokens} tokens. That is a hard upper bound, not a target.`,
     `Cut narrative prose, restated tool output, and repeated explanation. Do NOT shorten the "${anchorSection}" list to save room — merge duplicate anchors instead, and keep every anchor you listed.`,
-    `All four state sections (${stateHeadings.join(" / ")}) must still carry content: shorten their sentences, never drop or empty a section.`
+    `Every state section below (${stateHeadings.join(" / ")}) must still carry content: shorten their sentences, never drop or empty a section.`
   ].join("\n");
 }
 
@@ -425,11 +425,12 @@ export class LcmCompactionEngine extends CompactionEngine {
   /**
    * Resolve the TARGET length for one LLM leaf summary.
    *
-   * This is a number written into the instruction ("aim for roughly N tokens"),
-   * not a request cap: `summarizeLeaf` sends no `maxTokens`, so the provider's
-   * own default ceiling applies. The name keeps its historical spelling because
-   * it is also the config key it delegates to (`maxTokens`), which still bounds
-   * the target.
+   * This is the number written into the instruction ("aim for roughly N tokens").
+   * It is NOT the request ceiling: `summarizeLeaf` sends `max(4096, 2 x target)`,
+   * because leaving the ceiling unset handed control to the provider's own smaller
+   * default and responses were cut before the sections finished. The name keeps its
+   * historical spelling because it is also the config key it delegates to
+   * (`maxTokens`), which still sets the target.
    * @param shadowedTokenCount - tokens in the span being replaced.
    * @returns the summary target length (`summaryRatio` of the span, clamped).
    */

@@ -21,8 +21,9 @@
  *   targetTokens = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
  *
  * "Target" is literal: this number is written into the summarizer instruction
- * ("aim for roughly N tokens") and is NOT sent as the request's `maxTokens`.
- * Nothing truncates the model at it — see `summarizeLeaf`.
+ * ("aim for roughly N tokens"). It is not the request ceiling either — that is
+ * `max(4096, 2 x target)`, set in `summarizeLeaf` so the provider's own smaller
+ * default cannot cut the response short.
  *
  * @module dsh-lcm/config
  */
@@ -347,10 +348,10 @@ export function resolveCompactSpec(policy, contextWindow, reservedCompletionToke
  * set `maxTokens: 4096` still gets 4096 as the number the model is asked to aim
  * for, instead of silently inheriting the larger `checkpointCap`.
  *
- * It is a HINT, not a cap. `summarizeLeaf` sends no `maxTokens` to the provider
- * (a reasoning-first backend spends a summary-sized completion budget on hidden
- * reasoning and returns zero text), so a longer answer is accepted rather than
- * truncated.
+ * It is the target, not the ceiling. The request ceiling is `max(4096, 2 x this)`:
+ * a reasoning-first backend spends part of any ceiling on hidden reasoning, so a
+ * ceiling equal to the target left the summary half-written, and no ceiling at all
+ * was worse — the provider's default is smaller and silent.
  *
  * @param config - resolved configuration.
  * @param shadowedTokenCount - tokens in the span being replaced.

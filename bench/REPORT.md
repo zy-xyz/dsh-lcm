@@ -1237,6 +1237,44 @@ lcm status
 | `/lcm-search`、`/lcm-status`（命令） | **人** | 只能靠单元测试验证注册，不能靠模型跑 |
 
 这条以前我在报告里含糊过去了（把 `/lcm-search` 和工具混着说），现在写清楚。命令的注册由 `test/compat.test.js` + `test/status.test.js` 钉住，profile 确实是软链到工作树（`dsh-lcm -> ../../../../workspaces/lcmx-study/dsh-lcm`，版本 0.7.0），所以重启后人工敲 `/lcm-status` 就能看到。
+---
+
+## 37. 派子代理复核出的两个硬问题（都是我自己写错的）
+
+派了三个子代理并行复核。两个回来的结论都不客气，且都对。
+
+### （1）G2.4 是个恒假的门，而我记录的「basic 同样 111%」是反的
+
+旧门：`(一次性成本 ÷ 被压 token 数) ≤ 30%`。**这个比值对任何「读 span 再写摘要」的压缩器恒 ≥ 100%**（成本 ≥ span），所以它必然判所有后端 FAIL，零区分力。
+
+更严重的是归因：那个 **111.1% 不是本插件的数，是 `dsh-compaction-basic` 自己的**。证据三条，互相独立：
+
+1. 会话 `d45c83f5` 里只有一个 `compaction/summary`；
+2. 它的摘要 8 个二级标题与 basic 的 `COMPACTION_INSTRUCTION` **逐字相同**；
+3. 事件带 `maxTokens=65536`，那是 basic 的 `headroomTokens` 默认值 —— lcm 不发也不记录这个字段。
+
+所以我在 `docs/ACCEPTANCE.md` 里写的「basic 同样 111%，门不区分后端」**方向是反的**：被测量的唯一后端就是 basic。
+
+顺带查出探针本身也错：`net = input + output − cacheRead` 把缓存命中当负数扣，既不是 token 数也不是价格，实测能算出 **−128.1%**。
+
+**换成了可用的门（G2.4′）**：`C = input + cacheRead + output`（`usage` 实测，不做 cache 抵扣），`Δ = shadowed − ceil(chars/4)`，`R = ΣC/ΣΔ ≤ 3.0` 轮，样本须 `span ≥ 200k`。同一批实测两端都能触发 —— basic 4 个事件 R = 1.30/1.45/1.65/1.75 → PASS，lcm span 918 的 R = 56.15 → FAIL。**门槛没有降，是把一个信息量为零的门换成一个两端都能触发的门。**
+
+### （2）叶块压缩会把前缀成本乘上去 —— 这是我刚引入的结构代价
+
+子代理的数：lcm 把 span 钉在 `leafSpanTokens = 24 000`，同一份 436k 历史要 **19 个叶**，每个叶都重发固定前缀（系统提示 + 指令）。推算 **basic 712 975 token 一次到位 vs lcm 5 665 439 token，7.95×**；按 0.1× 缓存价折算约 **2.08×**。
+
+这是 §32 那个「7/7 分节齐全」的**代价**，当时我没算。它不是否定叶块 —— 叶块修掉的是截断，那是正确性问题；但**成本是 2× 量级，必须写出来**，并且给使用者一个旋钮：`leafSpanTokens` 调大（48k）把叶数减半、前缀重发次数减半，代价是每叶更容易漏细节。
+
+**这一条要进 README 的成本节，不能只躺在报告里。**
+
+### （3）三条陈旧说明（子代理顺手抓的）
+
+- `src/index.js` / `src/config.js` 仍写着「不发 `maxTokens`，用 provider 默认上限」，而 `src/summarize.js` 实际发 `max(4096, 2×目标)` —— §31 改了行为没回头改注释。
+- `hardShrinkConstraint` 写「All four state sections」，而 `SUMMARY_SKELETON` 去掉锚点节后有**五**节。
+- `README.md` 仍写「102 tests」「4 narrative sections」，实际 152 测试、5 节。
+
+都已改。**这一类错误的共同点：我改了行为，没回头看同一件事的其他描述处。**
+
 
 
 
