@@ -88,7 +88,9 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
   ) {
     throw new Error("compaction: token-meter surface does not match the current session surface");
   }
-  const firstIdx = systemHead(session, surfaceNodes[0]) === undefined ? 0 : 1;
+  // `let` because the condensation branch may advance it past the checkpoints
+  // that are already on the surface (see the skip below).
+  let firstIdx = systemHead(session, surfaceNodes[0]) === undefined ? 0 : 1;
   let accumulated = 0;
   let keepFromIdx = pricedNodes.length;
   for (let index = pricedNodes.length - 1; index >= 0; index -= 1) {
@@ -126,6 +128,26 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
       while (endIdx > firstIdx && !toolPairingBalancedAfter(session, surfaceNodes[endIdx])) endIdx -= 1;
       if (endIdx >= firstIdx) return { start: surfaceNodes[firstIdx], end: surfaceNodes[endIdx] };
     }
+    // Skip the checkpoints that are already there. This is the piece that made the
+    // whole condensation path unreachable, and it took a replay to see it.
+    //
+    // Every leaf used to start at the OLDEST surface node, and the oldest node is
+    // the previous checkpoint - so each compaction re-absorbed its predecessor: the
+    // surface held exactly ONE checkpoint forever, depth grew, and no two same-depth
+    // siblings ever existed. Measured on a 40-round replay: 7 compactions, 7
+    // checkpoints in the log, 1 on the surface, depth [7]. The fanin branch above
+    // needs a leading run of >= fanin SIBLINGS, so it could never fire; it was
+    // covered only by a synthetic test that built the surface by hand.
+    //
+    // Starting past them is also what gives lcm-x step 5 for free. A condensation
+    // only ever merges the LEADING run, so a deeper node always lands earliest, and
+    // surface position IS the model-visible message order - the context reads
+    // [system][rollup][leaves][fresh tail] with no ordering code at all.
+    let leafStart = firstIdx;
+    const leading = new Set([...dag.nodeBySeq.keys()]);
+    while (leafStart < keepFromIdx && leading.has(surfaceNodes[leafStart])) leafStart += 1;
+    if (leafStart < keepFromIdx) firstIdx = leafStart;
+    else return null;
   }
   if (maxSpanTokens > 0) {
     // Cap the span so each compaction produces ONE leaf over a bounded stretch,

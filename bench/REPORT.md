@@ -1073,7 +1073,7 @@ s6  assistant / s37 user                                                  ← �
 | 2 Compact | 叶块切 D0 | `leafSpanTokens` 24 000，叶从最老节点起 | ✅ 本轮补上 |
 | 3 Condense | 同深度合并成更高层 | **没有**。我们只是反复压前缀，depth 靠吸收自增，没有同深度合并 | ❌ **仍缺** |
 | 4 Escalate | detailed → bullets → 确定性截断 | 原来是「重试一次然后抛错」 | ❌ → ✅ **本轮修** |
-| 5 Assemble | system + **最高层摘要优先** + 新鲜尾 | 一个 replace 换成一个节点，组装是隐含的 | ⚠️ 部分（受单条替换约束，见 §21） |
+| 5 Assemble | system + **最高层摘要优先** + 新鲜尾 | **靠表面位置免费得到**：合并只吃前导段，所以更深的节点永远落在最前；表面顺序就是模型看到的顺序 | ✅ **等价**（契约细节见 `bench/ASSEMBLY.md`） |
 | 6 Retrieve | 13 个工具 | `lcm_search` + `lcm_expand` | ✅ |
 
 ### 第 4 步是我这段一直在踩的坑

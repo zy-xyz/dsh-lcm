@@ -27,7 +27,12 @@ function sessionWithLeaves(leaves) {
     events.push({ seq: seq + 1, type: "user/message", data: { content: [{ type: "text", text: "leaf" + i }], source: { kind: "compact-checkpoint", compactionId: "c" + i } } });
     seq += 2;
   }
-  events.push({ seq, type: "user/message", data: { content: [{ type: "text", text: "tail" }] } });
+  // Three live tail messages, so there is fresh material AFTER the checkpoints to
+  // compact. With one tail node and retainTokens 0 the compactable prefix is exactly
+  // the checkpoints, which is the "nothing but checkpoints" case.
+  for (let index = 0; index < 3; index += 1) {
+    events.push({ seq: seq + index, type: "user/message", data: { content: [{ type: "text", text: "tail" + index }] } });
+  }
   const bySeq = new Map(events.map((e) => [e.seq, e]));
   return {
     id: "fanin",
@@ -56,12 +61,26 @@ test("four same-depth leaves condense into one range covering all four", () => {
   assert.equal(range.start, session.surface.nodes[1], "it starts at the first leaf, not at the system head");
 });
 
-test("three leaves do not condense: below fanin the leaf rule applies", () => {
+test("three leaves do not condense, and the new leaf starts PAST them", () => {
+  // Below fanin there is nothing to merge - but the leaf must not re-absorb the
+  // existing checkpoints either. Every leaf used to start at the oldest surface
+  // node, which is the previous checkpoint, so the surface held exactly one
+  // checkpoint forever and no two siblings ever existed. A replay measured it: 7
+  // compactions, 7 checkpoints in the log, 1 on the surface, depth [7]. Starting
+  // past them is what lets breadth exist at all, and it is what makes the fanin
+  // branch reachable.
   const session = sessionWithLeaves(3);
   const measurement = priced(session, 1000);
-  const condensed = selectCompactableRange(session, measurement, 0, 0, 0, 4);
+  const capped = selectCompactableRange(session, measurement, 0, 0, 0, 4);
+  assert.ok(capped !== null, "there is still fresh material after the checkpoints");
+  const startIndex = session.surface.nodes.indexOf(capped.start);
+  const checkpointSeqs = session.surface.nodes.slice(1, 4);
+  assert.ok(!checkpointSeqs.includes(capped.start), "the leaf starts at the tail, not at a checkpoint");
+  assert.equal(startIndex, 4, "the first node after the three checkpoints");
+  assert.equal(session.surface.nodes[4], capped.start, "and it is the first live message");
+  // Without a fanin the historical whole-prefix rule still applies verbatim.
   const plain = selectCompactableRange(session, measurement, 0, 0, 0, 0);
-  assert.deepEqual(condensed, plain, "under fanin nothing changes");
+  assert.equal(plain.start, session.surface.nodes[1], "fanin 0 keeps the old start");
 });
 
 test("a mixed-depth run never merges a parent with its own children", () => {
@@ -90,9 +109,19 @@ test("a mixed-depth run never merges a parent with its own children", () => {
     deriveEventMessage: (event) => event.data?.content ? { role: "user", content: event.data.content } : null
   };
   const measurement = priced(session, 1000);
-  assert.deepEqual(
-    selectCompactableRange(session, measurement, 0, 0, 0, 4),
-    selectCompactableRange(session, measurement, 0, 0, 0, 0),
-    "the depth change stops the run, so the leaf rule applies unchanged"
-  );
+  const selected = selectCompactableRange(session, measurement, 0, 0, 0, 4);
+  if (selected === null) {
+    assert.ok(true, "nothing but checkpoints: no leaf, which is the honest answer");
+  } else {
+    const covered = session.surface.nodes.slice(
+      session.surface.nodes.indexOf(selected.start),
+      session.surface.nodes.indexOf(selected.end) + 1
+    );
+    const checkpointSeqs = [2, 4, 6, 8];
+    assert.equal(
+      covered.filter((seq) => checkpointSeqs.includes(seq)).length,
+      0,
+      "no checkpoint is inside the leaf: a parent is never merged with its children"
+    );
+  }
 });

@@ -23,7 +23,7 @@ https://github.com/zy-xyz/dsh-lcm ｜ **0.7.0** ｜ **147 测试全绿**
 | 2 Compact → 叶 | ✅ `leafSpanTokens` 24 000，从最老节点起 |
 | 3 Condense 同深度合并 | ✅ `condensationFanin` 4，只合并同 depth 的**前导连续段** |
 | 4 Escalate 降级阶梯 | ✅ 正常 → 半预算重试 → **确定性截断（不抛错）** |
-| 5 Assemble 最高层优先 | ⚠️ 受 dsh「单条替换」约束（§21），一个 replace 一个节点 |
+| 5 Assemble 最高层优先 | ✅ **靠表面位置免费得到** —— 合并只吃**前导段**，更深的节点因此永远落在最前；表面顺序就是模型看到的顺序。契约依据（单条替换是真的、但不再是障碍）见 `bench/ASSEMBLY.md` |
 | 6 Retrieve | ✅ `lcm_search` + `lcm_expand` |
 
 外加从 lcm-x 借的 **stall hold**（`stallCooldownMs` 60 s）：压不动就保持，不要每步重问一遍。
