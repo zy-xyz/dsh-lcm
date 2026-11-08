@@ -217,7 +217,7 @@ export async function compactSurfaceRegion(dependencies, session, start, end, ag
 function throwManualFailure(failure) {
   if (failure.stage === "commit") throw new ManualCompactionError("commit", "manual compaction did not commit cleanly", { cause: failure.error });
   if (failure.error instanceof SurfaceChangedError) throw new ManualCompactionError("changed", "the compacted history changed during manual compaction", { cause: failure.error });
-  throw new ManualCompactionError("summary", "manual compaction could not produce a smaller checkpoint", { cause: failure.error });
+  throw new ManualCompactionError("summary", "manual compaction could not produce a smaller summary", { cause: failure.error });
 }
 
 /**
