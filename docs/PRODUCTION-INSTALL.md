@@ -99,3 +99,54 @@ two compactions against one session log at overlapping times. Check, in this ord
 Remove the patch entries and re-enable `compaction-basic`, then restart. The lcm
 checkpoints already in a session log stay readable as ordinary user messages —
 `source.kind === "compact-checkpoint"` — so nothing becomes unreadable.
+
+## Deployed to the web profile (2026-11-08)
+
+Installed as a bundle, then restarted. What is verified, and what is not.
+
+### Verified
+
+| check | evidence |
+|---|---|
+| package present in the profile | `node_modules/dsh-lcm -> ../../../../workspaces/lcmx-study/dsh-lcm` |
+| composition applies | `--dump-config` shows `lcmCompactionPolicy` 4 times (one per shipped preset), the `lcm-compaction-gate` row, and host `compaction-basic` stood down |
+| the load-time hook exists in this dsh | `@deepseek-ai/cordis-plugin-loader/lib/index.js:740` runs `ctx.on("internal/config", (fiber, next) => …)` |
+| the preset latch is satisfied | sessions are created and resumed normally (24 recovered, 0 failed); a preset that never receives `lcmCompactionPolicy` cannot compose a session at all |
+| the engine is on the wire post-restart | the system prompt written at 15:38 (after the restart) contains `lcm_expand` and `lcm_search` |
+| the embedding endpoint works | `POST http://10.126.126.3:1234/v1/embeddings` → 200 with a 4096-d vector |
+
+### Not verified
+
+That a real compaction in the web profile goes through this engine rather than the built-in. No compaction has happened since the restart: the session's two records both predate it and both carry the built-in's signature (8 English headings, `maxTokens 65536`).
+
+The threshold is why. `balanced-lite` has a 256 000-token window, so compaction waits for roughly 125 000 tokens of conversation. `/compact` forces it immediately through the same engine, which is the one-command check:
+
+```bash
+# in any session: /compact, then
+node -e '
+const fs=require("fs"),z=require("node:zlib");
+const evs=z.zstdDecompressSync(fs.readFileSync(process.argv[1])).toString("utf8")
+  .split("\n").filter(Boolean).map(l=>{try{return JSON.parse(l)}catch{return null}})
+  .filter(e=>e&&Number.isSafeInteger(e.seq));
+for(const s of evs.filter(e=>e.type==="compaction/summary")){
+  const t=(s.data.summary||[]).map(b=>b.text||"").join("");
+  console.log(new Date(s.time).toISOString(),"| maxTokens",s.data.maxTokens,
+    "| heads",(t.match(/^## .*/gm)||[]).length,"| lcm",/lcm leaf summary/.test(t));
+}' <session-dir>/session.v4.jsonl.zstd
+```
+
+`maxTokens ≈ 512` with five Chinese headings and `lcm leaf summary` means this engine took the slot. `65536` with eight English headings means the built-in still does.
+
+### Rollback
+
+```bash
+cd ~/.dsh/profiles/web
+cp cordis.patch.yml.bak.20261108_153535 cordis.patch.yml
+cp package.json.bak.20261108_153535 package.json
+cd /tmp && dsh plugin --profile web remove dsh-lcm
+```
+
+### The vector layer is off
+
+`vectorEnabled` defaults to false and the web profile sets no `vector*` key, so no embedding call happens at any compression count. That is the intended default; enabling it means setting `vectorEnabled: true`, `vectorBaseUrl`, `vectorModel` and `vectorDim` on the `compaction-lcm` row.
+
