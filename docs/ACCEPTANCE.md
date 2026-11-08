@@ -5,7 +5,7 @@
 
 ## 0. 当前状态（2026-11-07）
 
-引擎代码在 [`dsh-lcm/`](dsh-lcm) v0.2.9（https://github.com/zy-xyz/dsh-lcm ），57 项测试全绿。
+引擎代码在 [`dsh-lcm/`](dsh-lcm) v0.4.2（https://github.com/zy-xyz/dsh-lcm ），80 项测试全绿。
 
 > ⚠️ 本表 2026-11-07 有一次**口径修正**：`bench/retrieval.mjs` 的 rank 曾多加 2，导致 recall@1 恒为 0、NDCG 抄的是 recall@10，据此得出的“相关性重排不如时间序”结论**作废并反向**。凡引用本表旧数字的地方，以 REPORT.md §1 撤回记录为准。
 

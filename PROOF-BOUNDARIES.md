@@ -218,7 +218,7 @@
 
 - **史实**：0.2.2 之前引擎"从未成功压缩过任何东西"（`CHANGELOG.md:190-191`），两处致命 bug（surfaceOp 形状、`compactNow` 引用了作用域外的 `spec`，见 `CHANGELOG.md:195-207`）。当时也不缺"看起来绿"的测试——缺的是**测到事务的**测试，这正是 `test/region.test.js:1-12` 的注释动机。
 - **机制**：本项目里"PASS"有一半取决于 profile 依赖是否可解析，否则静默 skip：`test/region.test.js:18-25`（`foldSurface`）、`test/compose.test.js:23-29`（`composeEntries`）、`test/lcm.test.js:332-337`（`basic`）、`test/recovery.test.js:95`（生产日志存在与否）。今天 57 passed / 0 skipped 是因为在本机 profile 里跑；换台机器同一份代码会少掉 6 条最关键的断言且仍是绿。
-- **规矩**：引用平面②/⑥ 的结论时必须带上"在本机 profile 内、57 tests、0 skipped"这三个限定词，否则它退化成"语法能过"。
+- **规矩**：引用平面②/⑥ 的结论时必须带上"在本机 profile 内、80 tests、0 skipped"这三个限定词，否则它退化成"语法能过"。
 
 ### (ii) prompt 级消融不是引擎级对比
 
