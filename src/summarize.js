@@ -403,7 +403,15 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
         .map((block) => block.type)
         .join(",") || "none"} target=${budgetTokens}`
     );
-    if (attempts > emptyRetries) throw new Error("lcm: summarization produced no text content");
+    if (attempts > emptyRetries) {
+      // Tag it: the ladder in compile() turns this into the deterministic rung
+      // instead of a failed compaction. lcm-x's escalation never surfaces an empty
+      // result either - L1 and L2 both falling through lands on its deterministic
+      // truncation, which "guaranteed convergence".
+      const error = new Error("lcm: summarization produced no text content");
+      error.code = "SUMMARY_EMPTY";
+      throw error;
+    }
   }
   // Pointers are attributed here, after the model call and before the
   // checkpoint is wrapped: the summarizer input stays the verbatim span (the

@@ -179,3 +179,41 @@ test("the retry keeps the anchor list and every state section mandatory", async 
   }
   assert.match(block, /never drop or empty a section/);
 });
+
+test("an empty summary degrades to a deterministic body instead of failing", async () => {
+  // lcm-x's ladder reaches level 3 whenever the model produces nothing usable, and
+  // its property is "guaranteed convergence". Measured twice in one subagent run:
+  // the summariser answered with reasoning only, and our engine failed the whole
+  // compaction. The deterministic body is built from the span, so it cannot be
+  // empty and cannot exceed the budget.
+  async function* reasoningOnly() {
+    yield { type: "block-start", index: 0, blockType: "reasoning" };
+    yield { type: "reasoning-delta", index: 0, text: "thinking" };
+    yield { type: "finish", reason: { kind: "stop" }, replayState: undefined };
+  }
+  const stub = stubLlm([reasoningOnly]);
+  const engine = engineWith(stub);
+  const out = await engine.compile(prepared(), { session: prepared().session, options: {} }, undefined);
+  const body = out.entries.map((entry) => entry.text).join("\n");
+
+  assert.equal(stub.calls.length, 3, "the empty retries still happen before falling back");
+  assert.ok(body.length > 0, "a checkpoint is produced, not a failure");
+  assert.match(body, /DETERMINISTIC fallback/, "the entry header says the body is not a model summary");
+  assert.match(body, /seq 0/, "and it carries per-seq pointers so the original is one lcm_expand away");
+  assert.match(body, /do the thing/, "the span's own words survive");
+  assert.ok(estimateEntryTokens(body) <= SHADOWED, "and the body still fits the shrink bound");
+});
+
+test("a transport failure still propagates: a rate limit is not a summary outcome", async () => {
+  async function* rateLimited() {
+    yield { type: "finish", reason: { kind: "error", failure: { message: "429 rate limit", code: "RATE_LIMIT" } }, replayState: undefined };
+  }
+  const stub = stubLlm([rateLimited]);
+  const engine = engineWith(stub);
+  await assert.rejects(
+    engine.compile(prepared(), { session: prepared().session, options: {} }, undefined),
+    (error) => /rate limit/i.test(String(error.message)),
+    "routing must see the failure, so it can retry or switch model"
+  );
+});
+

@@ -17,7 +17,8 @@ import z from "@deepseek-ai/schemastery";
 import { CompactionEngine, ManualCompactionError } from "@deepseek-ai/dsh-compaction";
 import { CONTEXT_WINDOW_EXCEEDED_CODE, LlmError } from "@deepseek-ai/dsh-llm";
 import { assertNever } from "@deepseek-ai/dsh-util-values";
-import { COMPILER_REV, estimateEntryTokens, isCheckpointSource } from "./compiler.js";
+import { COMPILER_REV, estimateEntryTokens, isCheckpointSource, renderEventBody } from "./compiler.js";
+import { resolveEventAt } from "./events.js";
 import { describeError, engineDebug } from "./debug.js";
 import {
   TargetPressureConfigError,
@@ -117,6 +118,46 @@ function headerTokens(prepared, bodyTokens) {
   return estimateEntryTokens(
     `[lcm leaf summary · ${prepared.shadowedSeqs.length} nodes · seqs ${prepared.start}-${prepared.end} · ~${prepared.shadowedTokenCount} → ~${bodyTokens} tokens · anchors below carry (seq N): restore with lcm_expand, or find anything else with lcm_search]\n`
   );
+}
+
+/**
+ * The deterministic rung: build a checkpoint body from the span itself, no model.
+ *
+ * lcm-x's level 3 is "deterministic truncation — no LLM, guaranteed convergence",
+ * and its ladder reaches it whenever the model produces nothing usable - an empty
+ * answer included. Ours only reached a degraded result on the too-long path and
+ * threw on the empty path, so a reasoning-only response failed the compaction.
+ *
+ * The body keeps the message bodies verbatim in order, cut to the budget at a line
+ * boundary. It is a worse summary than the model's and it is honest about that:
+ * the header says so, and the pointer line still tells the agent how to read the
+ * original. Degraded coverage beats no coverage, which is the whole point of the
+ * rung.
+ * @param prepared - the priced span snapshot.
+ * @param budgetTokens - target size for the body.
+ * @returns a checkpoint body that always fits and is never empty.
+ */
+function deterministicCheckpoint(prepared, budgetTokens) {
+  const lines = [
+    "## 逐字锚点",
+    "[deterministic: span words, cut to fit]"
+  ];
+  let used = estimateEntryTokens(lines.join("\n"));
+  const cap = Math.max(64, budgetTokens);
+  for (const seq of prepared.shadowedSeqs) {
+    const event = resolveEventAt(prepared.session, seq);
+    if (event === undefined) continue;
+    const rendered = renderEventBody(prepared.session, event);
+    for (const line of String(rendered?.body ?? "").split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      const cost = estimateEntryTokens(trimmed) + 1;
+      if (used + cost > cap) return lines.join("\n");
+      lines.push(`(seq ${seq}) ${trimmed}`);
+      used += cost;
+    }
+  }
+  return lines.join("\n");
 }
 
 /** Join one summarizer result's text blocks into the checkpoint body. */
@@ -431,7 +472,37 @@ export class LcmCompactionEngine extends CompactionEngine {
     // meter folds and is not the comparison basis. The fallback keeps a
     // caller-shaped `prepared` (one carrying only the shadow price) working.
     const limit = prepared.shadowedRouteTokenCount ?? prepared.shadowedTokenCount;
-    let result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
+    let result;
+    // Named in the entry header rather than only in the body: the body is subject to
+    // the truncation rung, so a label that lives in the first lines can be cut. The
+    // header always survives.
+    let usedDeterministic = false;
+    try {
+      result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
+    } catch (error) {
+      // Two codes are summariser OUTCOMES rather than transport failures: an empty
+      // response and a response cut at the provider's cap. A rate limit, a timeout
+      // or an abort is neither, and must keep propagating so the harness can route
+      // or retry instead of quietly accepting a degraded body.
+      if (error?.code !== "SUMMARY_EMPTY" && error?.code !== "MAX_TOKENS") throw error;
+      // lcm-x's ladder does not surface an empty summary either:
+      // when L1 and L2 both come back empty it falls through to deterministic
+      // truncation, whose documented property is "guaranteed convergence". Our
+      // version threw after emptySummaryRetries, which meant a model that answered
+      // with reasoning only - observed twice in one subagent run - turned into a
+      // failed compaction and an unusable span.
+      //
+      // The deterministic body is built from the span itself, so it cannot be empty
+      // and cannot be longer than the budget.
+      // Built to the *target*, then put through the same truncation rung as an
+      // over-long model body: the shrink gate compares against the span, and a
+      // small span makes the target larger than the bound.
+      usedDeterministic = true;
+      const headroom = Math.max(32, limit - headerTokens(prepared, budget));
+      const fallback = truncateToBudget(deterministicCheckpoint(prepared, budget), headroom);
+      engineDebug(this.config, `summarize escalated to deterministic body after empty responses tokens=${estimateEntryTokens(fallback)} shadowed=${limit}`);
+      result = { summary: [{ type: "text", text: fallback }] };
+    }
     signal?.throwIfAborted();
     let text = summaryBodyOf(result);
     let tokens = estimateEntryTokens(text);
@@ -477,7 +548,7 @@ export class LcmCompactionEngine extends CompactionEngine {
         // own `(seq N)`, so the common case is one lcm_expand call; a fact the
         // checkpoint never listed is still findable with lcm_search. Saying only
         // "restore with lcm_expand" left the model guessing which seq to name.
-        text: `[lcm leaf summary · ${prepared.shadowedSeqs.length} nodes · seqs ${prepared.start}-${prepared.end} · ~${prepared.shadowedTokenCount} → ~${tokens} tokens · anchors below carry (seq N): restore with lcm_expand, or find anything else with lcm_search]\n${text}`,
+        text: `[lcm leaf summary${usedDeterministic ? " · DETERMINISTIC fallback, not a model summary" : ""} · ${prepared.shadowedSeqs.length} nodes · seqs ${prepared.start}-${prepared.end} · ~${prepared.shadowedTokenCount} → ~${tokens} tokens · anchors below carry (seq N): restore with lcm_expand, or find anything else with lcm_search]\n${text}`,
         kind: "checkpoint"
       }
     ];

@@ -1177,6 +1177,30 @@ if (!grew && Date.now() < stall.until) return null;
 - `stallCooldownMs: 0` 完全关闭保持
 
 **为什么用「长了一片叶」而不是「长了任意内容」**：叶块大小正是「多出来一块值得单独压的东西」的最小单位。任意增长会让保持形同虚设，纯时间截止又可能让本该压的东西拖到 60 秒后。这个阈值和 `leafSpanTokens` 同源，不是新拍的数字。
+### 又一处：空摘要不是「失败」，是阶梯的第三级
+
+跑子代理并发测试时，日志里出现两次：
+
+```
+[dsh-lcm] engine: step compaction failed: lcm: summarization produced no text content
+```
+
+（随后重试成功了一次，`summarize done tokens=584 ratio=3.53`，但那两次是**整次压缩失败**。）
+
+我原来只把阶梯用在了「写太长」这条路径上，**空响应仍然在 `emptySummaryRetries` 之后抛错**。而 lcm-x 的阶梯是：`_invoke_summary_llm_chain` 的 L1 返回空 → L2 返回空 → **落到 L3 确定性截断**，文档写的就是 `guaranteed convergence`。**空响应也是 L3 的一个入口，不是错误**。
+
+### 改法
+
+`SUMMARY_EMPTY` 和 `MAX_TOKENS` 这两个码是**摘要器的结果**，不是传输故障：捕获它们，落到确定性正文（从跨度自己的文字里按行截取，带 `(seq N)` 指针）。**速率限制、超时、abort 仍然向上抛**，因为那是路由该处理的事，不能悄悄降级。
+
+三处细节是踩出来的：
+
+1. **确定性正文也要过截断闸。** 它是按**目标**构建的，而收缩闸比的是**跨度**；跨度小时目标比界大。第一版就没过，测试立刻抓到 `body 仍然超过收缩界`。
+2. **降级标记要放 entry header，不能只放正文第一行。** 正文会被截断，标记就被切没了 —— 实测第一版输出只剩 `## 逐字锚点` 加一行 `[truncated]`，读者完全看不出这是降级而不是模型摘要。header 永远存在。
+3. **正文里的注记要极短。** `[deterministic: span words, cut to fit]` 在紧预算下才活得下来。
+
+现在的行为：`3` 次空响应后产出一个**标注为 DETERMINISTIC 的 checkpoint**，带 `(seq N)` 指针，读者一眼知道这不是模型摘要、也知道怎么读原文。
+
 
 
 
