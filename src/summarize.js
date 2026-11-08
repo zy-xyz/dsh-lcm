@@ -134,6 +134,12 @@ export function buildInstruction(budgetTokens, shadowedTokens, priorDepth) {
     // reasoning + tool-call blocks and zero text, and the compaction failed.
     // basic states this rule explicitly; dropping it was the regression.
     "- Output only the checkpoint text. Do not call any tool, and do not take any other action.",
+    // Measured: with a Chinese instruction the checkpoint came out in Chinese even
+    // for an English conversation, and the answering model mirrored it - three of
+    // 15 measured answers were semantically right but in Chinese against an English
+    // gold ("三场" for 3, "六月" for June). The checkpoint is a view of the SPAN, so
+    // it follows the span language, not the instruction language.
+    "- Write the checkpoint in the same language as the span you are condensing. Keep every quoted value, name and unit exactly as it appears in the span, in its original language.",
     "- Do not address the user. Do not say what you are doing. Output the sections only.",
     "- Do not invent facts. If something is uncertain, write it as uncertain.",
     "- Do not restate tool output that was pure noise (progress bars, repeated listings); keep its conclusion.",
@@ -320,9 +326,22 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   // exists on a real `Session`, and a session-shaped value without it (the
   // fixtures) simply sends the declaration set, which is correct for a session
   // that has no tool history to diff against.
+  // A ceiling, not a limit. Measured: with NO maxTokens the provider applies its
+  // own default, which is small - one run was cut mid-word at 7 734 characters with
+  // only the anchor section written, and the same prompt with an explicit 32 768
+  // finished at 8 817 characters with all six sections. Leaving the ceiling unset
+  // did not remove a limit, it substituted an invisible and smaller one.
+  //
+  // The number is deliberately not the target: reasoning is billed against the
+  // same ceiling and measured at roughly half of it, so a ceiling equal to the
+  // target leaves the summary half-written. Twice the target stops truncation
+  // without becoming the binding constraint - the model stops well before it.
+  // The floor gives a small span enough room to answer at all.
+  const ceiling = Math.max(4096, budgetTokens * 2);
   const options = {
     provider: target.provider,
     model: target.model,
+    maxTokens: ceiling,
     messages,
     ...(typeof session.toolHistory === "function" ? { toolHistory: session.toolHistory() } : {}),
     ...(header?.tools === undefined ? {} : { tools: [...header.tools] }),

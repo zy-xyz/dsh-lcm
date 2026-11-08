@@ -238,7 +238,7 @@ test("compactNow runs the manual /compact transaction on a real Session", { skip
   assert.equal(llmCalls[0].purpose, "compaction");
   assert.equal(llmCalls[0].provider, "probe-provider", "the route comes from the real request/header fold");
   assert.equal(llmCalls[0].model, "probe-model");
-  assert.equal("maxTokens" in llmCalls[0], false, "the request carries no completion cap: the provider default applies");
+  assert.equal(typeof llmCalls[0].maxTokens, "number", "the request carries a generous ceiling, above the target");
   assert.match(
     llmCalls[0].messages[llmCalls[0].messages.length - 1].content[0].text,
     new RegExp("Aim for roughly " + engine.effectiveMaxTokens(result.shadowedTokenCount) + " tokens"),

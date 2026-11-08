@@ -93,8 +93,15 @@ test("the request carries no maxTokens key at all", async () => {
   await summarizeLeaf({ llm: stub.llm }, resolveConfig({}), p, { session: p.session, options: {} }, 2400, undefined);
 
   assert.equal(stub.calls.length, 1);
-  assert.equal("maxTokens" in stub.calls[0], false, "no completion cap may be sent");
-  assert.equal(stub.calls[0].maxTokens, undefined);
+  // Reversed after measuring that the absence of a ceiling substitutes the
+  // provider's own default, which is smaller: one run was cut mid-word at 7 734
+  // characters with only the anchor section written, while an explicit 32 768
+  // finished with all six sections. The ceiling is now max(4096, 2x target) - high
+  // enough that the model stops before it, which is what "no limit" was meant to
+  // achieve.
+  assert.equal(typeof stub.calls[0].maxTokens, "number", "a generous ceiling is sent");
+  assert.ok(stub.calls[0].maxTokens >= 4096, "the floor keeps a small span answerable");
+  assert.ok(stub.calls[0].maxTokens > 512, "the ceiling must exceed the target, not equal it");
 });
 
 test("the instruction still names the target, worded as a target rather than a ceiling", async () => {
@@ -122,7 +129,7 @@ test("a max-tokens finish with no text is retried as an empty response, not esca
     stub.calls[0].messages.at(-1).content[0].text,
     "the prompt is unchanged between attempts: there is no budget to restate"
   );
-  assert.equal("maxTokens" in stub.calls[1], false, "the retry sends no cap either");
+  assert.equal(typeof stub.calls[1].maxTokens, "number", "the retry carries the same generous ceiling");
   assert.match(stub.calls[1].messages.at(-1).content[0].text, /Aim for roughly 512 tokens/);
   assert.match(result.summary[0].text, /压缩完成/);
   assert.equal(result.targetTokens, 512);

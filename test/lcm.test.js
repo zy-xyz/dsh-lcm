@@ -272,7 +272,7 @@ async function* stubStream(text) {
   yield { type: "finish", reason: "stop", replayState: undefined };
 }
 
-test("summarizeLeaf sends no completion cap but still states the target", async () => {
+test("summarizeLeaf sends a generous ceiling and still states the target", async () => {
   const events = [
     { seq: 0, type: "system/message", message: { role: "system", content: [{ type: "text", text: "sys" }] } },
     { seq: 1, type: "user/message", message: { role: "user", content: [{ type: "text", text: "do the thing" }] } }
@@ -282,7 +282,10 @@ test("summarizeLeaf sends no completion cap but still states the target", async 
   const ctx = { llm: { stream(options) { seen = options; return stubStream("## 目标与约束\n- 压缩上下文"); } } };
   const prepared = { session, start: 0, end: 1, shadowedSeqs: [0, 1], shadowedTokenCount: 20000 };
   const result = await summarizeLeaf(ctx, resolveConfig({}), prepared, { session, options: {} }, 2400, undefined);
-  assert.equal("maxTokens" in seen, false, "no completion cap is sent; the provider default applies");
+  // Reversed: leaving the ceiling unset handed control to the provider's default,
+  // which is smaller and silent. The ceiling is twice the target (floor 4096) so
+  // reasoning, billed against the same number, cannot consume the whole budget.
+  assert.equal(seen.maxTokens, 4800, "twice the 2400-token target");
   assert.equal(seen.provider, "p");
   assert.equal(seen.model, "m");
   assert.match(result.summary[0].text, /目标与约束/);

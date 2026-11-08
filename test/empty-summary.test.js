@@ -82,7 +82,7 @@ test("an empty first response is retried and the second attempt succeeds", async
   assert.equal(stub.calls.length, 2, "one retry after the empty response");
   assert.match(result.summary[0].text, /压缩完成/);
   assert.equal(result.targetTokens, 512, "the instruction target is reported, not a request cap");
-  assert.equal("maxTokens" in stub.calls[0], false, "no completion cap is sent");
+  assert.equal(typeof stub.calls[0].maxTokens, "number", "the ceiling is generous, not the binding constraint");
 });
 
 test("all attempts empty throws the original error after 1 + emptySummaryRetries calls", async () => {
