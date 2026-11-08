@@ -4,7 +4,9 @@
  *
  * Measured on a live engine run, a reasoning-first backend spends the completion
  * budget on reasoning and returns zero text blocks; the same request repeated
- * usually returns text. The neighbouring failure — hitting `maxTokens` — is
+ * usually returns text. This backend sends no `maxTokens`, so the budget being
+ * burned is the PROVIDER's own default; the failure shape is unchanged. The
+ * neighbouring failure — a `max-tokens` finish that DID produce text — is
  * deterministic truncation and must keep failing on the first attempt, because a
  * retry would only truncate again at full price.
  *
@@ -79,7 +81,8 @@ test("an empty first response is retried and the second attempt succeeds", async
 
   assert.equal(stub.calls.length, 2, "one retry after the empty response");
   assert.match(result.summary[0].text, /压缩完成/);
-  assert.equal(result.maxTokens, 512);
+  assert.equal(result.targetTokens, 512, "the instruction target is reported, not a request cap");
+  assert.equal("maxTokens" in stub.calls[0], false, "no completion cap is sent");
 });
 
 test("all attempts empty throws the original error after 1 + emptySummaryRetries calls", async () => {

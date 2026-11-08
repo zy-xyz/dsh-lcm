@@ -96,14 +96,22 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
   }
   if (keepFromIdx <= firstIdx) return null;
   if (minTokens > 0) {
-    // The justified rule is arithmetic, not shape: the summary budget is
-    // clamped UP to summaryFloorTokens, so a span at or below that floor can
-    // never shrink and would fail the shrink guarantee after paying for a model
-    // call. A single-node span is not refused on count - one 40k-token tool
-    // result is exactly what compaction is for, and it does shrink.
+    // The justified rule is arithmetic, not shape. Two thresholds, both from the
+    // same fact: the summary target is clamped UP to summaryFloorTokens, so a
+    // span barely above that floor gets a target almost as large as itself.
+    //
+    //   span <= floor          -> the target is at least the span; cannot shrink
+    //   span <= 2 * floor      -> nominal headroom below 2:1, so an ordinary
+    //                             overshoot (a model told "about 512" writing 900)
+    //                             trips the shrink guarantee after paying for the
+    //                             call. Measured: span 918, target 512, summary
+    //                             came back 932, framed 805 >= 657 -> rejected.
+    //
+    // A single-node span is NOT refused on count: one 40k-token tool result is
+    // exactly what compaction is for, and it does shrink.
     let spanTokens = 0;
     for (const node of pricedNodes.slice(firstIdx, keepFromIdx)) spanTokens += node.tokens;
-    if (spanTokens <= minTokens) return null;
+    if (spanTokens <= 2 * minTokens) return null;
   }
   return {
     start: surfaceNodes[firstIdx],
@@ -313,7 +321,7 @@ async function compileCompaction(dependencies, prepared, agent, compactionId, so
     summary,
     provider: compiled.provider,
     model: compiled.model,
-    maxTokens: compiled.maxTokens,
+    targetTokens: compiled.targetTokens,
     usage: compiled.usage,
     rawOutput: compiled.rawOutput,
     checkpointMessage,
@@ -359,7 +367,7 @@ export function assertSelectedSpanStable(dependencies, session, prepared) {
 
 /** Append one completed checkpoint record and replacement body without yielding. */
 function commitCompactionBody(session, startEvent, compiled) {
-  const { start, end, shadowedSeqs, shadowedTokenCount, summary, provider, model, checkpointMessage, maxTokens, usage, rawOutput } = compiled;
+  const { start, end, shadowedSeqs, shadowedTokenCount, summary, provider, model, checkpointMessage, targetTokens, usage, rawOutput } = compiled;
   const summaryEvent = session.append("compaction/summary", {
     compactionId: startEvent.data.compactionId,
     ...startEvent.data.sourceCommandId === undefined ? {} : { sourceCommandId: startEvent.data.sourceCommandId },
@@ -372,7 +380,7 @@ function commitCompactionBody(session, startEvent, compiled) {
     shadowedTokenCount,
     provider,
     model,
-    ...maxTokens === undefined ? {} : { maxTokens },
+    ...targetTokens === undefined ? {} : { targetTokens },
     ...usage === undefined ? {} : { usage },
     ...rawOutput === undefined ? {} : { rawOutput, llmStreamCall: true }
   });

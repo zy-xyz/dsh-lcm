@@ -207,6 +207,11 @@ test("compactNow runs the manual /compact transaction on a real Session", { skip
   assert.deepEqual([result.startSeq, result.summarySeq, result.endSeq], [startSeq, summarySeq, endSeq]);
   const startEvent = session.eventAt(startSeq);
   const summaryEvent = session.eventAt(summarySeq);
+  // The durable record names the TARGET the instruction asked for, and carries
+  // no `maxTokens`: the request never had one, so recording one would claim a
+  // cap that was never sent.
+  assert.equal(summaryEvent.data.targetTokens, engine.effectiveMaxTokens(result.shadowedTokenCount), "the record names the instruction target");
+  assert.equal("maxTokens" in summaryEvent.data, false, "no request cap is recorded because none was sent");
   const endEvent = session.eventAt(endSeq);
   assert.equal(endEvent.data.error, undefined, "a clean manual compaction records no error");
   assert.equal(endEvent.data.turn, null, "an idle manual compaction has no open turn to bracket");
@@ -231,7 +236,12 @@ test("compactNow runs the manual /compact transaction on a real Session", { skip
   assert.equal(llmCalls[0].purpose, "compaction");
   assert.equal(llmCalls[0].provider, "probe-provider", "the route comes from the real request/header fold");
   assert.equal(llmCalls[0].model, "probe-model");
-  assert.equal(llmCalls[0].maxTokens, engine.effectiveMaxTokens(result.shadowedTokenCount), "the budget is the resolved summary budget for the shadowed span");
+  assert.equal("maxTokens" in llmCalls[0], false, "the request carries no completion cap: the provider default applies");
+  assert.match(
+    llmCalls[0].messages[llmCalls[0].messages.length - 1].content[0].text,
+    new RegExp("Aim for roughly " + engine.effectiveMaxTokens(result.shadowedTokenCount) + " tokens"),
+    "the instruction still names the resolved target for the shadowed span"
+  );
   assert.match(llmCalls[0].messages[llmCalls[0].messages.length - 1].content[0].text, /逐字锚点/u, "the instruction is the last message");
 
   // Both records of the transaction are recoverable by seq on the real shape.

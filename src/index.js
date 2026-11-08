@@ -18,7 +18,7 @@ import { CompactionEngine, ManualCompactionError } from "@deepseek-ai/dsh-compac
 import { CONTEXT_WINDOW_EXCEEDED_CODE } from "@deepseek-ai/dsh-llm";
 import { assertNever } from "@deepseek-ai/dsh-util-values";
 import { COMPILER_REV, estimateEntryTokens, isCheckpointSource } from "./compiler.js";
-import { engineDebug } from "./debug.js";
+import { describeError, engineDebug } from "./debug.js";
 import {
   TargetPressureConfigError,
   resolveCompactSpec,
@@ -163,7 +163,7 @@ export class LcmCompactionEngine extends CompactionEngine {
           if (this.warnedPressureConfigTargets.has(error.targetKey)) return next();
           this.warnedPressureConfigTargets.add(error.targetKey);
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`);
         // Also to the debug log: ctx.logger.warn is invisible from a headless
         // run's stderr, and "compaction silently never fires" looked exactly
@@ -218,9 +218,15 @@ export class LcmCompactionEngine extends CompactionEngine {
     };
   }
   /**
-   * Resolve the token budget for one LLM leaf summary.
+   * Resolve the TARGET length for one LLM leaf summary.
+   *
+   * This is a number written into the instruction ("aim for roughly N tokens"),
+   * not a request cap: `summarizeLeaf` sends no `maxTokens`, so the provider's
+   * own default ceiling applies. The name keeps its historical spelling because
+   * it is also the config key it delegates to (`maxTokens`), which still bounds
+   * the target.
    * @param shadowedTokenCount - tokens in the span being replaced.
-   * @returns the summary token ceiling (`summaryRatio` of the span, clamped).
+   * @returns the summary target length (`summaryRatio` of the span, clamped).
    */
   effectiveMaxTokens(shadowedTokenCount) {
     return resolveSummaryBudget(this.config, shadowedTokenCount);
@@ -283,7 +289,7 @@ export class LcmCompactionEngine extends CompactionEngine {
       capped: false,
       provider: result.provider,
       model: result.model,
-      maxTokens: budget,
+      targetTokens: budget,
       usage: result.usage,
       rawOutput: result.rawOutput
     };

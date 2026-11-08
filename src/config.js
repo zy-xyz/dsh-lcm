@@ -15,10 +15,14 @@
  *   thresholdTokens = floor(min(contextWindow × thresholdRatio, pressureBudget))
  *   retainTokens   = retainTokens ?? floor(messageBudget × retainRatio)
  *
- * The LCM delta appears only in the summary budget, which basic derives from
+ * The LCM delta appears only in the summary TARGET, which basic derives from
  * `headroomTokens` alone:
  *
- *   summaryTokens = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
+ *   targetTokens = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
+ *
+ * "Target" is literal: this number is written into the summarizer instruction
+ * ("aim for roughly N tokens") and is NOT sent as the request's `maxTokens`.
+ * Nothing truncates the model at it — see `summarizeLeaf`.
  *
  * @module dsh-lcm/config
  */
@@ -45,7 +49,17 @@ const DEFAULT_RETAIN_RATIO = 0.16;
 const DEFAULT_SUMMARY_RATIO = 0.12;
 /** Lower bound for one summary, so a small span still yields a usable note. */
 const DEFAULT_SUMMARY_FLOOR_TOKENS = 512;
-/** Absolute ceiling for one summary. */
+/**
+ * Ceiling on one summary's TARGET length.
+ *
+ * Not a request cap and not a post-hoc gate: the summarizer sends no
+ * `maxTokens`, so a model that overshoots this is accepted as-is. The real
+ * bound on a compaction transaction is the shrink guarantee in
+ * `region.compactSurfaceRegion` (`framedSummaryTokenCount < shadowedRouteTokenCount`),
+ * which a cap cannot substitute for — and which a truncation at this number
+ * would actively work against, because truncation cuts the tail of the anchor
+ * list, the one section that carries fidelity.
+ */
 const DEFAULT_CHECKPOINT_CAP = 16384;
 /**
  * Whether a leaf summary anchor list gets `(seq N)` pointers.
@@ -276,22 +290,26 @@ export function resolveCompactSpec(policy, contextWindow, reservedCompletionToke
 }
 
 /**
- * Resolve the summary token budget for one leaf summary.
+ * Resolve the summary TARGET length for one leaf summary.
  *
- * Two ceilings apply, and both are meaningful to a `compaction-basic` user:
+ * Two terms, and both are meaningful to a `compaction-basic` user:
  *
  *   scaled   = shadowed × summaryRatio, clamped to [summaryFloorTokens, checkpointCap]
- *   budget   = min(scaled, maxTokens)
+ *   target   = min(scaled, maxTokens)
  *
  * The scaled term keeps the compression ratio stable across context-window
- * sizes. The `maxTokens` term preserves basic's contract that `maxTokens` is the
- * summary request's output cap — so an existing config that set
- * `maxTokens: 4096` to bound summarizer spend keeps that bound instead of
- * silently inheriting the larger `checkpointCap`.
+ * sizes. The `maxTokens` term keeps basic's key surface working: a config that
+ * set `maxTokens: 4096` still gets 4096 as the number the model is asked to aim
+ * for, instead of silently inheriting the larger `checkpointCap`.
+ *
+ * It is a HINT, not a cap. `summarizeLeaf` sends no `maxTokens` to the provider
+ * (a reasoning-first backend spends a summary-sized completion budget on hidden
+ * reasoning and returns zero text), so a longer answer is accepted rather than
+ * truncated.
  *
  * @param config - resolved configuration.
  * @param shadowedTokenCount - tokens in the span being replaced.
- * @returns the summary token ceiling.
+ * @returns the summary target length.
  */
 export function resolveSummaryBudget(config, shadowedTokenCount) {
   const scaled = Math.floor(shadowedTokenCount * config.summaryRatio);

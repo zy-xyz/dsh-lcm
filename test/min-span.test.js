@@ -139,16 +139,19 @@ test("a span under the summary floor (or a lone node) is refused when the floor 
   // by node count would also refuse the case compaction exists for — one huge
   // tool result. The incident that motivated this guard was a 428-token node,
   // which the token floor already refuses.
-  const large = makeSession(plainEvents(3));
-  const largePricing = fixedPrice(large, 1000);
-  const largeRange = selectCompactableRange(large, largePricing, 5000);
+  // One turn leaves a 3-node surface (system, user, assistant); retaining
+  // nothing makes the selected span exactly the single user node, which is what
+  // "lone node" means here.
+  const large = makeSession(plainEvents(1));
+  const largePricing = fixedPrice(large, 2000);
+  const largeRange = selectCompactableRange(large, largePricing, 0);
   assert.ok(largeRange !== null);
   assert.equal(largeRange.start, largeRange.end);
-  assert.ok(1000 > 512, "this span clears the floor");
+  assert.ok(2000 > 2 * 512, "this span clears twice the floor");
   assert.equal(
-    selectCompactableRange(large, largePricing, 5000, 512)?.start,
+    selectCompactableRange(large, largePricing, 0, 512)?.start,
     largeRange.start,
-    "a lone node above the floor is still compactable"
+    "a lone node above twice the floor is still compactable"
   );
 });
 
@@ -251,9 +254,11 @@ test("pressure never buys a summary for a span below its own floor", { skip, ski
 
 test("a normal multi-node span above the floor is still selected", { skip }, () => {
   const session = makeSession(plainEvents(3));
-  const measurement = fixedPrice(session, 200); // 5-node span, 1000 tokens
+  // 5 nodes x 300 = 1500 tokens: clears 2 x the 512 floor, i.e. a target of 512
+  // leaves a 3:1 nominal ratio, which is what a real compaction looks like.
+  const measurement = fixedPrice(session, 300);
   const gated = selectCompactableRange(session, measurement, 0, 512);
-  assert.ok(gated !== null, "1000 tokens over a 512-token floor is worth a summary");
+  assert.ok(gated !== null, "1500 tokens over a 512-token floor is worth a summary");
   assert.deepEqual(gated, { start: session.surface.nodes[1], end: session.surface.nodes[5] });
   assert.equal(spanOf(session, gated).length, 5);
 });
@@ -281,6 +286,8 @@ test("an unarmed floor is byte-identical to the previous selection", { skip }, (
   // IS the span, and a framed checkpoint is always bigger than that.
   const session = makeSession(plainEvents(3));
   const measurement = fixedPrice(session, 150); // exactly 5 × 150 = 750 tokens
-  assert.equal(selectCompactableRange(session, measurement, 0, 750), null, "750 tokens against a 750-token floor cannot shrink");
-  assert.ok(selectCompactableRange(session, measurement, 0, 749) !== null, "749 leaves room to shrink");
+  // The floor refuses at 2x, so the boundary is 375: at exactly 375 the target
+  // equals the span, and below it an ordinary overshoot trips the shrink gate.
+  assert.equal(selectCompactableRange(session, measurement, 0, 375), null, "750 tokens is only 2x a 375-token floor");
+  assert.ok(selectCompactableRange(session, measurement, 0, 374) !== null, "374 leaves more than 2:1 headroom");
 });

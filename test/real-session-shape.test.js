@@ -117,7 +117,7 @@ function makeDeps() {
       capped: false,
       provider: "p",
       model: "m",
-      maxTokens: 1024
+      targetTokens: 1024
     })
   };
 }

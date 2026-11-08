@@ -102,7 +102,7 @@ function makeDeps(overrides = {}) {
     capped: false,
     provider: "p",
     model: "m",
-    maxTokens: 1024
+    targetTokens: 1024
   }));
   return {
     meter: {
@@ -270,7 +270,7 @@ test("compactNow compacts an idle session and returns a durable result", { skip 
     entries: [{ seq: prepared.shadowedSeqs[0], text: "## 目标与约束\n- manual", kind: "checkpoint" }],
     stats: { nodes: prepared.shadowedSeqs.length, entries: 1, toolCalls: 0, toolResults: 0, images: 0, documents: 0,
              reasoningElided: 0, noiseElided: 0, checkpoints: 1, tokens: 8, elidedToolRows: 0, elidedRows: 0 },
-    capped: false, provider: "p", model: "m", maxTokens: 512
+    capped: false, provider: "p", model: "m", targetTokens: 512
   });
 
   const agent = {

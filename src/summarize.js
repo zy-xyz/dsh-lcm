@@ -9,7 +9,10 @@
  * exact original tokens.
  *
  * The prompt is deliberately structured to minimise loss:
- *   - it states the budget, so the model knows how hard to compress
+ *   - it states a TARGET length (never a request cap — no `maxTokens` is sent,
+ *     because a summary-sized completion budget is spent entirely on hidden
+ *     reasoning by reasoning-first backends), so the model knows how hard to
+ *     compress without risking a truncated answer
  *   - it demands a fixed section skeleton (decisions / state / open threads /
  *     verbatim anchors) instead of free-form prose
  *   - it requires verbatim retention of identifiers the agent will need later
@@ -58,7 +61,8 @@ const ANCHOR_RULE = [
 
 /**
  * Build the compaction instruction appended as the final user message.
- * @param budgetTokens - token ceiling for the produced summary.
+ * @param budgetTokens - target length for the produced summary (a hint, not a cap:
+ *   the request carries no `maxTokens`, so the provider's own default applies).
  * @param shadowedTokens - tokens being replaced (for the compression target).
  * @param priorDepth - depth of the highest absorbed checkpoint (0 = none).
  * @returns the instruction text.
@@ -68,7 +72,7 @@ export function buildInstruction(budgetTokens, shadowedTokens, priorDepth) {
   return [
     "You are condensing an earlier span of THIS conversation so the agent can keep working.",
     "",
-    `The span you are given is ${shadowedTokens} tokens. Produce at most ${budgetTokens} tokens (about ${ratio}:1).`,
+    `The span you are given is ${shadowedTokens} tokens. Aim for roughly ${budgetTokens} tokens (about ${ratio}:1) — that is a target, not a hard limit, so do not cut a section short to hit it.`,
     "The full original text is preserved in the append-only log and remains retrievable by the agent, so you may compress hard — but anything the agent will need *verbatim* must survive here.",
     "",
     "Write exactly these sections, in this order:",
@@ -79,6 +83,13 @@ export function buildInstruction(budgetTokens, shadowedTokens, priorDepth) {
     "顺序是硬性的：先写「逐字锚点」整张清单，再写后面四个叙述性小节。后面四节各自最多几句话 —— 它们的职责是让人读懂状态，「逐字锚点」才负责不丢东西。如果预算紧张，先砍叙述，不要砍清单。",
     "",
     "Rules:",
+    // Without this the model calls a tool and returns NO text: the request
+    // forwards the conversation own tool definitions (for prefix-cache reuse),
+    // so a tool call is a legal completion and an inviting one. Measured on a
+    // real engine: three consecutive attempts finished tool-calls with
+    // reasoning + tool-call blocks and zero text, and the compaction failed.
+    // basic states this rule explicitly; dropping it was the regression.
+    "- Output only the checkpoint text. Do not call any tool, and do not take any other action.",
     "- Do not address the user. Do not say what you are doing. Output the sections only.",
     "- Do not invent facts. If something is uncertain, write it as uncertain.",
     "- Do not restate tool output that was pure noise (progress bars, repeated listings); keep its conclusion.",
@@ -104,20 +115,13 @@ function nodeMessage(session, seq) {
 }
 
 /**
- * How many times one summary may raise its own completion budget.
+ * The deterministic truncation failure: same prompt and same completion ceiling
+ * reproduce it exactly, so it is thrown rather than retried.
  *
- * Exactly one: a route that burns the whole budget on hidden reasoning needs
- * more room to produce anything, and doubling once is cheap. A route that
- * cannot produce text even at the doubled ceiling fails on the same request it
- * would have failed on anyway, so a second escalation only multiplies spend.
- * Deliberately not folded into `emptySummaryRetries`: that key counts retries at
- * a FIXED budget, this one counts budget changes.
- */
-const BUDGET_ESCALATIONS = 1;
-
-/**
- * The deterministic truncation failure: same prompt and same budget reproduce
- * it exactly, so it is thrown rather than retried.
+ * The ceiling here is the PROVIDER's own default — this backend no longer sends
+ * `maxTokens` (see `summarizeLeaf`), so a `max-tokens` finish that already
+ * carries text means the provider's default cut a real summary in half. That is
+ * still deterministic and still an incomplete checkpoint, so it still throws.
  * @returns the error, tagged `MAX_TOKENS`.
  */
 function maxTokensTruncation() {
@@ -137,7 +141,8 @@ function maxTokensTruncation() {
  * @param config - resolved engine configuration.
  * @param prepared - priced selection snapshot from `region.prepareCompaction`.
  * @param agent - supplies the routed model and session.
- * @param budgetTokens - summary token ceiling.
+ * @param budgetTokens - target summary length named in the instruction. NOT a
+ *   request cap: no `maxTokens` is sent, so the provider's own default applies.
  * @param signal - cancellation forwarded to the adapter.
  * @returns summary blocks plus provenance and usage.
  */
@@ -177,55 +182,61 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   }
 
   const priorDepth = maxAbsorbedDepth(session, prepared.shadowedSeqs);
-  // The instruction states the budget ("Produce at most N tokens"), so it is
-  // rebuilt from the SAME number the request carries. Building it once outside
-  // the loop would leave a model told "512" while the request allows 1024 after
-  // a budget escalation — the model would compress to the stale, smaller limit.
-  const buildMessages = (budget) => {
-    const instruction = createUserMessage({
-      content: [
-        {
-          type: "text",
-          text: buildInstruction(budget, prepared.shadowedTokenCount, priorDepth)
-        }
-      ]
-    });
-    return system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
-  };
+  // The instruction names a TARGET size, not a ceiling: the request carries no
+  // `maxTokens` (see below), so nothing truncates the answer at this number.
+  // It still earns its place — a model told "roughly 2400 tokens" writes a
+  // 2400-token summary instead of a 400-token stub or a 40k-token transcript.
+  const instruction = createUserMessage({
+    content: [
+      {
+        type: "text",
+        text: buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth)
+      }
+    ]
+  });
+  const messages = system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
 
-  let options = {
+  // No `maxTokens` is sent. Two measured reasons:
+  //
+  //   1. Reasoning-first backends bill hidden reasoning against the same
+  //      completion budget, so a summary-sized cap is spent entirely on
+  //      thinking and the response finishes `max-tokens` with ZERO text — a
+  //      compression that fails for a reason the caller cannot fix.
+  //   2. Model output lengths are not predictable enough to cap usefully: the
+  //      anchor list alone varies by an order of magnitude across spans, so any
+  //      fixed number is either a truncation or dead weight.
+  //
+  // Letting the provider apply its own default ceiling is the honest option:
+  // the shrink guarantee in `region.compactSurfaceRegion` is what bounds this
+  // transaction, and it is a post-hoc check that cannot be gamed by a cap.
+  const options = {
     provider: target.provider,
     model: target.model,
-    messages: buildMessages(budgetTokens),
+    messages,
     ...(header?.tools === undefined ? {} : { tools: [...header.tools] }),
-    maxTokens: budgetTokens,
     sessionId: session.id,
     purpose: "compaction",
     ...(signal === undefined ? {} : { signal })
   };
 
-  // Retry policy. Three failures look alike on the wire (a finish chunk and
+  // Retry policy. Two failures look alike on the wire (a finish chunk and
   // nothing usable) but mean different things:
   //
-  //   empty      — no text AND a clean finish: a sampling accident. Retried on
-  //                the SAME prompt and route, because changing either would
-  //                make the one reproducible failure unreproducible.
-  //   max-tokens WITH text — deterministic truncation: the summary is too long
-  //                for the budget, so a second attempt truncates identically at
-  //                full price. Never retried.
-  //   max-tokens WITHOUT text — a reasoning-first backend spent the entire
-  //                completion budget thinking and never started writing. That
-  //                is the empty case wearing the truncation finish reason: more
-  //                budget usually produces text, so it gets ONE escalation
-  //                (budget × 2, clamped to checkpointCap) instead of a retry at
-  //                the same ceiling, which would only buy the same reasoning
-  //                spend again.
+  //   empty — no text AND a clean finish: a sampling accident. Retried on the
+  //           SAME prompt and route, because changing either would make the one
+  //           reproducible failure unreproducible.
+  //   max-tokens — the provider's OWN default ceiling cut the completion. WITH
+  //           text that is deterministic truncation: an incomplete checkpoint,
+  //           and a retry truncates identically at full price. WITHOUT text it
+  //           is the empty case wearing the truncation finish reason, so it
+  //           falls through to the empty-response retry below — which is the
+  //           right handling, because there is no budget left to escalate.
   const emptyRetries = config.emptySummaryRetries;
   let attempts = 0;
-  let escalations = 0;
   let raw;
   let produced = "";
   let usage;
+  let finishKind;
   for (;;) {
     attempts += 1;
     signal?.throwIfAborted();
@@ -233,25 +244,14 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk);
     const finish = assembler.finish;
     if (finish.kind === "error" || finish.kind === "aborted") throw finish.failure;
+    finishKind = finish.kind;
     raw = assembler.blocks();
     produced = raw
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n")
       .trim();
-    if (finish.kind === "max-tokens") {
-      const escalated = Math.min(config.checkpointCap, options.maxTokens * 2);
-      if (produced.length > 0 || escalations >= BUDGET_ESCALATIONS || escalated <= options.maxTokens) {
-        throw maxTokensTruncation();
-      }
-      escalations += 1;
-      engineDebug(
-        config,
-        `summarize budget-escalated attempt=${attempts} from=${options.maxTokens} to=${escalated} reason=max-tokens-without-text`
-      );
-      options = { ...options, maxTokens: escalated, messages: buildMessages(escalated) };
-      continue;
-    }
+    if (finish.kind === "max-tokens" && produced.length > 0) throw maxTokensTruncation();
     if (produced.length > 0) {
       usage = assembler.usage;
       if (attempts > 1) engineDebug(config, `summarize empty-response retry succeeded attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind}`);
@@ -261,7 +261,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
       config,
       `summarize empty-response attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind} blocks=${raw
         .map((block) => block.type)
-        .join(",") || "none"} budget=${options.maxTokens}`
+        .join(",") || "none"} target=${budgetTokens}`
     );
     if (attempts > emptyRetries) throw new Error("lcm: summarization produced no text content");
   }
@@ -278,7 +278,11 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     rawOutput: raw,
     provider: options.provider,
     model: options.model,
-    maxTokens: options.maxTokens,
+    // No `maxTokens` is reported: none was sent, so recording one would claim a
+    // cap the request never carried. `targetTokens` is what the instruction
+    // asked the model to aim for, and what provenance should show instead.
+    targetTokens: budgetTokens,
+    finish: finishKind,
     ...(usage === undefined ? {} : { usage })
   };
 }
