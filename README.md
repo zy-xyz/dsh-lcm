@@ -36,12 +36,12 @@ retracted three of its claims. The current state:
 
 | claim | status |
 |---|---|
-| configuration is a drop-in superset of basic | **verified** — 152 tests, identical defaults and budget math |
+| configuration is a drop-in superset of basic | **verified** — 153 tests, identical defaults and budget math |
 | the transaction actually commits | **verified** — `test/region.test.js` replays every append through the harness's own `foldSurface` |
 | **a dropped fact stays recoverable** | **verified on production data** — see below |
 | **the summary keeps more exact literals** | **verified** — 2 corpora, same instrument: **7/14 vs 2/14**, **15/24 vs 4/24** |
 | this summary is *denser* than basic's | not claimed — density is not the goal, fidelity is |
-| lcm is cheaper | not claimed — cost is out of scope by instruction |
+| lcm is cheaper | **no**: the leaf unit costs about **7.95×** the tokens of a single pass, see [the leaf unit](#the-leaf-unit-and-what-it-costs) |
 
 ### The measured difference that is not a prompt trick
 
@@ -104,7 +104,7 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     retainRatio: 0.16          # mutually exclusive with retainTokens
     summarizationProvider: ""  # "" = the routed model
     summarizationModel: ""
-    maxTokens: 65536           # target length hint; never sent as a request cap
+    maxTokens: 65536           # caps the summary target; the request ceiling is 2 x the target
     compactionRetries: 1
     maxOverflowRetries: 1
     modelPolicies: []
@@ -113,6 +113,8 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     summaryRatio: 0.12         # summary target = clamp(span*ratio, floor, cap)
     summaryFloorTokens: 512
     checkpointCap: 16384
+    leafSpanTokens: 24000      # one compaction summarises at most this much; 48000 halves the call count
+    condensationFanin: 4       # same-depth checkpoints merge into one higher node at this fanin
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
     emptySummaryRetries: 2     # retry a response with no text block (a truncated-but-textual one is never retried)
     # ── optional vector recall (off by default) ──
@@ -153,11 +155,51 @@ retainTokens    = retainTokens ?? floor(messageBudget × retainRatio)
 targetTokens    = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
 ```
 
-The last line is the only new one, and it is a **target**, not a cap: the
-summarizer request carries no `maxTokens`, so the provider's own default ceiling
-applies and a longer answer is accepted. The transaction is bounded by the shrink
-guarantee (framed summary must be smaller than the span it replaces), which is a
-post-hoc check no cap can replace.
+The last line is the only new one, and it is a **target**, not the request
+ceiling. The request carries `max(4096, 2 x target)`: a reasoning-first backend
+spends part of any ceiling on hidden reasoning, and leaving the ceiling unset was
+worse, because the provider then substitutes a smaller default of its own. The
+transaction is bounded by the shrink guarantee (framed summary must be smaller
+than the span it replaces), which is a post-hoc check no cap can replace.
+
+### The leaf unit, and what it costs
+
+One compaction summarises at most `leafSpanTokens` (24 000) of the compactable
+prefix, starting from the oldest node and walking the boundary back to a balanced
+tool-pair edge. A 436 194-token history therefore takes 19 leaves, not one pass.
+
+The leaf exists because the single pass fails: on 15 measured questions the
+provider cut the response before the sections finished, leaving 1 section on 5 of
+them. The same prompt over 24k leaves returned 7/7 with all 6 sections and
+`finish: stop` on every one ([bench/REPORT.md](bench/REPORT.md) §32).
+
+What it buys: a summary that is never truncated, complete sections, and a bounded
+summariser prompt per call. Same-depth leaves then condense into one higher node
+once `condensationFanin` (4) siblings accumulate, so the surface grows
+logarithmically instead of as a flat row. A leaf that returns no text, or that the
+request ceiling cuts, falls to a deterministic body built from the span itself; a
+leaf that comes back over the shrink bound gets one retry at half the budget, then
+deterministic truncation. Neither rung calls the model, so the compaction converges
+instead of failing.
+
+What it costs: every leaf re-sends the fixed prefix (system prompt plus
+instruction). Projected from the measured prefix of 271 301 tokens over the same
+436 194-token history:
+
+| | calls | tokens (gross) | vs basic |
+|---|---|---|---|
+| `dsh-compaction-basic`, one pass | 1 | 712 975 | 1.00× |
+| `dsh-lcm`, 19 × 24k leaves | 19 | 5 665 439 | **7.95×** |
+
+Cache hits absorb most of the money but not the token count: with leaves 2..19 at
+cache-hit prices the projection is 1 270 361 price-equivalent against basic's
+610 217, about **2.08×**. Both figures are projections, not a measured lcm run at
+that size.
+
+The knob is `leafSpanTokens`. Raising it to 48 000 halves the leaf count, and
+therefore the prefix re-sends, at the cost of each leaf carrying more detail and
+being likelier to drop some. 24 000 is the default because it is the size at which
+the measured response stopped being truncated.
 
 ## Tools
 
@@ -200,14 +242,18 @@ and inserts this engine plus its tools.
 - **The DAG is derived, not stored.** `deriveDag()` reconstructs checkpoint
   depth from `compaction/summary` events plus their replacement message. No side
   store, no migration, rebuildable after any restart.
-- **Fail closed.** A summary that would not shrink the surface, a truncated
-  stream, or an empty response all raise; the transaction writes one
-  `compaction/end` with the error and the original history is untouched.
+- **Fail closed.** A transport failure, a rate limit or an abort raises; the
+  transaction writes one `compaction/end` with the error and the original history
+  is untouched. A model-side outcome does not raise: an empty body and an
+  over-long one both land on the deterministic rung, because turning "the model
+  wrote too much" into "the compaction fails" repeated on every step.
 
 ## Limitations
 
-- One compaction is one model call: seconds, not milliseconds.
+- One compaction is `ceil(span / leafSpanTokens)` model calls, run serially: seconds
+  per leaf, and the leaf count grows with the span.
 - `dsh 0.2.2-rc.1` exposes no settings-section installer, so the engine reads the
   composition entry directly; `settings.yaml` overlays do not apply.
-- The A/B above is one span. Cost parity is within noise; fidelity gain is the
-  claim.
+- The A/B above is one span. Cost is **not** at parity: the leaf unit multiplies
+  the token count, see [the leaf unit](#the-leaf-unit-and-what-it-costs). Fidelity
+  is the claim; the multiplier is the price.
