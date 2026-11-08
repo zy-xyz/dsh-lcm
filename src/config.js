@@ -118,8 +118,16 @@ const LCM_KEYS = [
   "vectorCacheDir"
 ];
 
-/** Complete public top-level key set. */
-const CONFIG_KEYS = new Set([...POLICY_KEYS, ...LCM_KEYS, "modelPolicies", "auto"]);
+/**
+ * Complete public top-level key set.
+ *
+ * Exported because it is the single source of truth for the config surface: the
+ * composition-time schemastery `Config` in ./index.js must declare exactly these
+ * keys, or `Config.simplify` silently drops the ones it never learned about when a
+ * patch re-route writes the configuration back (see test/config-surface.test.js).
+ * A test asserting that agreement is what keeps the two lists from drifting apart.
+ */
+export const CONFIG_KEYS = new Set([...POLICY_KEYS, ...LCM_KEYS, "modelPolicies", "auto"]);
 
 /** Complete exact-target override key set. */
 const MODEL_POLICY_KEYS = new Set(["provider", "model", ...POLICY_KEYS]);

@@ -274,10 +274,21 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   // Letting the provider apply its own default ceiling is the honest option:
   // the shrink guarantee in `region.compactSurfaceRegion` is what bounds this
   // transaction, and it is a post-hoc check that cannot be gamed by a cap.
+  // `toolHistory` is what makes the replayed prefix a genuine prefix of the last
+  // routed request: the adapter diffs the tool projection against it and sends only
+  // the delta, so a request that omits it re-declares every tool and invalidates
+  // the provider's warm prefix cache — the one reason this call replays the
+  // conversation at all. `dsh-compaction-basic` passes the same field.
+  //
+  // Included only when the session actually exposes the projection: it always
+  // exists on a real `Session`, and a session-shaped value without it (the
+  // fixtures) simply sends the declaration set, which is correct for a session
+  // that has no tool history to diff against.
   const options = {
     provider: target.provider,
     model: target.model,
     messages,
+    ...(typeof session.toolHistory === "function" ? { toolHistory: session.toolHistory() } : {}),
     ...(header?.tools === undefined ? {} : { tools: [...header.tools] }),
     sessionId: session.id,
     purpose: "compaction",

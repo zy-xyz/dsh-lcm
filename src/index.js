@@ -236,6 +236,40 @@ export class LcmCompactionEngine extends CompactionEngine {
     disposers.push(ctx.on("agent/status", ({ agent, status }) => {
       if (status === "idle") this.overflowRetries.delete(agent);
     }));
+    // A model switch is a pressure event: the next request runs on a DIFFERENT
+    // window, and if the new one is smaller the history that comfortably fit the
+    // old model no longer fits. basic prices the PROPOSED envelope here (not the
+    // durable one), so the decision already uses the new model's capacity, and it
+    // requires the history to actually land below the new threshold before the
+    // switch is allowed. Failing to get there is reported as a refused switch
+    // rather than surfacing later as a provider context-window error mid-turn.
+    //
+    // `prepend: true` because this listener must observe the config BEFORE any
+    // other consumer acts on it: it may still veto the switch.
+    disposers.push(ctx.on("agent/request", async ({ agent, signal }, next) => {
+      const config = await next();
+      const previous = agent.session.requestHeader();
+      if (
+        signal.aborted ||
+        previous === undefined ||
+        config.provider === "" ||
+        config.model === "" ||
+        (previous.config.provider === config.provider && previous.config.model === config.model)
+      ) return config;
+      try {
+        const result = await this.compactPressure(agent, { ...previous, config }, signal, true);
+        if (result !== null) logResult(result, "model switch");
+      } catch (error) {
+        signal.throwIfAborted();
+        const message = describeError(error);
+        throw new LlmError(
+          `Cannot switch to ${config.provider}/${config.model}: context compaction failed: ${message}. The previous request model is preserved; retry or select a model with a larger context window.`,
+          "MODEL_SWITCH_COMPACTION_FAILED",
+          { cause: error }
+        );
+      }
+      return config;
+    }, { prepend: true }));
     disposers.push(ctx.on("session/event", (session, event) => {
       if (event.type !== "assistant/message") return;
       const agent = this.overflowAgents.get(session);
@@ -321,7 +355,13 @@ export class LcmCompactionEngine extends CompactionEngine {
     // line and the retention footer, none of which the summarizer can control,
     // so gating on framed tokens would retry summaries that are already fine and
     // still fail the ones framing alone sinks.
-    const limit = prepared.shadowedTokenCount;
+    // The gate this pre-check stands in for is stated in ROUTE prices
+    // (`region.js` compares the framed replacement against
+    // `prepared.shadowedRouteTokenCount`), so the limit must be the same number;
+    // `prepared.shadowedTokenCount` is the heuristic shadow price the token
+    // meter folds and is not the comparison basis. The fallback keeps a
+    // caller-shaped `prepared` (one carrying only the shadow price) working.
+    const limit = prepared.shadowedRouteTokenCount ?? prepared.shadowedTokenCount;
     let result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
     signal?.throwIfAborted();
     let text = summaryBodyOf(result);
@@ -398,52 +438,72 @@ export class LcmCompactionEngine extends CompactionEngine {
     const target = routedTarget(agent.session);
     engineDebug(this.config, `compactIfNeeded trigger=${trigger} target=${target === undefined ? "none" : target.provider + "/" + target.model} auto=${String(this.config.auto)}`);
     if (target === undefined) return null;
-    const policy = resolveTargetPolicy(this.config, target);
-    const meter = this.ctx.tokenMeter;
-    let measurement = meter.measure(agent.session);
     switch (trigger) {
-      case "context-overflow": break;
-      case "pressure": break;
+      // The durable envelope IS the proposed envelope for a step boundary.
+      case "pressure": return this.compactPressure(agent, agent.session.requestHeader(), signal, false);
+      case "context-overflow": {
+        const meter = this.ctx.tokenMeter;
+        const prune = this.ctx.get("toolResultPruner");
+        let measurement = meter.measure(agent.session);
+        if (prune !== undefined) {
+          prune.pruneSession(agent.session);
+          measurement = meter.measure(agent.session);
+        }
+        // Overflow recovery is still an AUTOMATIC reduction, so the same
+        // "not worth a summary call" floor applies: a span the summary budget
+        // could never undercut would burn one model call and then fail the shrink
+        // guarantee, which is strictly worse than preserving the original error.
+        const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens);
+        if (range === null) return null;
+        return this.compactRegion(range.start, range.end, agent, signal);
+      }
       /* v8 ignore next -- closed-union exhaustiveness guard */
       default: assertNever(trigger, "compaction trigger");
     }
+  }
+  /**
+   * Compact one PROPOSED request envelope down below its own pressure threshold.
+   *
+   * The envelope is a parameter because a model switch has to be priced on the
+   * config the next request would actually use — the durable header still
+   * describes the previous model. `dsh-compaction-basic` has this same split
+   * (`compactIfNeeded` for the durable envelope, `compactPressure` for a
+   * proposed one); only the span floor and the summary target are ours.
+   *
+   * @param agent - agent whose session is measured and compacted.
+   * @param header - the request envelope to price; `undefined` when none exists.
+   * @param signal - live turn cancellation signal.
+   * @param requireBelowThreshold - when true, failing to reach the threshold is an
+   *   ERROR rather than a quiet `null`: a refused model switch must report why.
+   * @returns the last compaction result, or `null` when nothing was needed.
+   */
+  async compactPressure(agent, header, signal, requireBelowThreshold) {
+    const target = header?.config;
+    if (target === undefined || target.provider.length === 0 || target.model.length === 0) return null;
+    const policy = resolveTargetPolicy(this.config, target);
+    const meter = this.ctx.tokenMeter;
+    let measurement = meter.measure(agent.session, header);
     const prune = this.ctx.get("toolResultPruner");
-    if (trigger === "context-overflow") {
-      if (prune !== undefined) {
-        prune.pruneSession(agent.session);
-        measurement = meter.measure(agent.session);
-      }
-      // Overflow recovery is still an AUTOMATIC reduction, so the same
-      // "not worth a summary call" floor applies: a span the summary budget
-      // could never undercut would burn one model call and then fail the shrink
-      // guarantee, which is strictly worse than preserving the original error.
-      const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens);
-      if (range === null) return null;
-      return this.compactRegion(range.start, range.end, agent, signal);
-    }
     const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal);
     const context = info.context;
     assertNoActiveCompaction(agent.session, "automatic pressure compaction");
     const targetKey = `${target.provider}/${target.model}`;
     if (context === undefined) throw new TargetPressureConfigError(targetKey, `compaction-lcm: no context capacity for ${targetKey}; configure contextWindow on that adapter model`);
     // basic's exact reservation: the routed request's own output budget must not
-    // be counted as available message space.
-    const spec = resolveCompactSpec(
-      policy,
-      context.contextWindow,
-      reservedCompletionTokens(agent.session.requestHeader(), info.defaultMaxTokens)
-    );
+    // be counted as available message space. It is read off the envelope being
+    // priced, so a model switch reserves the NEW model's completion budget.
+    const spec = resolveCompactSpec(policy, context.contextWindow, reservedCompletionTokens(header, info.defaultMaxTokens));
     // Observability for the one decision that silently does nothing: G6 asks for a
     // state surface, and "compaction never fired" was indistinguishable from
     // "compaction fired and failed" without this line.
     engineDebug(
       this.config,
-      `pressure: measured=${measurement.totalTokens} threshold=${spec.thresholdTokens} window=${context.contextWindow} retain=${spec.retainTokens}`
+      `pressure: measured=${measurement.totalTokens} threshold=${spec.thresholdTokens} window=${context.contextWindow} retain=${spec.retainTokens} required=${String(requireBelowThreshold)}`
     );
     if (measurement.totalTokens < spec.thresholdTokens) return null;
     if (prune !== undefined) {
       prune.pruneSession(agent.session);
-      measurement = meter.measure(agent.session);
+      measurement = meter.measure(agent.session, header);
     }
     if (measurement.totalTokens < spec.thresholdTokens) return null;
     let result = null;
@@ -454,13 +514,16 @@ export class LcmCompactionEngine extends CompactionEngine {
       // the call was guaranteed to fail after paying for it.
       const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens);
       if (range === null) {
-        /* v8 ignore else -- concrete replacement preserves a compactable checkpoint; subclass hooks cannot mutate it. */
-        if (result === null) return null;
+        // A step-boundary attempt that cannot make progress is a no-op; a model
+        // switch that cannot is a refusal, because admitting the new model would
+        // send an over-threshold request.
+        if (result === null && !requireBelowThreshold) return null;
+        if (result === null) throw new Error(`no safe compaction range can reduce ${targetKey} context below its threshold (${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`);
         /* v8 ignore next -- paired with the defensive post-success branch above. */
         break;
       }
       result = await this.compactRegion(range.start, range.end, agent, signal);
-      measurement = meter.measure(agent.session);
+      measurement = meter.measure(agent.session, header);
       if (measurement.totalTokens < spec.thresholdTokens) return result;
     }
     throw new Error(`compaction still above threshold after ${spec.compactionRetries + 1} compaction attempts (${measurement.totalTokens} estimated tokens >= threshold ${spec.thresholdTokens})`);
