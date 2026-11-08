@@ -195,6 +195,35 @@ compaction/end     seq 42
 
 ---
 
+
+### 0.2 契约对拍：与 dsh 0.2.2-rc.1 逐项核对，修了 11 处
+
+做法：读安装版本的真源码，把 `CompactionEngine` 的抽象契约、事件协议、错误词汇表、配置面、同类插件共存、生命周期逐项与 `dsh-compaction-basic` 对拍。**骨架全对**（三个抽象方法签名、`compaction/start|summary|end` 括号、`surfaceOp` 恰好三键、`sourceEventSeqs` 构成、6 个 `ManualCompactionError` code、pressure 路径 prune 时机、`auto:false` 零监听器）。缺陷全在细节，其中一处会污染 harness 自身状态：
+
+| # | 缺陷 | 后果 | 状态 |
+|---|---|---|---|
+| 1 | `shadowedTokenCount` 用**路由价**，而 token-meter 把它当**影子价**从启发式总量里扣 | surface 压力**永久低估**，阈值永不触发 | ✅ 拆成 `shadowedTokenCount`(heuristic) / `shadowedRouteTokenCount`(route)，收缩闸比 route |
+| 2 | `compaction/summary` 写了 `targetTokens` | released 校验器明确拒绝该字段 | ✅ 落盘用契约名 `maxTokens`，语义写进注释 |
+| 3 | 摘要失败抛 provider 的**冻结纯对象** | `instanceof LlmError` 判据失效（image-offload 依赖它） | ✅ 包成 `LlmError`，原对象作 cause |
+| 4 | 缺 `compaction/summary-error` waterfall | image-offload 的恢复监听器**永不触发** | ✅ 补上，`false` 为默认（事务重抛原错） |
+| 5 | peer `^0.2.0` 不接受 `0.2.2-rc.1`（预发布） | 装不上/警告 | ✅ 改 `^0.2.2-0`，实测 satisfies |
+| 6 | `Config` schema 少声明 9 个键 | `Config.simplify` 写回时**静默丢**这 9 键（`fiber.update` 会丢配置） | ✅ 补进 schema，不加 `.default()`（否则又变成静默） |
+| 7 | `llm.stream` 缺 `toolHistory` | 路由投影发完整工具声明而非增量，破坏前缀缓存 | ✅ 补上，无该投影的夹具则不发 |
+| 8 | 缺 `agent/request` 模型切换压缩 | 监听器 4 个 vs basic 5 个 | ✅ 补上，含 `MODEL_SWITCH_COMPACTION_FAILED` |
+| 9 | per-model `summarizationProvider/Model` 被接受但忽略 | 配置静默失效 | ✅ 走 `resolveTargetPolicy` |
+| 10 | 非 system 的 `surface[0]` 被当 system head | 该消息在摘要输入里**出现两次** | ✅ 加 `type === "system/message"` 判定 |
+| 11 | 文案 `smaller checkpoint` vs basic 的 `smaller summary` | 无功能影响 | ✅ 对齐 |
+
+**135 测试全绿**（102 基线断言一行未改 + 33 新增）。每一条修复都做过**反向对照**：把修复回退，对应测试必须转红 —— 否则那测试是空跑的。
+
+真引擎复验（`lcmfresh` profile）：日志里 `summarize span=3 → done tokens=186 ratio=3.39` 成功落地，会话事件实测 `compaction/summary seq 24 maxTokens=189`、**`targetTokens` 不存在**、`shadowedTokenCount=630`（启发式价，不再是路由价）。
+
+### 一处方向性差异（不是缺陷，保留）
+
+我们的 `selectCompactableRange` 在**自动路径**上多传 `summaryFloorTokens` 做最小跨度守卫，basic 不传。后果：可压区间低于下限时我们返回 `null`（保留原始请求错误），basic 会照压然后可能撞收缩保证失败。**我们更保守**，且这是真引擎实测逼出来的（否则会去压刚生成的 checkpoint，浪费一次调用）。手动 `/compact` 不武装该守卫，保留强制压缩的能力。
+
+---
+
 ## 1. 门禁总览
 
 | 门 | 阻断级 | 内容 | 工时 |
