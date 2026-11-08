@@ -9,10 +9,11 @@
  * exact original tokens.
  *
  * The prompt is deliberately structured to minimise loss:
- *   - it states a TARGET length (never a request cap — no `maxTokens` is sent,
- *     because a summary-sized completion budget is spent entirely on hidden
- *     reasoning by reasoning-first backends), so the model knows how hard to
- *     compress without risking a truncated answer
+ *   - it states a TARGET length, and the request carries a separate ceiling of
+ *     `max(4096, 2 x target)`: reasoning-first backends bill hidden reasoning
+ *     against the same number, so a ceiling equal to the target leaves the answer
+ *     half-written, while no ceiling at all substitutes the provider's own smaller
+ *     default and truncates silently
  *   - it demands a fixed section skeleton (decisions / state / open threads /
  *     verbatim anchors) instead of free-form prose
  *   - it requires verbatim retention of identifiers the agent will need later
@@ -294,10 +295,11 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   }
 
   const priorDepth = maxAbsorbedDepth(session, prepared.shadowedSeqs);
-  // The instruction names a TARGET size, not a ceiling: the request carries no
-  // `maxTokens` (see below), so nothing truncates the answer at this number.
-  // It still earns its place — a model told "roughly 2400 tokens" writes a
-  // 2400-token summary instead of a 400-token stub or a 40k-token transcript.
+  // The instruction names a TARGET size; the request ceiling is set separately and
+  // deliberately higher (see the ceiling comment below), so this number guides the
+  // model without being the thing that cuts it off. It still earns its place — a
+  // model told "roughly 2400 tokens" writes a 2400-token summary instead of a
+  // 400-token stub or a 40k-token transcript.
   const instructionText = buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth);
   const instruction = createUserMessage({
     content: [
@@ -312,19 +314,23 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   });
   const messages = system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
 
-  // No `maxTokens` is sent. Two measured reasons:
+  // A ceiling, and why it is twice the target.
   //
-  //   1. Reasoning-first backends bill hidden reasoning against the same
-  //      completion budget, so a summary-sized cap is spent entirely on
-  //      thinking and the response finishes `max-tokens` with ZERO text — a
-  //      compression that fails for a reason the caller cannot fix.
-  //   2. Model output lengths are not predictable enough to cap usefully: the
-  //      anchor list alone varies by an order of magnitude across spans, so any
-  //      fixed number is either a truncation or dead weight.
+  // Two measured failures bracket this number. A summary-sized cap failed first:
+  // reasoning-first backends bill hidden reasoning against the same completion
+  // budget, so the whole cap went to thinking and the response finished
+  // `max-tokens` with ZERO text. Removing the cap failed the other way: the
+  // provider substituted its own smaller default, and one run was cut mid-word at
+  // 7 734 characters with only the anchor section written, while the same prompt
+  // with an explicit 32 768 finished at 8 817 characters with all six sections.
+  // Neither "cap at the target" nor "no cap at all" is correct.
   //
-  // Letting the provider apply its own default ceiling is the honest option:
-  // the shrink guarantee in `region.compactSurfaceRegion` is what bounds this
-  // transaction, and it is a post-hoc check that cannot be gamed by a cap.
+  // So the ceiling is `max(4096, 2 x target)`: reasoning measured at roughly half
+  // the billed completion, which makes twice the target enough room to finish, and
+  // it is not the binding constraint because the model stops well before it. The
+  // shrink guarantee in `region.compactSurfaceRegion` is still what bounds the
+  // transaction, and it is a post-hoc check no cap can replace.
+  //
   // `toolHistory` is what makes the replayed prefix a genuine prefix of the last
   // routed request: the adapter diffs the tool projection against it and sends only
   // the delta, so a request that omits it re-declares every tool and invalidates
@@ -426,9 +432,9 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     rawOutput: raw,
     provider: options.provider,
     model: options.model,
-    // No `maxTokens` is reported: none was sent, so recording one would claim a
-    // cap the request never carried. `targetTokens` is what the instruction
-    // asked the model to aim for, and what provenance should show instead.
+    // `targetTokens` is what the instruction asked the model to aim for. The
+    // request ceiling is the separate `max(4096, 2 x target)` above, so recording
+    // the target here is the honest field: it is not the cap that was sent.
     targetTokens: budgetTokens,
     finish: finishKind,
     ...(usage === undefined ? {} : { usage })

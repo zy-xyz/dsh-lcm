@@ -1271,9 +1271,11 @@ lcm status
 
 - `src/index.js` / `src/config.js` 仍写着「不发 `maxTokens`，用 provider 默认上限」，而 `src/summarize.js` 实际发 `max(4096, 2×目标)` —— §31 改了行为没回头改注释。
 - `hardShrinkConstraint` 写「All four state sections」，而 `SUMMARY_SKELETON` 去掉锚点节后有**五**节。
-- `README.md` 仍写「102 tests」「4 narrative sections」，实际 152 测试、5 节。
+- `README.md` 仍写「102 tests」「4 narrative sections」，实际 153 测试、5 节。
 
-都已改。**这一类错误的共同点：我改了行为，没回头看同一件事的其他描述处。**
+**补充更正**：我在这里曾写「都已改」，那是错的 —— 只改了 `src/index.js` 和 `src/config.js`，**`src/summarize.js` 里还有六处**写着「no `maxTokens` is sent / never a request cap / nothing truncates the answer / No `maxTokens` is reported: none was sent」。两个子代理各自独立地把这六处指了出来（其中一个直接引用了本节「都已改」作为反证）。现在全部改完，`grep` 已空。
+
+**这一类错误的共同点：我改了行为，没回头看同一件事的其他描述处 —— 而且第一次盘点时还宣称盘点完了。** 盘点本身也需要证据（`grep` 输出），不能凭记忆。
 ---
 
 ## 38. 第三个子代理抓到的：同深度合并**根本不可能触发**
