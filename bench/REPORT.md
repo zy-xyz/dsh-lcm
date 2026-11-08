@@ -751,6 +751,55 @@ agentic 臂的答案 **11/20 含中文**，其余三臂 **0/20**（gold 全英�
 **但 gold 仍然不在 checkpoint 里。**
 ---
 
+## 29. 借 lcm-x 的断言结构改造「用户事实」节
+
+用户提示「参照 hermes-lcm-x 怎么处理，如果它更好就用它的」。读了它的 `assertion_extraction.py` / `assertion_store.py`（共 2 211 行），它对这个问题的处理确实更严谨，**已借用**。
+
+### lcm-x 的做法（`assertion_store.py:37-58`）
+
+它不靠摘要承载事实，而是**抽取结构化断言**，每条有：
+
+```
+source_span_start / source_span_end / source_quote   精确到字符偏移的原文引用
+subject_key                                          canonical namespace:value（user/person/place/organization/object/event/project/document/account/assistant/conversation）
+predicate_key                                        canonical 小写点分谓词
+object_value + value_text                            结构化值 + 简洁原文文本
+kind                                                 fact|event|preference|recommendation|commitment|action|status|quotation
+polarity                                             positive|negative|unknown
+strength / scope_key / event_at / valid_from / valid_to
+relations                                            cancels|confirms|contradicts|narrows|reverses|supersedes|weakens|fulfills|quotes
+```
+
+三个设计点值得直接借：**① `kind` 是封闭枚举**（8 种），每一种都对应一类会被问到的东西；**② `polarity` 独立于值**，所以「喜欢 A、不喜欢 B」有地方放；**③ `source_quote` 必须是精确子串**，天然禁止翻译和改写。
+
+### 我们借用的部分
+
+`## 用户事实` 从「写句子」改成**带类型的事实行**：`主体.谓词 = 值 | 类型`，类型只用 lcm-x 那 8 种里对得上问答的 7 种（`fact` / `number` / `time` / `event` / `preference` / `status` / `commitment`），`preference` 带 `+`/`-` 极性，`event` 每条单独一行带 `1)` `2)` 次序，值**必须原文语言逐字**。
+
+### 顺带发现的两个回归（都已修）
+
+1. **把锚点节加宽成「短事实 `事实: 值`」是错的。** 实测输出变成中文散文：「用户祖母于 1 月 15 日 去世，几天后举行了葬礼。」—— 锚点节的唯一价值是**可粘贴进 `lcm_search` 的字面串**，写成句子就毁了这个性质。已恢复为**纯词表**，事实全部移到第二节。这是借用 lcm-x 的结构之后才看清的：它的 `source_quote` 必须是精确子串，所以它的抽取**不可能**退化成散文。
+2. **锚点清单需要上界。** 不加界时模型写了 13 837 字符的锚点，然后**一口气写完 6 节**（那次 `finish=stop`）；但另一次只写了 7 722 字符就停在**一个**小节（锚点），其余五节没有。同一指令、同一题，行为差异极大。加了「最多 120 行，唯一性优先、具体优先」的界，理由是**日志留着所有字符串、`lcm_search` 能找到任意一个**，所以穷举清单是在重复日志，还把「搜索也救不回来」的那部分（事实行）挤掉。lcm-x 同样有界（每条源最多 100 条断言、源文本 24 000 字符）。
+
+### 测量状态：不完整，如实记
+
+用「压缩 → 只给 checkpoint 答题 → 字符串判分」测了 15 组配对失败里的一部分，**指令改到一半就停了**，所以下面的数不能当结论：
+
+| 题 | 改前 | 改后 |
+|---|---|---|
+| e47becba（`Business Administration`） | UNKNOWN | **答对** |
+| 0ea62687（`2` mpg） | UNKNOWN | **答对** |
+| 95bcc1c8（`10` 个喜剧演员） | UNKNOWN | **答对**（仅在类型化事实行那版） |
+| efc3f7c2（`30 minutes`） | UNKNOWN | 仍 UNKNOWN |
+| 6613b389 / 06db6396 / 7e00a6cb | UNKNOWN | 仍 UNKNOWN |
+
+**3 题由不可答变可答、4 题仍不可答**，n 太小且中途改过两次指令，**不能据此宣称改进**。要判定得把整套指令固定下来、对 15 题跑一次完整的 before/after（`bench/acon-loop.mjs --instruction-module=bench/snapshots/summarize-head.mjs` 就是为此准备的）。
+
+**一条更硬的观察**：`95bcc1c8` 的 gold `10` 在改前的锚点表里就有（单独一行），模型仍答 UNKNOWN；改成类型化行 `user.watched_amateur_comedians = 10 | number` 之后才答对。**同一个值，有没有谓词和类型，决定它可不可答。** 这一条比任何聚合数字都有说服力，且在两种形态上各测过一次。
+
+（原注：gold 缺失是另一个问题）
+---
+
 ## 28. 去掉 maxTokens 之后暴露的第四个问题：模型会写超，撞收缩闸
 
 用户指示「不要设 max token 预算」，照做之后在真引擎上看到一个新的失败模式（`/tmp/lcm-fresh-debug.log`，全新 profile）：

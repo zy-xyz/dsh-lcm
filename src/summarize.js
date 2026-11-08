@@ -62,19 +62,43 @@ export const SUMMARY_SKELETON = [
  * anchors, the enumerated rule retains materially more at the same budget.
  */
 const ANCHOR_RULE = [
-  // The enumeration IS a filter: measured on 15 paired failures (full context
-  // answered, checkpoint did not), the golds were 7 numeric/time, 6 short prose
-  // facts and 2 long prose, with ZERO identifiers - exactly the one category the
-  // original list collected. The list now names the shapes that actually get
-  // asked about, and asks for `fact: value` so a count or a degree has a slot.
-  "第一节「逐字锚点」不是散文，是一张清单，**每行一条，原样抄写**：所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值；**每个数字连同它的单位和它计量的是什么**（计数、金额、时长、距离、尺寸、日期）；**每个人名、地名、机构名、产品名**；以及**其余关于用户或世界的一句短事实**（学位、职称、型号、数量），写成 `事实: 值`。",
-  "不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。",
+  // Two measured facts shape this rule, and they pull in opposite directions:
+  // (1) the enumeration IS a filter - on 15 paired failures the golds were 7
+  //     numeric, 6 short prose, 2 long prose and ZERO identifiers, i.e. exactly
+  //     the category the original list excluded, so the list must name those
+  //     shapes;
+  // (2) the section must stay a flat list of verbatim strings, because that is
+  //     what makes it searchable. Widening it to hold facts as well turned it
+  //     into Chinese prose sentences and destroyed that property.
+  // Hence: name the shapes HERE, carry the facts as typed rows BELOW.
+  // Measured regression: widening it to "every short fact as fact: value" turned
+  // the section into Chinese prose sentences, which destroys the property the
+  // section exists for - a string the agent can paste into lcm_search and get the
+  // event back. Facts belong in the typed-row section below, not here.
+  "第一节「逐字锚点」是**词表**，不是散文、不是句子。只收**原样可粘贴的字面串**，每行一条：文件路径、命令、URL、错误串、ID/uuid、函数名或变量名、键名、数值阈值、每个人名、地名、机构名、产品名、型号、每个数字连同它的单位（如 55 inch、30 minutes、$40、2023-05-30）。",
+  "**保持原文语言，逐字抄写，不翻译、不改大小写、不加解释、不写成句子。** 这一节是给 lcm_search 用的检索词表；把事实写成句子是第二节的事。",
+  // Bounded on purpose. Measured: without a bound the model wrote 11614 chars of
+  // anchors and then stopped, producing ONE section and no facts at all. The bound
+  // is justified rather than arbitrary: the log keeps every string and
+  // lcm_search can find any of them, so an exhaustive list duplicates the log and
+  // crowds out the part of the checkpoint that search cannot recover - the typed
+  // facts. lcm-x bounds its own extraction the same way (100 assertions per
+  // source, 24000 chars of source).
+  "**最多 120 行**。超过就按「唯一性优先、具体优先」取舍：只出现一次的字面串比出现几百次的通用词值钱；同一个串重复出现只写一次。宁可少列，也要保证后面每一节都写出来。",
   // Measured on 20 LongMemEval questions: with the old wording ("prefer long, cut
   // the later sections first") the anchor list reached 91% and 99.7% of one
   // checkpoint, and in the 99.7% case the other four sections were ABSENT. Those
   // four sections are what a resuming agent reads to know where it is, so the
   // instruction now protects them and asks for grouping instead of dropping.
-  "第二节「用户事实」装**成句的事实**，不是词表：每行一句，句子必须**带着那个值**，说清是谁、什么、多少。例：用户本科学位是 Business Administration；用户在开放麦看了 10 个业余喜剧演员；用户新电视是 55 英寸；用户周五比其他日子早起 30 分钟。**一个值只出现在上面的锚点清单里、没有出现在这类句子里，等于没记住** —— 接手的人看到孤零零的 10 不知道它在数什么。凡是这段里出现过的、关于用户自己或用户做过的事、以及任何带数值的结论，都要在这里成句写一遍。",
+  // The row format is borrowed from lcm-x's assertion store (assertion_store.py:
+  // ASSERTION_KINDS). It is a typed row, not a sentence, because the failures it
+  // targets need a slot each: a count needs its unit and what it counts, an
+  // ordering needs the events kept apart, and a preference needs its polarity.
+  "第二节「用户事实」装**带类型的事实行**，不是词表、也不是散文。每行 `主体.谓词 = 值 | 类型`，主体只写 user / assistant / world。类型只用这几个：",
+  "  fact —— 静态事实（学位、姓名、住处、设备型号、公司、地点）；number —— 带单位、并写清在数什么的数值；time —— 时刻或时长；event —— 有先后的事件，**每条事件单独一行**，行首标 `1)` `2)` `3)` 的次序；preference —— 偏好，喜欢的东西前面标 `+`、不喜欢的标 `-`；status —— 进行中 / 已完成；commitment —— 答应过要做的事。",
+  "  例：`user.degree = Business Administration | fact`、`user.watched_amateur_comedians = 10 | number`、`user.new_tv_size = 55 inch | number`、`user.friday_wakeup_earlier = 30 minutes | time`、`user.creamer_preference = +variations on almond milk + vanilla + honey; -commercial products; -high sugar | preference`、`world.event_order = 1) Walmart coupon 2) Ibotta cashback 3) ShopRite signup | event`。",
+  "  **值必须原样取自原文、保持原文语言**（原文是英文就写 Business Administration，不要译成中文）；谓词用英文小写下划线。",
+  "  **一个值只出现在上面的锚点清单里、没有出现在这类带类型的行里，等于没记住** —— 接手的人看到孤零零的 10 不知道它在数什么。凡是这段里出现过的、关于用户自己、用户做过的事、以及任何带数值或先后的结论，都要在这里写成一行。",
   "其余四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。",
   "如果锚点太多，**合并重复**（同一个路径反复出现只写一次），而不是删小节、也不是删掉锚点。"
 ].join("");

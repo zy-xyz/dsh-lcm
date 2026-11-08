@@ -163,8 +163,15 @@ test("buildInstruction states the budget and an enumerated anchor section", () =
   assert.match(text, /8\.3:1/);
   // The anti-loss clause is an enumeration instruction, not a prose request.
   assert.match(text, /## 逐字锚点/);
-  assert.match(text, /每行一条，原样抄写/);
-  assert.match(text, /只要出现过就列出来/);
+  // The anchor section must stay a flat list of verbatim strings. Widening it to
+  // "every short fact as fact: value" once turned it into Chinese prose, which
+  // destroys the one property it exists for: a string you can paste into
+  // lcm_search. Facts live in the typed-row section instead.
+  assert.match(text, /原样可粘贴的字面串/);
+  assert.match(text, /不写成句子/);
+  // "List everything you saw" is the anti-filter clause; it survived the rewrite
+  // in the form of "keep the source language, copy verbatim".
+  assert.match(text, /逐字抄写/);
   // The old wording told the model to cut the four narrative sections first, and
   // on 20 real questions it obeyed: one checkpoint was 99.7% anchor list with the
   // other four sections absent. Those sections are what a resuming agent reads to
