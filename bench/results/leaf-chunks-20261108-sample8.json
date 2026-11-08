@@ -1,0 +1,1290 @@
+{
+ "benchmark": "dsh-lcm/leaf-summary-shape",
+ "instrument": "bench/leaf-chunks.mjs",
+ "generatedAt": "2026-11-08T00:54:56.892Z",
+ "dryRun": false,
+ "elapsedMs": 1167025,
+ "model": "balanced-lite",
+ "question": "At ONE total summary budget, does compressing the haystack in session-sized pieces retain facts that a single whole-span summary drops?",
+ "dataset": {
+  "path": "/home/agent/workspaces/lcmx-study/data/longmemeval_s.json",
+  "bytes": 278025796,
+  "sha256": "08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894",
+  "revision": "2ec2a557f339b6c0369619b1ed5793734cc87533",
+  "split": "LongMemEval_S",
+  "totalQuestions": 500,
+  "selected": 8,
+  "scored": 3,
+  "skipped": 5,
+  "sample": 8,
+  "limit": null,
+  "ids": null
+ },
+ "config": {
+  "instruction": "buildInstruction(budget, tokensOfThatPiece, 0) from src/summarize.js, built at run time",
+  "arms": {
+   "A-whole": "entire haystack as one span; budget = defaultBudget(haystackTokens) = min(16384, max(512, floor(tokens*0.12)))",
+   "B-chunks": "haystack cut on session boundaries into <= chunkTokens pieces; per-piece budget = floor(totalBudget/pieces) with the remainder to piece 1; summaries concatenated in order"
+  },
+  "chunkTokens": 30000,
+  "minChunkRatio": 0.5,
+  "modelsResolved": [
+   "agnes-3.0-flash",
+   "hy3",
+   "codestral-latest"
+  ],
+  "promptCalibration": {
+   "medianProviderOverEstimate": 0.73275,
+   "truncationRatio": 0.6,
+   "truncatedArms": [],
+   "note": "countTokens() is the engine's own estimator (src/compiler.js), not a tokenizer; on English prose the provider reports about 0.74x the estimate. An arm is flagged only when its ratio falls below truncationRatio * medianProviderOverEstimate."
+  },
+  "promptShape": "以下是本次会话的一段历史记录：\n\n<piece>\n\n=== INSTRUCTION ===\n<instruction>",
+  "maxTokens": "per-call max_tokens = that call's budget (the ceiling is enforced by the gateway)",
+  "scoring": "gold kept = case-insensitive literal containment of question.answer in the summary text",
+  "retries": {
+   "attempts": 3,
+   "backoff": "2000ms * 2^(n-1)",
+   "retriedOn": "transport errors, 5xx, 429, empty completion"
+  }
+ },
+ "arms": {
+  "A-whole": {
+   "n": 3,
+   "calls": 4,
+   "failedPieces": 0,
+   "outputTokens": 12953,
+   "reasoningTokens": 7264,
+   "visibleTokens": 5689,
+   "summaryTokens": 4812,
+   "budgetTotal": 49152,
+   "budgetShare": 0.26356666666666667,
+   "compressionRatio": 49.666666666666664,
+   "goldKept": 1,
+   "goldKeptInGoldPiece": null,
+   "elapsedMs": 260825
+  },
+  "B-chunks": {
+   "n": 3,
+   "calls": 19,
+   "failedPieces": 1,
+   "outputTokens": 17781,
+   "reasoningTokens": 0,
+   "visibleTokens": 17781,
+   "summaryTokens": 16187,
+   "budgetTotal": 49152,
+   "budgetShare": 0.36176666666666674,
+   "compressionRatio": 31,
+   "goldKept": 1,
+   "goldKeptInGoldPiece": 0,
+   "elapsedMs": 905721
+  }
+ },
+ "preflight": [
+  {
+   "question_id": "e47becba",
+   "question_type": "single-session-user",
+   "gold": "Business Administration",
+   "goldOccurrences": 2,
+   "containmentInformative": true,
+   "sessions": 54,
+   "goldSessions": [
+    {
+     "index1": 53,
+     "id": "answer_280352e9",
+     "tokens": 5387,
+     "hasGold": true
+    }
+   ],
+   "goldChunks": [
+    5
+   ],
+   "chunks": 5,
+   "goldChunkTokens": 37872,
+   "goldChunkBudget": 3276,
+   "haystackTokens": 148023,
+   "budget": 16384,
+   "mergedTrailing": true,
+   "failures": []
+  },
+  {
+   "question_id": "3d86fd0a",
+   "question_type": "single-session-user",
+   "gold": "a coffee shop in the city",
+   "goldOccurrences": 1,
+   "containmentInformative": true,
+   "sessions": 57,
+   "goldSessions": [
+    {
+     "index1": 9,
+     "id": "answer_19c24c11",
+     "tokens": 2346,
+     "hasGold": true
+    }
+   ],
+   "goldChunks": [
+    1
+   ],
+   "chunks": 5,
+   "goldChunkTokens": 25947,
+   "goldChunkBudget": 3280,
+   "haystackTokens": 145374,
+   "budget": 16384,
+   "mergedTrailing": true,
+   "failures": []
+  },
+  {
+   "question_id": "gpt4_2f91af09",
+   "question_type": "multi-session",
+   "gold": "23",
+   "goldOccurrences": 71,
+   "containmentInformative": false,
+   "sessions": 58,
+   "goldSessions": [
+    {
+     "index1": 9,
+     "id": "answer_669318cf_2",
+     "tokens": 5116,
+     "hasGold": true
+    },
+    {
+     "index1": 43,
+     "id": "answer_669318cf_1",
+     "tokens": 4688,
+     "hasGold": true
+    },
+    {
+     "index1": 57,
+     "id": "answer_669318cf_3",
+     "tokens": 5944,
+     "hasGold": true
+    }
+   ],
+   "goldChunks": [
+    1,
+    5
+   ],
+   "chunks": 5,
+   "goldChunkTokens": 27712,
+   "goldChunkBudget": 3280,
+   "haystackTokens": 152158,
+   "budget": 16384,
+   "mergedTrailing": true,
+   "failures": []
+  }
+ ],
+ "perQuestion": [
+  {
+   "question_id": "e47becba",
+   "question_type": "single-session-user",
+   "gold": "Business Administration",
+   "chunkPlan": [
+    {
+     "index": 0,
+     "sessions": 11,
+     "sessionIndex0": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "sessionSpan": [
+      0,
+      10
+     ],
+     "tokens": 26274,
+     "budget": 3280
+    },
+    {
+     "index": 1,
+     "sessions": 10,
+     "sessionIndex0": [
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+     ],
+     "sessionSpan": [
+      11,
+      20
+     ],
+     "tokens": 29211,
+     "budget": 3276
+    },
+    {
+     "index": 2,
+     "sessions": 10,
+     "sessionIndex0": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30
+     ],
+     "sessionSpan": [
+      21,
+      30
+     ],
+     "tokens": 27221,
+     "budget": 3276
+    },
+    {
+     "index": 3,
+     "sessions": 11,
+     "sessionIndex0": [
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41
+     ],
+     "sessionSpan": [
+      31,
+      41
+     ],
+     "tokens": 27447,
+     "budget": 3276
+    },
+    {
+     "index": 4,
+     "sessions": 12,
+     "sessionIndex0": [
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53
+     ],
+     "sessionSpan": [
+      42,
+      53
+     ],
+     "tokens": 37872,
+     "budget": 3276
+    }
+   ],
+   "arms": {
+    "A-whole": {
+     "calls": 1,
+     "failedPieces": 0,
+     "outputTokens": 1949,
+     "budget": 16384,
+     "budgetShare": 0.119,
+     "compressionRatio": 75.9,
+     "goldInSummary": false,
+     "goldInGoldPiece": null,
+     "promptTokens": 109244,
+     "promptEstimate": 148430,
+     "promptRatio": 0.736,
+     "promptShortfall": false,
+     "cachedPromptTokens": null,
+     "tokensPerSecond": 652.7,
+     "resolvedModels": [
+      "agnes-3.0-flash"
+     ],
+     "finishReasons": [
+      "stop"
+     ],
+     "errors": [],
+     "elapsedMs": 2996,
+     "summary": "## 逐字锚点\n\nsharegpt_yywfIrx_0\n85a1be56_1\nFitbit Inspire HR\nFebruary 15th\nYoga\nLuna\nPetco\n$40\nMarch 2nd\nFoam roller\nOmron\nMarch 10th\nDiffuser\nMarch 22nd\nLavender\nChamomile\nsharegpt_Jcy1CVN_0\nTopic 4: Radiation Delivery Systems in Radiation Therapy\nPowerPoint presentation\nLinear Accelerators (LINACs)\nCyclotrons\nBrachytherapy Sources\nRadionuclide Generators\nInverse square law\nDepth-dose curve\nsharegpt_Cr2tc1f_0\nHeat\nNeil McCauley\nJoker\nDark Knight\nChris Shiherlis\nMichael Cheritto\nWaingro\nLt. Vincent Hanna\n211 in progress\nWhy so serious?\nWhite van\nSmoke bomb\nPython\npandas\nmatplotlib.pyplot\naction_intensity_data\npd.DataFrame\nplt.plot\nplt.xlabel(\"Time (seconds)\")\nplt.ylabel(\"Action Intensity\")\nplt.title(\"Action Intensity vs Time\")\nplt.show()\nsharegpt_DGTCD7D_0\nf6859b48_2\nHow I Built This\nJanuary 15th\nThe Tim Ferriss Show\nEntrepreneur on Fire\nGaryVee Audio Experience\nThe Hustle\nSide Hustle School\nThe School of Greatness with Lewis Howes\nThe Mind Your Business Podcast\nThe Entrepreneur's Journey\nShe Did It Her Way\nStartUp\nNaval Ravikant\nDecember 20th\nThe Daily\nNew York Times\nFebruary 10th\nMy Brother, My Brother and Me\nimprov4humans\nJanuary 25th\nJustin, Travis, and Griffin McElroy\nMatt Besser, Chris Gethard\n52c34859_1\n5-year-old golden retriever\nMax\nultrachat_231069\nultrachat_45576\nsharegpt_qRdLQvN_7\ndash\ndash_core_components\ndash_html_components\nplotly.graph_objects\nInput, Output, State\ndcc.RangeSlider\ndcc.Graph\ngo.Candlestick\nrelayoutData\nsharegpt_8dJs7Ai_0\nultrachat_359984\nSeabourn\nSilversea\nRegent Seven Seas\nLindblad Expeditions\nQuark Expeditions\nViking River Cruises\nUniworld River Cruises\nRoyal Caribbean International\nCarnival Cruise Line\nBurgess Yachts\nNorthrop & Johnson\nsharegpt_41abc171_4\nAsics Gel-Kayano\nApril\nSquirt\nFinish Line\nShimano Pro Chain Lube\nManduka eKO\nultrachat_530213\nsharegpt_rnG0ZuV_0\nHexaChem\n3418b277_3\nTuesdays and Thursdays\n6:45 AM\n8:30 AM\n7:45 AM\nsharegpt_UnjngE7_65\ngraph TD\nTV[End Goal: Improved Experience]\nAR[Augmented Reality Experience]\nENJOY[Terminal Value: Enjoyment]\nIMMERSION[Terminal Value: Immersion]\nENGAGEMENT[Instrumental Value: High Engagement]\nVISUAL_APPEAL[Instrumental Value: Visual Appeal]\nUSABILITY[Instrumental Value: Usability]\nGRAPHICS[Attribute: High-Quality Graphics]\nANIMATION[Attribute: Smooth Animation]\nEASY_TO_USE[Attribute: Easy to Use]\nACCESSIBILITY[Attribute: Accessibility]\nUSER_FRIENDLINESS[Attribute: User-Friendliness]\nCUSTOMIZATION[Attribute: Customization]\nFEEDBACK[Attribute: Real-time Feedback]\nPRIVACY[Attribute: Privacy Concerns]\nCOST[Attribute: Increased Cost]\nADOPTION[Attribute: Low Adoption]\naae4411b_2\nFavado\nRetailMeNot\nCheckout 51\nFlipp\nEvernote\nOneNote\nSimplenote\nIbotta\nFetch Rewards\nRakuten\nTopCashback\n$1 off a box of granola bars\nPayPal\n2ae4f277_2\n8:45 am\n8:15 am\nsharegpt_jVow2vn_0\nlimonin\nultrachat_45576\nultrachat_57566\nultrachat_286075\nultrachat_574556\nultrachat_422229\nThe Electric Storm\nMusic Festival at the Outdoors Pavilion\nWhiskey Wanderers\nGreta Van Fleet\nRival Sons\nThe Black Keys\nRoyal Blood\nArctic Monkeys\nThe Strokes\nFoo Fighters\nKings of Leon\nThe White Stripes\nThe Vines\nThe Hives\nd414cac5_4\nultrachat_336116\nsharegpt_T1EiHWI_13\nAction Surge\nSpell save DC\n8 + proficiency bonus + Charisma modifier\nShield\nMage Armor\nBlur\nMirror Image\nStoneskin\nFlame Blade\n3d6 fire damage\nsharegpt_QZMeA7V_17\nSenior Motion Designer\nDash\ne348269f_1\nRachel\nLucas\n0586f435_3\nGrandmother's Pearl Necklace\n$5,000\nMother's Locket\nJune 15th\nAquamarine Ring\nJune 1st\n20% off\nMystery Pearl Earring\nJuly 3rd\nultrachat_458322\n02bd2b90_3\ne27891d3_2\nRuby-throated Hummingbird\nRufous Hummingbird\nCalliope Hummingbird\nultrachat_486410\nanswer_280352e9\nTodoist\nTrello\nAsana\nRescueTime\nAny.do\nWunderlist\nClickUp\nMicrosoft To Do\nEvernote\nGoogle Tasks\nMint\nPersonal Capital\nYNAB\nQuicken\nSpendee\nWally\nPocketbook\nToshl Finance\nClarity Money\nSpendTracker\nExpensify\nConcur\nZoho Expense\nShoeboxed\nNeat\n84503ce4_1\nAmazon Prime Day\nInstant Pot\nKitchen knives\n\n## 目标与约束\n该会话记录包含多个独立的用户交互线程，涵盖了健身建议、谜题解答、课程规划、剧本改写、代码生成、旅行规划、烹饪技巧、法律免责声明、音乐推荐、健康常识、D&D 规则咨询、邮件写作、HAiku 诗歌创作、礼物建议、珠宝整理、任务管理应用推荐、厨房组织指南以及鸟类观察提示等广泛主题。主要约束是每个线程内部需保持上下文连贯性，且助手在不确定具体地理位置或私人信息时需明确声明其作为 AI 的局限性，避免提供虚假的本地化数据或假装拥有个人经历。部分请求涉及生成特定格式的文本（如剧本、代码、法律免责声明、诗歌），需严格遵守用户指定的风格和结构要求。\n\n## 已完成\n助手已成功协助用户解决狐狸-鸡-谷子过河谜题（尽管步骤中可能存在逻辑瑕疵但已给出方案）；提供了通过 Fitbit 增加步数的健身建议；推荐了改善睡眠的瑜伽姿势；给出了降低血压的自然方法；整理了辐射疗法的教学大纲及 PowerPoint 讲稿；将电影《Heat》的银行抢劫场景改写为《黑暗骑士》风格并优化了结局；编写了 Python 代码用于绘制动作强度图；列举了 DISC 性格类型合作困难的额外示例；推荐了创业类及喜剧类播客；提供了宠物梳理工具、牵引绳、摄像头推荐；规划了意大利托斯卡纳和翁布里亚的葡萄酒及橄榄油之旅；分享了 BBQ 酱料配方及烹饪技巧；解决了 D&D 5e 中施法者法术豁免 DC 计算、专注限制及僧侣/施法者混合构建问题；撰写了海盗语及 Haiku 风格的求职信；整理了珠宝清单格式；提供了居家办公及厨房收纳建议；解答了关于动物灭绝、室友冲突解决、任务管理应用及个人财务追踪的问题。\n\n## 未决问题\n目前所有对话线程均以助手提供完整回答或建议告终，没有显式的未完成任务或悬而未决的问题。用户未对最近提供的厨房储物架或 pantry 组织建议表示不满或要求进一步修改。\n\n## 下一步\n等待用户发起新的查询或继续当前话题。由于最后一段对话是关于厨房 pantry 组织建议，如果用户继续，可能需要提供更具针对性的收纳产品链接或可视化布局示例，但基于当前状态，助手应保持开放姿态，响应任何新的话题切换或深化需求。",
+     "hitCeiling": false
+    },
+    "B-chunks": {
+     "calls": 6,
+     "failedPieces": 0,
+     "outputTokens": 6561,
+     "budget": 16384,
+     "budgetShare": 0.4005,
+     "compressionRatio": 22.6,
+     "goldInSummary": false,
+     "goldInGoldPiece": false,
+     "promptTokens": 111149,
+     "promptEstimate": 150054,
+     "promptRatio": 0.7407,
+     "promptShortfall": false,
+     "cachedPromptTokens": 38656,
+     "tokensPerSecond": 30,
+     "resolvedModels": [
+      "agnes-3.0-flash"
+     ],
+     "finishReasons": [
+      "stop",
+      "stop",
+      "stop",
+      "stop",
+      "stop"
+     ],
+     "errors": [],
+     "elapsedMs": 218504,
+     "summary": "## 逐字锚点\n- \"Heat's Dark Knight\"\n- \"Why so serious? Let's put a smile on this vault.\"\n- \"action_intensity_data\"\n- \"pd.DataFrame\"\n- \"plt.plot\"\n- \"plt.xlabel\"\n- \"plt.ylabel\"\n- \"plt.title\"\n- \"plt.show()\"\n- \"import pandas as pd\"\n- \"import matplotlib.pyplot as plt\"\n- \"Second\"\n- \"Intensity\"\n- \"dash\"\n- \"dash_core_components as dcc\"\n- \"dash_html_components as html\"\n- \"plotly.graph_objects as go\"\n- \"dash.dependencies import Input, Output\"\n- \"app = dash.Dash()\"\n- \"df = pd.read_csv('stock_data.csv')\"\n- \"go.Candlestick\"\n- \"dcc.Graph\"\n- \"dcc.RangeSlider\"\n- \"html.Button\"\n- \"State('chart-container', 'relayoutData')\"\n- \"relayout_data['xaxis.range[0]']\"\n- \"alarm_message\"\n- \"reset-button\"\n- \"seabourn\"\n- \"silversea\"\n- \"regent seven seas\"\n- \"lindblad expeditions\"\n- \"quark expeditions\"\n- \"viking river cruises\"\n- \"uniworld river cruises\"\n- \"royal caribbean international\"\n- \"carnival cruise line\"\n- \"burgess yachts\"\n- \"northrop & johnson\"\n- \"mussel\"\n- \"omega-3\"\n- \"furminator\"\n- \"petco\"\n- \"$40\"\n- \"fitbit inspire hr\"\n- \"omron\"\n- \"february 15th\"\n- \"march 2nd\"\n- \"march 10th\"\n- \"march 22nd\"\n- \"january 15th\"\n- \"december 20th\"\n- \"february 10th\"\n- \"january 25th\"\n- \"sharegpt_yywfIrx_0\"\n- \"85a1be56_1\"\n- \"sharegpt_Jcy1CVN_0\"\n- \"sharegpt_Cr2tc1f_0\"\n- \"sharegpt_DGTCD7D_0\"\n- \"f6859b48_2\"\n- \"52c34859_1\"\n- \"ultrachat_231069\"\n- \"sharegpt_qRdLQvN_7\"\n- \"ultrachat_359984\"\n- \"sharegpt_8dJs7Ai_0\"\n\n## 目标与约束\n本会话包含多个独立的用户请求，主要涉及：1. 逻辑谜题（农夫过河变体）及健身/健康建议（Fitbit, Yoga, Blood Pressure）；2. 放射治疗课程计划及PPT文案；3. 剧本改编（《盗火线》银行抢劫场景替换为《黑暗骑士》小丑）及动作强度Python绘图代码；4. 人格类型职场协作案例；5. 创业及喜剧播客推荐；6. 宠物用品（美容工具、牵引绳、摄像头）推荐；7. 豪华邮轮分类及推荐；8. 比特币机制（矿工、哈希函数、目标哈希）的解释。\n\n## 已完成\n- 回答了农夫过河谜题（虽然步骤描述有逻辑瑕疵，但已完成响应）。\n- 提供了健身、瑜伽、血压管理、精油使用及流感疫苗接种建议。\n- 制定了放射治疗“辐射递送系统”及“二次效应”的教案和PPT文案。\n- 完成了《盗火线》剧本的小丑版改写，提供了基于Matplotlib的动作强度图表代码，以及基于Dash的交互式K线图代码（含鼠标点击报警功能）。\n- 列举了DISC人格类型的职场冲突案例。\n- 推荐了创业播客（如Tim Ferriss Show）、喜剧播客（如My Brother, My Brother and Me）。\n- 提供了宠物美容、牵引绳（REI hands-free）、宠物摄像头（Furbo等）的推荐。\n- 介绍了豪华邮轮类型及浪漫旅行目的地建议。\n- 详细解释了比特币挖矿原理、哈希函数、目标哈希机制及交易验证关系。\n\n## 未决问题\n- 无明确未决问题。所有用户请求均已得到响应。最后部分关于比特币的解释已完成闭环。\n\n## 下一步\n- 等待用户新的指令。由于这是会话末尾的压缩，若无新指令，当前上下文已结束。\n\n## 逐字锚点\n- session c3cd646c_1\n- 2023/05/21 (Sun) 22:48\n- session 4fd76316\n- 2023/05/22 (Mon) 04:25\n- session 7045db85_1\n- 2023/05/22 (Mon) 09:23\n- session ultrachat_422229\n- 2023/05/22 (Mon) 11:21\n- session ultrachat_215809\n- 2023/05/22 (Mon) 11:37\n- session 41abc171_4\n- 2023/05/22 (Mon) 14:27\n- session 5dac7cc2_1\n- 2023/05/22 (Mon) 14:37\n- session sharegpt_rnG0ZuV_0\n- 2023/05/22 (Mon) 18:02\n- session 3418b277_3\n- 2023/05/23 (Tue) 01:23\n- session sharegpt_UnjngE7_65\n- 2023/05/23 (Tue) 03:04\n- `graph TD`\n- `TV[End Goal: Improved Experience]`\n- `AR[Augmented Reality Experience]`\n- `ENJOY[Terminal Value: Enjoyment]`\n- `IMMERSION[Terminal Value: Immersion]`\n- `ENGAGEMENT[Instrumental Value: High Engagement]`\n- `VISUAL_APPEAL[Instrumental Value: Visual Appeal]`\n- `USABILITY[Instrumental Value: Usability]`\n- `GRAPHICS[Attribute: High-Quality Graphics]`\n- `ANIMATION[Attribute: Smooth Animation]`\n- `EASY_TO_USE[Attribute: Easy to Use]`\n- `INTERACTION[Attribute: Interaction]`\n- `ACCESSIBILITY[Attribute: Accessibility]`\n- `USER_FRIENDLINESS[Attribute: User-Friendliness]`\n- `CUSTOMIZATION[Attribute: Customization]`\n- `FEEDBACK[Attribute: Real-time Feedback]`\n- `PRIVACY[Attribute: Privacy Concerns]`\n- `COST[Attribute: Increased Cost]`\n- `ADOPTION[Attribute: Low Adoption]`\n- `29211`\n- `3276`\n- `8.9:1`\n\n## 目标与约束\n用户在此多会话记录中提出了多个独立咨询请求：欧洲旅行规划（意大利/西班牙）、BBQ 酱料与烧烤技巧、本地音乐演出场馆、消费者决策因素、可可豆风味搭配、运动赛事分析（MLB/NBA/EPL）、个人护理与设备维护（袜子清洗、自行车调律、网球拍穿线、瑜伽垫选购、作息调整）、以及基于 9 份访谈的 AR 营销认知结构分析。助手在部分请求中指出了用户提供的具体实体（乐队、餐厅、场馆）在知识库中不存在或过于通用，并建议用户提供更多上下文。最后部分专注于学术/商业分析，基于均值 - 端理论（Means-End Theory）构建 AR 营销的层级价值图（HVM）。\n\n## 已完成\n1.  **旅行规划**：提供了意大利（托斯卡纳/翁布里亚美食酒之旅）和西班牙的详细行程、必尝美食、推荐酒庄（Castello di Brolio, Cantina Fratelli Pardi等）及橄榄油生产商（Fattoria La Vialla, Frantoio di Siena等）。\n2.  **BBQ 建议**：提供了5种苹果醋BBQ酱料配方、木材熏烤技巧（Hickory, Apple, Mesquite等）及本地烧烤店（Smokey's等，虽被指出为通用名称）的建议。\n3.  **音乐推荐**：针对用户提到的“The Electric Storm”和“Whiskey Wanderers”乐队，助手表示未找到确切信息，但根据“经典摇滚+独立”风格推荐了 Greta Van Fleet, Rival Sons, The Black Keys 等乐队。\n4.  **消费心理**：详细列出了影响消费者决策的因素（价格、品牌、社交影响等）及决策技巧（长期成本分析、保修政策对比）。\n5.  **食品风味**：推荐了可可与辣椒、海盐、咖啡等搭配，并提供了 savory（mole, chili）和 dessert（truffles, brownies）的具体食谱及平衡辣味的技巧。\n6.  **体育赛事**：纠正了用户对休斯顿太空人队（Astros）World Series 历史时刻的记忆错误；分析了卢卡·东契奇（Luka Doncic）的小牛队战绩及补强建议；简要提及曼城在英超的表现。\n7.  **个人生活**：提供了 Nike Dri-FIT 袜子的清洗指南、公路车调律建议（推荐去专业车店）、网球拍穿线建议、瑜伽垫选购（Manduka eKO）、以及渐进式调整作息（从8:30 AM逐渐过渡到7:45 AM）的策略。\n8.  **AR 营销分析**：基于9份访谈，构建了均值-端理论模型，识别出属性（User-friendly, Privacy, Cost等）、利益（Enjoyment, Immersion, Usability等）和后果，并据此提出了提高 AR 营销接受度的策略（强调沉浸感、解决隐私问题、提升易用性）。\n\n## 未决问题\n1.  用户未提供具体城市，导致无法提供精确的本地音乐场馆和 BBQ 餐厅推荐。\n2.  用户提到的乐队“The Electric Storm”和“Whiskey Wanderers”在常规数据库中不存在，可能需要用户确认乐队名称或提供更多线索（如专辑封面图片）。\n3.  AR 营销分析部分的后续问题（如何基于认知结构进行设计、品牌如何利用 AR 推广、内容分析的正负含义、未来增加接受度的措施）已部分回答，但最后一条关于“未来措施”的回答似乎被截断或简略，仅列出了5点策略。\n\n## 下一步\n1.  若用户继续 AR 营销话题，需基于已建立的 HVM 图表和 9 份访谈数据，进一步细化“未来增加 AR 营销接受度”的具体实施路径，特别是针对“Cost”和“Adoption”这两个负面/阻碍因素的解决方案。\n2.  若用户回到旅行或美食话题，可协助细化托斯卡纳/翁布里亚的每日行程安排，包括具体的住宿推荐和交通物流。\n3.  若用户回到体育话题，可跟踪 NBA 小牛队是否执行了交易（如引入 Bogdan Bogdanovic 或类似射手）以及曼城的后续比赛表现。\n\n## 逐字锚点\n- session aae4411b_2\n- session 2ae4f277_2\n- session sharegpt_jVow2vn_0\n- session ultrachat_45576\n- session ultrachat_530213\n- session 47f00a5f\n- session 978c0e70\n- session ultrachat_336116\n- session sharegpt_T1EiHWI_13\n- session 3b3a77d9\n- 2023/05/23\n- 2023/05/24\n- 2023/05/25\n- 2023/05/26\n- 09:46\n- 13:25\n- 21:24\n- 13:03\n- 03:27\n- 03:43\n- 09:47\n- 22:20\n- 04:41\n- 04:52\n- 15% off\n- $1 off\n- 45 minutes\n- 7:30 am\n- 8:45 am\n- 8:15 am\n- 7:00 am\n- 7:45 am\n- 8:00 am\n- 8:10 am\n- 8 + your proficiency bonus + your Charisma modifier\n- +3\n- +4\n- 15\n- 10 + Dexterity modifier + Wisdom modifier\n- 3d6\n- $20-$30\n- 3 weeks ago\n\n## 目标与约束\n用户正在处理多个生活领域的事务：组织实体与数字优惠券、建立可持续的早晨例程（需应对会议日的早退压力）、寻找健康的零食/甜点方案、探索电影推荐、了解海龟保护、学习 D&D 5e 职业机制（法师/武僧混合），以及选购现代家居灯具（包括智能插座和吊灯）。\n\n约束条件包括：\n- 早晨例程必须在“会议日”保持 7:30 AM 起床，但需 8:15 AM 出门（原本 45 分钟的准备时间需压缩至 40 分钟，早餐压缩至 5 分钟）。\n- 电影推荐偏好：时长少于 2 小时，注重叙事与角色发展。\n- D&D 角色：5 级法师/武僧，需计算法术豁免 DC 并寻找提升 AC 和伤害的协同法术。\n- 家居购物：偏好现代风格、高性价比；对智能家居入门感兴趣（智能插座、LED 灯泡）。\n\n## 已完成\n- 提供了优惠券组织建议（实体使用活页夹，数字使用 Evernote）。\n- 推荐了现金返还应用（Ibotta, Fetch Rewards）及最大化收益技巧。\n- 协助调整了早晨例程，解决了用户无法在 7:00 AM 起床的问题，确定了 7:30 AM 起床、40 分钟准备、5 分钟快速早餐、8:15 AM 出门的方案。\n- 回答了柠檬色素问题（误答为 Limonin，实际应为类胡萝卜素如柚皮素，但已按上下文接受）。\n- 提供了鸡肉嫩化技巧（盐水浸泡、捶打）及几种腌料配方（如姜汁酱油腌料）。\n- 推荐了搭配鸡肉的配菜（烤蔬菜）和甜点（自制水果冰棒）。\n- 提供了海龟游泳解剖学解释、捕食者信息及塑料污染应对措施（如海滩清理活动、支持 Sea Turtle Conservancy 等组织）。\n- 回答了 D&D 问题：法师法术豁免 DC 计算公式、不能同时集中两个法术、提升 AC 的最佳法术（Shield, Mage Armor 等）、武僧 AC 计算方式、5 级法师/武僧协同法术（Haste, Elemental Weapon 等）、以及法师获取德鲁伊法术 Flame Blade 的途径（需多职或 Magic Initiate 特性，但 5 级法师本身无法直接施放 2 级德鲁伊法术除非通过特定特性，此处助手回答略有瑕疵但已记录）。\n- 推荐了 Netflix/Prime 上的科幻、动作及经典电影。\n- 提供了健康零食建议（RXBAR, Kind Bar, LaraBar 等）及具体口味推荐。\n- 讨论了现代灯具购买网站（West Elm, Wayfair 等）及智能灯泡/插座入门建议。\n\n## 未决问题\n- 用户询问如何选择适合餐厅空间的现代吊灯（已提供关于比例、风格、光照需求、材质、高度、预算的建议）。\n- 用户提到想在餐厅增加吊柜下方照明（已建议 LED 灯带或嵌灯）。\n- 用户计划购买智能插座用于落地灯（已建议 TP-Link, Belkin, Amazon 品牌，并确认其易用性）。\n\n## 下一步\n- 用户可能分享 Pinterest 上的吊灯灵感图片或具体尺寸，以获取更精确的吊灯选择建议。\n- 用户可能询问智能插座的特定设置步骤或更多智能家居入门设备。\n- 可能继续讨论家居改造的其他方面（如家具、配色）。\n- D&D 部分若继续，可能涉及更多法术协同或战斗策略。\n\n## 逐字锚点\nsession a041cdd4_3\n2023/05/26 (Fri) 10:02\nMapMyRun\nStrava\nRunkeeper\nNike Run Club\nGPS\nGLONASS\nBluetooth\nsession sharegpt_1L5GXZJ_0\n2023/05/26 (Fri) 22:47\nfederal\nsportswagers\nsession 0e9551fc_1\n2023/05/27 (Sat) 02:56\nsession ultrachat_574556\n2023/05/27 (Sat) 05:50\nsession sharegpt_gTknhGs_0\n2023/05/27 (Sat) 16:34\nGDPR\nGeneral Data Protection Regulation\nEuropean Union\nEU\nEuropean Economic Area\nEEA\nMay 25, 2018\nLawfulness, fairness, and transparency\nPurpose limitation\nData minimization\nAccuracy\nStorage limitation\nIntegrity and confidentiality\nAccountability\nChapter V\nArticles 44-50\nStandard Contractual Clauses\nSCCs\nBinding Corporate Rules\nBCRs\nCodes of Conduct or Certification Mechanisms\n€20 million\n4%\nEDGAR\nElectronic Data Gathering, Analysis, and Retrieval\nsession d414cac5_4\n2023/05/28 (Sun) 02:37\nMcKinsey & Company\nHarvard Business Review\nFast Company\nCatalyst\nLean In: Women, Work, and the Will to Lead\nSheryl Sandberg\nDiversity in the Workplace: Benefits, Challenges, and Best Practices\nB. L. Kirchner\nThe Inclusion Paradox: The Post-Inclusion Era and the 11 Futures of Diversity and Inclusion\nAndres T. Tapia\nWhat Works: Gender Equality by Design\nIris Bohnet\nLeanIn.org\nDiversityInc\nHuman Rights Campaign\nHRC\nWorkboard\nBlendoor\nGapJumpers\nCulture Amp\nPlum\nsession ultrachat_214101\n2023/05/28 (Sun) 03:47\nANZAC\nGallipoli campaign\nWorld War I\nApril 25, 1915\nBattle of Lone Pine\nAugust 1915\nBattle of the Somme\n1916\nBattle of Villers-Bretonneux\n1918\nAmerican Civil War\nFrench Revolution\nIndian Independence Movement\nMahatma Gandhi\nSeptember 11\nCOVID-19\nsession ultrachat_286075\n2023/05/28 (Sun) 17:31\nVenice\n1-2 millimeters per year\nMOSE project\nUNESCO\nSt. Mark's Basilica\n3-4 million euros\nsession ultrachat_57566\n2023/05/28 (Sun) 19:10\nProtein powder\nCreatine\nBCAAs\nBeta-alanine\nNitric oxide boosters\nGlutamine\npre-workout supplements\nBanana\nGreek yogurt\nApple slices with almond butter\nWhole-grain toast with avocado\nHard-boiled eggs\nsession sharegpt_PdnvIns_0\n2023/05/29 (Mon) 01:39\nGrade A Steakhouse\nvirtual ghost kitchen\nUser personas\nWireframes\nsession ultrachat_514031\n2023/05/29 (Mon) 10:53\nwolves\nalpha\nomega\nBonobo\ndolphins\nrostrum\n\n## 目标与约束\n用户请求压缩一段包含多个不同主题会话的历史记录。该记录涵盖了跑步建议、法律免责声明、冥想与心理健康、GDPR 摘要、职场多样性、ANZAC 历史、威尼斯洪水、健身补充剂、UX 案例研究以及动物交流。压缩需保留所有关键实体、数值、ID 和特定术语，以便后续处理时能准确引用原始上下文。\n\n## 已完成\n已识别并提取了所有会话中的关键锚点，包括：\n- 跑步应用和设备名称（Strava, Garmin, etc.）\n- GDPR 相关条款和罚款金额\n- 职场多样性书籍和作者名称\n- ANZAC 相关历史战役和日期\n- 威尼斯洪水相关项目名称（MOSE）和经济损失数据\n- 健身补充剂名称\n- UX 案例研究的特定公司名（Grade A Steakhouse）\n- 动物学中的术语（alpha, omega, rostrum）\n\n## 未决问题\n无明确未决问题，所有会话均为独立问答，用户未提出后续需求。\n\n## 下一步\n将压缩后的内容交给代理继续处理，确保后续回答能基于保留的锚点准确引用历史上下文，避免重复错误或遗漏关键信息。\n\n## 逐字锚点\n\n- ec6ca9ef\n- 2023/05/29 (Mon) 13:27\n- d94b721b\n- 2023/05/29 (Mon) 14:48\n- sharegpt_QZMeA7V_17\n- 2023/05/29 (Mon) 19:30\n- sharegpt_BvwQVCO_0\n- 2023/05/29 (Mon) 21:50\n- e348269f_1\n- 2023/05/30 (Tue) 02:51\n- 0586f435_3\n- 2023/05/30 (Tue) 09:50\n- ultrachat_458322\n- 2023/05/30 (Tue) 11:24\n- 02bd2b90_3\n- 2023/05/30 (Tue) 11:27\n- e27891d3_2\n- 2023/05/30 (Tue) 12:08\n- ultrachat_486410\n- 2023/05/30 (Tue) 14:00\n- answer_280352e9\n- 2023/05/30 (Tue) 17:27\n- 84503ce4_1\n- 2023/05/30 (Tue) 21:40\n- $5,000\n- 20% off\n- June 1st\n- July 3rd\n- June 15th\n- Rachel\n- Lucas\n- Dash\n- Senior Motion Designer\n- Adobe After Effects\n- Illustrator\n- Photoshop\n- Premiere\n- 30°C\n- 86°F\n- 1-2 inches\n- 9-to-5\n- Q1 Expenses\n- Travel Reimbursements\n- Project XYZ Invoices\n- Todoist\n- Trello\n- Asana\n- RescueTime\n- Any.do\n- Wunderlist\n- ClickUp\n- Microsoft To Do\n- Evernote\n- Google Tasks\n- Eisenhower Matrix\n- Expensify\n- Concur\n- Zoho Expense\n- Shoeboxed\n- Neat\n- Google Drive\n- Dropbox\n- OneDrive\n- Mint\n- Personal Capital\n- YNAB\n- Quicken\n- Spendee\n- Wally\n- Pocketbook\n- Toshl Finance\n- Clarity Money\n- SpendTracker\n- Ibotta\n- Fetch Rewards\n- Stasher Bags\n- Bees Wrap\n- OXO\n- Progressive\n- Rubbermaid\n- Glad\n- Ziploc\n- Pyrex\n- Anchor Hocking\n- Crock-Pot\n- Instant Pot\n- Plan to Eat\n- Ebersole\n- Escali\n- eBird\n- Audubon\n- Cornell Lab of Ornithology\n- Sibley Guide to Birds\n- National Audubon Society Field Guide to Birds\n- Great Blue Herons\n- Great Egrets\n- Snowy Egrets\n- Green Herons\n- Mallards\n- Wood Ducks\n- Mergansers\n- Canada Geese\n- Pied-billed Grebes\n- Horned Grebes\n- Eared Grebes\n- Spotted Sandpipers\n- Killdeer\n- Semipalmated Sandpipers\n- Snowy Plovers\n- Caspian Terns\n- Common Terns\n- Forster's Terns\n- Yellow Warblers\n- Yellow-rumped Warblers\n- Common Yellowthroats\n- Song Sparrows\n- Savannah Sparrows\n- Lincoln's Sparrows\n- Eastern Kingbirds\n- Western Kingbirds\n- Phoebes\n- Osprey\n- Bald Eagles\n- Belted Kingfishers\n- Ruby-throated Hummingbird\n- Rufous Hummingbird\n- Calliope Hummingbird\n- 200mm\n- 1/1000th\n- AI Servo\n- AF-C\n- IS\n- VR\n- Pottery Barn Kids\n- Buy Buy Baby\n- Baby Depot\n- Etsy\n- Amazon\n- Zazzle\n- Cafepress\n- Personalization Mall\n- Times New Roman\n- Garamond\n- Georgia\n- Arial\n- Helvetica\n- Franklin Gothic\n- Lobster\n- Pacifico\n- Dancing Script\n\n## 目标与约束\n\n本段落涵盖了多个独立会话的摘要，主要涉及：意大利主题晚宴策划（菜单、酒品、餐桌布置）、国际市集及假日市集的供应商注册咨询、手工工艺品供应商资源查找、宝宝礼物挑选（个性化毯子）、珠宝清单整理（含手表维修记录）、室友冲突解决与调解资源、家庭办公区改造建议（现代工业风）、鸟类摄影技巧与本地鸟类种类介绍、环境保护与物种灭绝对策、任务管理与个人财务应用推荐（Todoist, Trello, Mint等）、饮食浪费减少与厨房收纳（Instant Pot维护、刀具保养、橱柜及食品储藏室整理）。\n\n## 已完成\n\n1.  **晚宴策划**：提供了意大利主菜、甜点、配菜、开胃菜、酒类搭配及餐桌装饰建议。\n2.  **市集咨询**：因缺乏具体城市信息，建议用户联系当地旅游局或商会获取国际市集注册详情；提供了通用的供应商注册流程和费用范围。\n3.  **礼物选择**：为用户推荐了个性化婴儿毯子（蓝色/白色，粗体无衬线字体），提供了Etsy, Amazon等购买渠道及字体/设计建议。\n4.  **珠宝清单**：协助建立了珠宝清单格式，记录了祖母珍珠项链（$5,000）、母亲锁片（6月15日佩戴）、青金石戒指（6月1日购买，20%折扣）、神秘珍珠耳环（7月3日发现）；建立了手表维修追踪表。\n5.  **室友关系**：提供了沟通、界限设定、妥协及寻找调解员（大学资源、专业调解员）的建议。\n6.  **办公区设计**：建议了现代工业风下的木质书架风格（混合现代与乡村元素）及配件。\n7.  **鸟类摄影**：提供了拍摄飞行鸟类的技巧（长焦镜头200mm+，快门1/1000s+，AI伺服对焦）。\n8.  **财务与组织**：推荐了Todoist, Trello, Mint, Personal Capital等应用；提供了杂货购物、餐食准备及厨房收纳（橱柜、食品储藏室、Instant Pot和刀具维护）的详细建议。\n\n## 未决问题\n\n1.  **国际市集详情**：用户尚未提供具体城市或市集名称，无法获取准确的注册流程和费用。\n2.  **犹太/犹太教相关**：无。\n3.  **Rachel合作**：用户提到希望与珠宝商Rachel合作，但尚未执行联系。\n4.  **鸟类排行目标**：用户希望从县级eBird排行第10名升至前5名，需持续观察和记录。\n5.  **办公区具体尺寸**：用户未提供房间具体尺寸，布局建议基于通用原则。\n6.  **特定鸟类观察**：用户计划下周末去湖边，期望发现新物种（如其他种类的蜂鸟）。\n\n## 下一步\n\n1.  等待用户提供具体城市或市集名称，以便提供国际市集注册的具体信息。\n2.  协助用户联系当地旅游局或商会。\n3.  鼓励用户联系Rachel进行合作。\n4.  在用户下周末湖边行程后，询问观察结果及新发现的鸟类物种。\n5.  根据用户反馈，进一步细化办公区布局或厨房收纳方案。",
+     "hitCeiling": 0,
+     "pieces": [
+      {
+       "index": 0,
+       "sessions": 11,
+       "tokens": 26274,
+       "budget": 3280,
+       "outputTokens": 1012,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 20051,
+       "promptEstimate": 26679,
+       "cachedPromptTokens": 19968,
+       "tokensPerSecond": 11500,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 1,
+       "sessions": 10,
+       "tokens": 29211,
+       "budget": 3276,
+       "outputTokens": 1538,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 22647,
+       "promptEstimate": 29616,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 43,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 2,
+       "sessions": 10,
+       "tokens": 27221,
+       "budget": 3276,
+       "outputTokens": 1172,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 21284,
+       "promptEstimate": 27626,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 15421.1,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 3,
+       "sessions": 11,
+       "tokens": 27447,
+       "budget": 3276,
+       "outputTokens": 1095,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 18718,
+       "promptEstimate": 27852,
+       "cachedPromptTokens": 18688,
+       "tokensPerSecond": 40.7,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 4,
+       "sessions": 12,
+       "tokens": 37872,
+       "budget": 3276,
+       "outputTokens": 1744,
+       "attempts": 2,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 28449,
+       "promptEstimate": 38281,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 52.7,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": true,
+       "goldInPiece": false,
+       "error": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "question_id": "3d86fd0a",
+   "question_type": "single-session-user",
+   "gold": "a coffee shop in the city",
+   "chunkPlan": [
+    {
+     "index": 0,
+     "sessions": 11,
+     "sessionIndex0": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+     ],
+     "sessionSpan": [
+      0,
+      10
+     ],
+     "tokens": 25947,
+     "budget": 3280
+    },
+    {
+     "index": 1,
+     "sessions": 10,
+     "sessionIndex0": [
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+     ],
+     "sessionSpan": [
+      11,
+      20
+     ],
+     "tokens": 29262,
+     "budget": 3276
+    },
+    {
+     "index": 2,
+     "sessions": 13,
+     "sessionIndex0": [
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33
+     ],
+     "sessionSpan": [
+      21,
+      33
+     ],
+     "tokens": 29162,
+     "budget": 3276
+    },
+    {
+     "index": 3,
+     "sessions": 9,
+     "sessionIndex0": [
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42
+     ],
+     "sessionSpan": [
+      34,
+      42
+     ],
+     "tokens": 25479,
+     "budget": 3276
+    },
+    {
+     "index": 4,
+     "sessions": 14,
+     "sessionIndex0": [
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56
+     ],
+     "sessionSpan": [
+      43,
+      56
+     ],
+     "tokens": 35524,
+     "budget": 3276
+    }
+   ],
+   "arms": {
+    "A-whole": {
+     "calls": 2,
+     "failedPieces": 0,
+     "outputTokens": 8262,
+     "budget": 16384,
+     "budgetShare": 0.5043,
+     "compressionRatio": 17.6,
+     "goldInSummary": false,
+     "goldInGoldPiece": null,
+     "promptTokens": 107858,
+     "promptEstimate": 145783,
+     "promptRatio": 0.7399,
+     "promptShortfall": false,
+     "cachedPromptTokens": 0,
+     "tokensPerSecond": 129.9,
+     "resolvedModels": [
+      "hy3"
+     ],
+     "finishReasons": [
+      "stop"
+     ],
+     "errors": [],
+     "elapsedMs": 200559,
+     "summary": "## 逐字锚点\nC:\\Folder1\nC:\\Folder2\nC:\\Folder3\nC:\\PDF_Count.csv\n$folders = @(\"C:\\Folder1\", \"C:\\Folder2\", \"C:\\Folder3\")\n$results = @()\nWrite-Progress -Activity \"Counting PDF Files\" -Status \"In Progress\"\nforeach ($folder in $folders)\n$pdfFiles = Get-ChildItem -Path $folder -Filter *.pdf -Recurse | Measure-Object\n$pdfCount = $pdfFiles.Count\n$results += New-Object PSObject -Property @{ Folder = $folder; PDF_Count = $pdfCount }\nWrite-Progress -Activity \"Counting PDF Files\" -Status \"$folder\" -PercentComplete ($folders.IndexOf($folder) / $folders.Count * 100)\n$results | Export-Csv -Path \"C:\\PDF_Count.csv\" -NoTypeInformation\nWrite-Progress -Activity \"Counting PDF Files\" -Status \"Completed\" -Completed\nWrite-Output \"Finished counting PDF files and exporting results to C:\\PDF_Count.csv\"\n=E2*G2+K2*M2\nparam1\nparam2\nmyMethod\nMyInterface\nvariable1\nvariable2\nvariable3\n@minLength 5\n@maxLength 10\n@minimum 0\n@maximum 100\nhttps://hubs.ly/Q01f8VXL0\nhttps://tinyurl.com/yu9uwe2z\n<https://hubs.ly/Q01f8VXL0>\n(<https://tinyurl.com/yu9uwe2z>)\n(<https://hubs.ly/Q01f8VXL0>)\nhttps://t.co/jtli2aEhOk\n150\n3\n5\n7\n10\n20\n173\n360\n25\n2\n3\n36375\n36270\n36118\n48\n40\n4\n0\n-18\n140\n450\n180\n350\n325\n120\n130\n49\n54\n5-7\n3 times\n10 days\n5-Minute\n20-Minute\n173 meters\n360-degree\n25 points\ntwo out of three\n1/48\nFebruary 10th\n5K\n7 trips\n$40\n$150\nbelow 40°F (4°C)\n0°F (-18°C)\nat least 140°F\n450°F (180°C)\n350°F (180°C)\n325°F\n120°F - 130°F (49°C - 54°C)\n135°F (57°C)\n140°F - 145°F (60°C - 63°C)\n150°F - 155°F (66°C - 68°C)\n160°F - 170°F (71°C - 77°C)\n1/48 scale\nFS36375\nFS36270\nFS36118\nMr. Color 308\nMr. Color 309\nMr. Color 310\nICOCA ¥2,000\nSUICA ¥2,000\nPiTaPa ¥2,000\nKansai One Pass ¥600\n¥1,000\n¥1,500\n¥10,000\n¥15,000\n$0.006 per 15 seconds\n$0.012 per 15 seconds\n$300 credits\n60 minutes per month\n5,000 minutes per month\n$1,000 monthly commitment\n10,000-15,000 miles\n15,000-20,000 miles\n5 years validity\n¥600\n¥1,200\n¥1,800\n1/48\nFeb 10\n7 trips by air\n3 months\n6 weeks ago\n2 weeks ago\n5-7 km\n3 times a week\n10 days stay\n5 minute rule\n20 minute blitz\n25 points per set\n2 out of 3 sets\n173m\n360°\n48 scale\n308\n309\n310\n\n## 目标与约束\nCondense provided conversation span (~145k tokens) into ≤16384 tokens with five mandated sections; preserve verbatim anchors for paths, commands, URLs, vars, numeric thresholds; narrative sections brief.\n\n## 已完成\nExtracted anchors from PowerShell script, Google Sheets formula, JSDoc/TS snippets, email outreach URLs, tweet URL, and numerous numeric specs across travel, cooking, modeling, sports contexts. Listed each occurrence per instruction.\n\n## 未决问题\nNone outstanding from source sessions; all user queries were answered. Compression task itself is the only active objective.\n\n## 下一步\nIf further agent tasks require prior context, consult append-only log; this checkpoint suffices for continuity.",
+     "hitCeiling": false
+    },
+    "B-chunks": {
+     "calls": 7,
+     "failedPieces": 1,
+     "outputTokens": 2775,
+     "budget": 16384,
+     "budgetShare": 0.1694,
+     "compressionRatio": 52.4,
+     "goldInSummary": false,
+     "goldInGoldPiece": false,
+     "promptTokens": 93290,
+     "promptEstimate": 147406,
+     "promptRatio": 0.6329,
+     "promptShortfall": false,
+     "cachedPromptTokens": 0,
+     "tokensPerSecond": 6.3,
+     "resolvedModels": [
+      "agnes-3.0-flash",
+      "codestral-latest"
+     ],
+     "finishReasons": [
+      null,
+      "stop",
+      "stop",
+      "stop",
+      "stop"
+     ],
+     "errors": [
+      "piece 1: gateway 400: {\"error\":{\"message\":\"Agent2API/sn-deepseek-v4-1-flash-1017: model — [400]: 上游返回 400: Inappropriate input/output rejected for security reasons (HTTP 400); Agent2API/glm-5-3-flash: model — [400]: 上游返回 400: Inappropriate input/output rejected for security reasons (HTTP 400); sensenova/sensenova-6.8-fla"
+     ],
+     "elapsedMs": 442481,
+     "summary": "\n\n## 逐字锚点\n1e3aef04_2\n2023/05/21\n22:33\nEcoSmile\nJason Natural Mouthwash\nThe Natural Dentist Mouthwash\nDesert Essence Natural Mouthwash\nTom's of Maine Mouthwash\nAuromere Ayurvedic Mouthwash\nHello Oral Care Mouthwash\nsodium lauryl sulfate\nSeventh Generation\nEcoLogo\nDivvaCup\nMoonCup\nLunette\nLunapads\nThinx\nClothPad\nBCorp\nLOLA\nThinx\nLunapanties\nPeriod Panties\nNatracare\nSeventh Generation\nThe Honest Company\n9d14b702_1\n2023/05/22\n03:25\nb225c0fe\n07:24\nBibimbap\nBulgogi\nJeyuk bokkeum\nJapchae\nKimchi Stew ()\nGalbi\nTteokbokki\nDoenjang Jjigae\ngochugaru\n450°F\n500°F\n120°F\n130°F\n49°C\n54°C\n130°F\n135°F\n54°C\n57°C\n140°F\n145°F\n60°C\n63°F\n150°F\n155°F\n66°C\n68°C\n160°F\n170°F\n71°C\n77°C\nsharegpt_fIIZB3W_31\n12:33\nPhenomenal Woman\nMaya Angelou\nStill I Rise\nRandall Munroe\nMirror\nSylvia Plath\nThe Red Wheelbarrow\nWilliam Carlos Williams\nThe Caged Bird\n402e0082_1\n13:33\nWalter Diemer\nultrachat_357116\n13:45\nultrachat_459424\n14:36\nsharegpt_83N0oGp_0\n17:34\nultrachat_394611\n17:35\nRackham Predoctoral Fellowship\nRackham Graduate Student Research Grants\nMichigan Society of Fellows\n$34,000\n$12,000\n69674f25\n18:35\nThe Song of Achilles\nMadeline Miller\nCirce\nPat Barker\nThe Silence of the Girls\nMargaret Atwood\nThe Penelopiad\nThe Women of Troy\nRick Riordan\nThe Heroes of Olympus\nHelene Wecker\nThe Golem and the Jinni\nKazuo Ishiguro\nThe Buried Giant\nGareth Hinds\nThe Odyssey\nRachel Smythe\nLore Olympus\nMichael Grant\nThe Myths of Greece and Rome\nThe Seven Husbands of Evelyn Hugo\nThe Family Upstairs\nLisa Jewell\nThe Nest\nCynthia D'Aprix Sweeney\nThe Immortalists\nChloe Benjamin\nThe Interestings\nMeg Wolitzer\nThe Corrections\nJonathan Franzen\nCommonwealth\nAnn Patchett\nThe Vacationers\nEmma Straub\nThe Children's Crusade\nAnn Packer\nThe Family Fang\nKevin Wilson\nThe Glass Castle\nJeannette Walls\nAnne Bogel\nThe Reading Life Journal\nBarbara Kingsolver\nThe Book Lover's Journal\nPenguin Random House\nThe Literary Journal\nFebruary 10th\nTaylor Jenkins Reid\n\n## 目标与约束\n用户正在多个主题间切换，寻求关于环保生活、烹饪（韩式料理与牛排）、诗歌教学、LMS用例生成、研究生资助及书籍推荐与建议的指导。对话风格应保持热情、乐于助人且信息丰富。所有建议需具体且具有可操作性，涵盖从日常习惯到专业申请的广泛领域。\n\n## 已完成\n1. 提供了环保漱口水推荐及自制配方。\n2. 分享了环保洗衣及女性卫生用品的建议与护理指南。\n3. 推荐了适合晚宴的韩式菜肴（Japchae, Bulgogi）、牛排烹饪技巧及传统韩式甜点（Tteok, Yakgwa）。\n4. 详细指导了刺身级鱼类的安全处理、储存及寿司醋饭的烹饪与调味，包括Koshihikari与Akita Komachi大米对比。\n5. 解释了传统拳击与奥运拳击在规则、手套尺寸及目标上的差异。\n6. 分析了欧盟对成员州经济的影响、挑战、近期发展及文化多样性政策。\n7. 生成了包含管理员功能（课程、出勤、通知、教师、时间表）的LMS用例。\n8. 介绍了密歇根大学研究生研究资助渠道，重点详解NSF GRFP申请条件、截止日期（通常10月底）及申请建议。\n9. 推荐了神话主题及家庭关系主题书籍，重点介绍了《The Immortalists》。\n10. 提供了阅读日记本的选择建议与记录技巧，用户决定使用通用笔记本并手工记录。\n\n## 未决问题\n1. 用户尚未回复关于《The Seven Husbands of Evelyn Hugo》的具体细节（最喜欢的丈夫或部分）及其对物理日记本的进一步计划（是否包含艺术或引用）。\n2. 用户未确认是否已访问Rackham Graduate School或ONSF资源。\n3. 用户未确认是否计划尝试不同的日式大米品种。\n\n## 下一步\n1. 等待用户回复关于《The Seven Husbands of Evelyn Hugo》的阅读体验细节及阅读日记本的具体规划。\n2. 根据用户反馈，可能进一步提供关于物理日记本定制模板的建议，或深入讨论特定书籍的主题。\n3. 若用户回到学术话题，可跟进其NSF申请进度或时间管理具体计划。\n4. 若用户回到烹饪话题，可提供更多寿司制作技巧或韩式料理变种。\n\n## 逐字锚点\nsharegpt_9Va3BiZ_0, 2023/05/22, LeftGPT, RightGPT, f\\*ck, sh*t, bullsh*t, F*ck, fox news, ultrachat_102626, Hatha, Vinyasa, Ashtanga, Bikram/Hot, Iyengar, Kundalini, 3fe9b2a4_1, 2023/05/23, Sempio Gochujang, Chongga Gochujang, Koko Gochujang, Jongga Gochujang, Samyang Gochujang, Sempio Gojugaru, Koko Gojugaru, Jongga Gojugaru, 4ff568ba_2, ASICS, Brooks, Saucony, New Balance, Hoka One One, Kayano 28, Ghost 14, 1080v12, 14, 091ba7f5_1, 2023/05/24, Bed Bath & Beyond, sharegpt_W471uz2_0, Roie, sharegpt_d7bP5fb_0, Pythagoras, x^2 + (y-5)^2 = y^2, sqrt(10y-25), deb2fa11_1, 1f643033_2, Lake Tahoe, Kingsbury Grade, Van Sickle Bi-State Park, Sand Harbor, Memorial Point, Eagle Falls, Emerald Bay, Rubicon, Glen Alpine, Tahoe City Lakeside, Mount Tallac, Tahoe Mountain, The Getaway Café, The Coffee Lab, Squeeze In, The Village at Squaw Valley, Tahoe City Sol, The Dam Café, Tahoe Mountain Brewing Company, The River Grill, Tahoe Valley RV Resort, Zephyr Cove, Hostel Tahoe, Pepper Tree Inn, AllTrails, Trailforks, Gaia GPS, sharegpt_Ihm4oSt_0, Donald Trump, speech bubbles, sharegpt_KD0kssi_33, Luxians, ultrachat_95869, HLA, IL-4, IL-13, TLR, ST2, sharegpt_1PgbxLy_9, Mehr.ai, Hyperledger, 29162, 3276, 8.9:1\n\n## 目标与约束\nCondense the provided session history spanning multiple topics (LLM personas, Yoga, Korean recipes, Running shoes, Breakfast recipes, Storytelling, Math problems, Hiking, Political speech, Sci-fi dialogue, Genetics, and a business pitch) into a strict Markdown format.\n- **Verbatim Anchor Section:** Must list all file paths, commands, URLs, error strings, IDs, function names, and numerical thresholds found in the text, one per line, without explanation or merging.\n- **Narrative Sections:** \"Goals & Constraints\", \"Completed\", \"Open Issues\", and \"Next Steps\" must be concise (a few sentences each).\n- **Priority:** If token budget is tight, prioritize the \"Verbatim Anchor\" section over the narrative sections.\n- **Language:** The output sections headers must be in Chinese as specified, but the content can be mixed based on the source language, though the structural headers are fixed.\n\n## 已完成\n- Identified all unique IDs, brand names, recipe ingredients, yoga types, running shoe models, hiking trails, and business terms from the diverse session logs.\n- Compiled the list of verbatim anchors including specific math formulas, dates, and session identifiers.\n- Analyzed the context of each session to determine the \"Completed\" state (e.g., recipes provided, hiking tips given, business slide text generated).\n\n## 未决问题\n- None of the tasks in the historical sessions are explicitly marked as unresolved or failed in a way that requires immediate code fixes, as they were largely informational Q&A.\n- The user's request for \"innovative\" math questions was iteratively refined; the final state involved reframing questions using LaTeX and specific constraints.\n- The Mehr.ai pitch deck generation was completed through page 5, competitive analysis, sustainability, and conclusion.\n\n## 下一步\n- No immediate next steps are defined within the historical logs themselves, as each session concluded with a final answer or summary.\n- If this is a continuous workflow, the agent should await new instructions or verify if the user requires further expansion on any of the condensed topics (e.g., more math variations or additional Mehr.ai slides).\n\n## 逐字锚点\nE2*G2+K2*M2\nE2*G2, K2*M2\n=E2*G2+K2*M2\nGoogle Cloud Speech-to-Text\nStandard, Advanced\n$0.006, $0.012\n15 seconds\n$1,000\n5,000 minutes\n60 minutes per month\n$300 in credits, 90-day period\nAgnes-3.0-flash, Sapiens AI\n\n## 目标与约束\n用户询问关于 Google Sheets 公式和 Google Cloud 服务定价的具体技术问题。需要准确提供计算逻辑和官方定价细节。\n\n## 已完成\n1.  **Google Sheets 公式**：针对表达式 `e2*g2 +k2*m2`，提供了正确的 Google Sheets 公式 `=E2*G2+K2*M2`。\n2.  **Google Cloud Speech-to-Text 定价**：提供了 Standard 和 Advanced 模型的定价细节。\n    *   Standard: $0.006 / 15秒，每月 60 分钟免费额度。\n    *   Advanced: $0.012 / 15秒，每月 5,000 分钟免费额度（注：此处原文提及 Advanced 有最低承诺 $1,000 及不同免费额度，已按原文逻辑记录）。\n    *   通用：90 天 $300 免费试用额度。\n\n## 未决问题\n无。\n\n## 下一步\n等待用户下一个关于技术、定价或其他主题的询问。\n\n## 逐字锚点\nC:\\Folder1\nC:\\Folder2\nC:\\Folder3\nC:\\PDF_Count.csv\nGet-ChildItem\nMeasure-Object\nExport-Csv\nWrite-Progress\nWrite-Output\nPSObject\nNoTypeInformation\nCompleted\n\n## 目标与约束\n统计多个子文件夹中的PDF文件数量，并将结果输出到CSV文件，同时显示进度条\n\n## 已完成\n编写了PowerShell脚本，能够统计指定文件夹中的PDF文件数量，并将结果输出到CSV文件\n\n## 未决问题\n无\n\n## 下一步\n无",
+     "hitCeiling": 0,
+     "pieces": [
+      {
+       "index": 0,
+       "sessions": 11,
+       "tokens": 25947,
+       "budget": 3280,
+       "outputTokens": 0,
+       "attempts": 2,
+       "finishReason": null,
+       "hitCeiling": false,
+       "promptTokens": null,
+       "promptEstimate": 26352,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": null,
+       "resolvedModel": null,
+       "carriesGoldSession": true,
+       "goldInPiece": false,
+       "error": "gateway 400: {\"error\":{\"message\":\"Agent2API/sn-deepseek-v4-1-flash-1017: model — [400]: 上游返回 400: Inappropriate input/output rejected for security reasons (HTTP 400); Agent2API/glm-5-3-flash: model — [400]: 上游返回 400: Inappropriate input/output rejected for security reasons (HTTP 400); sensenova/sensenova-6.8-fla"
+      },
+      {
+       "index": 1,
+       "sessions": 10,
+       "tokens": 29262,
+       "budget": 3276,
+       "outputTokens": 1286,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 21879,
+       "promptEstimate": 29668,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 40.6,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 2,
+       "sessions": 13,
+       "tokens": 29162,
+       "budget": 3276,
+       "outputTokens": 983,
+       "attempts": 2,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 22953,
+       "promptEstimate": 29571,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 35.3,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 3,
+       "sessions": 9,
+       "tokens": 25479,
+       "budget": 3276,
+       "outputTokens": 352,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 19366,
+       "promptEstimate": 25885,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 17,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 4,
+       "sessions": 14,
+       "tokens": 35524,
+       "budget": 3276,
+       "outputTokens": 154,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 29092,
+       "promptEstimate": 35930,
+       "cachedPromptTokens": 0,
+       "tokensPerSecond": 2.2,
+       "resolvedModel": "codestral-latest",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "question_id": "gpt4_2f91af09",
+   "question_type": "multi-session",
+   "gold": "23",
+   "chunkPlan": [
+    {
+     "index": 0,
+     "sessions": 10,
+     "sessionIndex0": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+     ],
+     "sessionSpan": [
+      0,
+      9
+     ],
+     "tokens": 27712,
+     "budget": 3280
+    },
+    {
+     "index": 1,
+     "sessions": 10,
+     "sessionIndex0": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+     ],
+     "sessionSpan": [
+      10,
+      19
+     ],
+     "tokens": 29220,
+     "budget": 3276
+    },
+    {
+     "index": 2,
+     "sessions": 11,
+     "sessionIndex0": [
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30
+     ],
+     "sessionSpan": [
+      20,
+      30
+     ],
+     "tokens": 25394,
+     "budget": 3276
+    },
+    {
+     "index": 3,
+     "sessions": 9,
+     "sessionIndex0": [
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39
+     ],
+     "sessionSpan": [
+      31,
+      39
+     ],
+     "tokens": 26403,
+     "budget": 3276
+    },
+    {
+     "index": 4,
+     "sessions": 18,
+     "sessionIndex0": [
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57
+     ],
+     "sessionSpan": [
+      40,
+      57
+     ],
+     "tokens": 43430,
+     "budget": 3276
+    }
+   ],
+   "arms": {
+    "A-whole": {
+     "calls": 1,
+     "failedPieces": 0,
+     "outputTokens": 2742,
+     "budget": 16384,
+     "budgetShare": 0.1674,
+     "compressionRatio": 55.5,
+     "goldInSummary": true,
+     "goldInGoldPiece": null,
+     "promptTokens": 110738,
+     "promptEstimate": 152564,
+     "promptRatio": 0.7258,
+     "promptShortfall": false,
+     "cachedPromptTokens": null,
+     "tokensPerSecond": 47.9,
+     "resolvedModels": [
+      "agnes-3.0-flash"
+     ],
+     "finishReasons": [
+      "stop"
+     ],
+     "errors": [],
+     "elapsedMs": 57270,
+     "summary": "## 逐字锚点\n- ultrachat_554164\n- 7a2aed0b_1\n- fd6f60f0_2\n- 03357bcb_1\n- 0ccc563b\n- a402a59e_2\n- sharegpt_Itilzai_0\n- 541ecc45_1\n- sharegpt_cYthigl_0\n- answer_669318cf_2\n- ultrachat_324038\n- e7e416f5_2\n- ultrachat_42946\n- sharegpt_d7bP5fb_0\n- ultrachat_63949\n- 549b442a_1\n- 22b3af37_1\n- ultrachat_63063\n- sharegpt_qluHQQA_0\n- sharegpt_kuYqYGw_87\n- sharegpt_Vitaqjl_15\n- sharegpt_YmzANeT_0\n- f4038906_2\n- sharegpt_WImRhBG_0\n- sharegpt_K7liqgE_0\n- ultrachat_450272\n- ultrachat_245457\n- ultrachat_187458\n- d75245ea\n- ultrachat_516692\n- ultrachat_96437\n- sharegpt_wcqglLd_0\n- 49b78a55_1\n- 51c82c8e_2\n- sharegpt_u1AM5RT_281\n- f8d0629e_1\n- ca46d69f_1\n- ultrachat_116204\n- sharegpt_sTdVkLT_0\n- sharegpt_y1IBjYa_0\n- ultrachat_558017\n- 288e7d30\n- ultrachat_296153\n- sharegpt_DQjMfqI_0\n- 75d512dd_1\n- sharegpt_7jNclxT_45\n- answer_669318cf_3\n- sharegpt_yoSUjfa_5\n- michellesiroissilver.com\n- Les Vergers de Valensole\n- L'Occitane\n- Moulins de la Brune\n- Heilala Vanilla\n- Frontier Co-op\n- Monin\n- Manuka\n- Acacia\n- LAMP stack\n- MEAN stack\n- Serverless\n- Django\n- Ruby on Rails\n- .NET\n- LAMP (Linux, Apache, MySQL, PHP)\n- MongoDB, Express, AngularJS, Node.js\n- ARP4754\n- ARP4754A\n- Kwisatz Haderach\n- Bene Gesserit\n- NCCAOM\n- ACAOM\n- TCM Review Seminars\n- CEDTCM\n- Pomofocus\n- Focus Booster\n- Tomato Timer\n- Forest\n- Habitica\n- HabitBull\n- Loop Habit Tracker\n- RescueTime\n- Ulysses\n- Scrivener\n- Trello\n- Asana\n- Evernote\n- Bear\n- Simplenote\n- Workflowy\n- MindMeaster\n- MindMeister\n- Keep Talking and Nobody Explodes\n- Statik\n- I Expect You to Die\n- Guided Meditation VR\n- Nature Treks VR\n- Minecraft VR\n- Job Simulator\n- Google Earth VR\n- The VR Museum of Fine Art\n- Tilt Brush\n- Shutter Island\n- Memento\n- Primer\n- Black Swan\n- Gone Girl\n- Eternal Sunshine of the Spotless Mind\n- The Prestige\n- Misery\n- The Girl on the Train\n- Searching\n- Dune\n- The Night Circus\n- The Buried Giant\n- The Historian\n- The Particular Sadness of Lemon Cake\n- The First Fifteen Lives of Harry August\n- The Song of Achilles\n- The House of Shattered Wings\n- The City & The City\n- The Memory Keeper's Daughter\n- The Strange Library\n- The Shadow of the Wind\n- The Strange and Beautiful Sorrows of Ava Lavender\n- The Golem and the Jinni\n- The City of Dreaming Books\n- The Invisible Library\n- The House of Whispers\n- The Bear and the Nightingale\n- The Museum of Extraordinary Things\n- Like Water for Chocolate\n- The Law of Love\n- Malinche\n- Garden Spells\n- The Sugar Queen\n- The Peach Keeper\n- The Forgotten Garden\n- The Secret Keeper\n- The Lake House\n- Mr. Fox\n- What Is Not Yours Is Not Yours\n- Gingerbread\n- Station Eleven\n- The Glass Hotel\n- Last Night in Montreal\n- Fates and Furies\n- Florida\n- Arcadia\n- Little Fires Everywhere\n- Everything I Never Told You\n- Our Missing Hearts\n- The Darkest Part of the Forest\n- The Wicked Deep\n- In a Dark, Dark Wood\n- The Woman in Cabin 10\n- The Lying Game\n- The Age of Miracles\n- The First Bad Man\n- The House on Mango Street\n- A Tale for the Time Being\n- My Year of Meats\n- The Weight of Memory\n- The Last Mountain\n- Meru\n- The River Runs Red\n- The True Cost\n- Racing Extinction\n- Chasing Coral\n- The Cove\n- If a Tree Falls: A Story of the Earth Liberation Front\n- The 11th Hour\n- Valley Uprising\n- The Dawn Wall\n- Free Solo\n- The Rescue\n- The Fight\n- The Truffle Hunters\n- The Reason I Jump\n- Ammonite\n- The Assistant\n- Jumbo\n- The Smell of Old Books\n- Forgotten Memories\n- Enan Eagle's Nest\n- Grand Trunk Ultralight\n- Sea to Summit UltraLight\n- Warbonnet Outdoors RidgeRunner\n- Hammock Gear Light Owl\n- Thule Evo 2\n- Yakima FullBack\n- Saris Bones 2\n- RockyMounts JetLine\n- Kuat NV 2.0\n- The Daily Grind\n- Fortuna Major\n- Amissio\n- Cauda Draconis\n- Laetitia\n- Caput Draconis\n- Populus\n- Fortuna Minor\n- Albus\n- Puella\n- Via\n- Carcer\n- Puer\n- Rubeus\n- Tristitia\n- Acquisitio\n- Conjunctio\n- PSR-E263\n- PSR-E363\n- SA-46\n- SA-76\n- LK-190\n- D750\n- 24-70mm f/2.8\n- 13, 12\n- 15, 17\n- x, y\n- 8, 10\n- 7, 24\n- y^2\n- x^2 + (y-5)^2 = y^2\n- 10y-25\n- 13*2\n- 7, 24\n- 20, x\n- 15, 17\n- 7, 24\n- 8, 15\n- 10\n- 24, 7\n- 1600\n- 1\n- 1/1\n- 20:23\n- 05:37\n- 07:22\n- 13:44\n- 13:48\n- 14:46\n- 20:50\n- 07:19\n- 15:54\n- 16:16\n- 19:24\n- 23:14\n- 09:34\n- 12:51\n- 05:55\n- 02:07\n- 02:57\n- 05:12\n- 00:34\n- 11:23\n- 10:37\n- 09:07\n- 20:27\n- 02:08\n- 01:48\n- 05:31\n- 08:18\n- 18:50\n- 09:10\n- 07:55\n- 19:59\n- 12:33\n- 01:26\n- 14:55\n- 20:18\n- 18:06\n- 00:48\n- 00:54\n- 00:12\n- 23:51\n- 09:20\n- 02:51\n- 03:41\n\n## 目标与约束\nThe user is engaged in a multi-session conversation covering diverse topics including study abroad programs, baking recipes, research methodologies, Google Analytics setup, LaTeX math question generation, VR safety, California hiking, Moroccan immigration history, packing advice, pizza recipes, UI/UX design, aviation certification, DJing, bank scam prevention, movie analysis, Art Deco design, graphic novels, Pyrrhos mythology, writing organization, and PHP/CSS code generation. The goal is to provide specific, context-appropriate information or creative content in each thread. Constraints include maintaining identity as Agnes-3.0-flash (developed by Sapiens AI) when asked, and adhering to specific formatting requirements like LaTeX for math or JSON for styling tips.\n\n## 已完成\n- Provided study abroad program details for University of Tokyo.\n- Recommended lavender shortbread recipe and discussed sugar substitutions and baking times.\n- Suggested lavender extract brands and pairing ideas.\n- Explained differences between analytical, descriptive, and comparative research.\n- Assisted with Google Analytics and GTM setup for form tracking.\n- Generated Pythagorean theorem questions for 10th grade with LaTeX formatting.\n- Discussed VR safety tips and recommended low-impact VR experiences.\n- Listed hiking trails in Bay Area and recommended hiking gear (hammocks, bike racks).\n- Detailed Moroccan immigration history to France and US, including cultural/linguistic ties.\n- Offered packing advice for San Francisco, including toiletries and weather layers.\n- Provided beginner-friendly pizza and vegetarian recipes with tips.\n- Wrote an artist statement for Michelle Sirois-Silver.\n- Compared application architectures (LAMP, MEAN, Serverless, etc.) and provided steps for UI wireframing.\n- Summarized ARP4754 process for aircraft system integration and certification.\n- Recommended book titles related to memory, identity, and magical realism.\n- Listed resources for finding ukulele meetups and tips for staying motivated.\n- Provided writing prompts and tips for developing characters and plots using Evernote and Trello.\n- Generated CSS/PHP code for a flight booking website with card-style UI and overflow menu.\n- Discussed laser vs optical mouse sensors.\n- Analyzed the Joker's role in \"The Dark Knight\".\n- Provided info on French Art Deco and care for antique vase.\n- Guided user on finding a watch appraiser.\n- Discussed graphic novel settings and mood.\n- Explored the mythology of Pyrrhos and his relationship with gods.\n\n## 未决问题\n- No specific pending questions remain in the most recent turn; the last assistant response provided code and CSS separation for the flight booking website.\n- The user might have follow-up questions about the Pyrrhos mythology or the writing organization tools, but these threads appear concluded for now.\n\n## 下一步\n- Await user's next input to continue the multi-topic conversation.\n- If the user returns to the code topic, be prepared to debug or extend the PHP/CSS flight booking interface.\n- If the user returns to writing or mythology topics, continue providing creative or analytical assistance as established.\n- Maintain the persona of Agnes-3.0-flash (Sapiens AI) if identity is queried.",
+     "hitCeiling": false
+    },
+    "B-chunks": {
+     "calls": 6,
+     "failedPieces": 0,
+     "outputTokens": 8445,
+     "budget": 16384,
+     "budgetShare": 0.5154,
+     "compressionRatio": 18,
+     "goldInSummary": true,
+     "goldInGoldPiece": false,
+     "promptTokens": 112482,
+     "promptEstimate": 154190,
+     "promptRatio": 0.7295,
+     "promptShortfall": false,
+     "cachedPromptTokens": 0,
+     "tokensPerSecond": 34.5,
+     "resolvedModels": [
+      "codestral-latest",
+      "agnes-3.0-flash"
+     ],
+     "finishReasons": [
+      "stop",
+      "length",
+      "stop",
+      "stop",
+      "stop"
+     ],
+     "errors": [],
+     "elapsedMs": 244736,
+     "summary": "## 逐字锚点\nhttps://www.coursera.org/\nhttps://analytics.google.com/\nhttps://tagmanager.google.com/\nhttps://www.tomato-timer.com/\nhttps://pomofocus.io/\nhttps://www.focusboosterapp.com/\nhttps://www.forestapp.cc/\nhttps://www.poetspad.com/\nhttps://www.poetryeditor.com/\nhttps://www.haikujam.com/\nhttps://www.evernote.com/\nhttps://www.ulysses.app/\nhttps://www.rescuetime.com/\nhttps://www.scrivener.com/\nhttps://www.asana.com/\nhttps://trello.com/\nhttps://www.google.com/analytics\nhttps://www.google.com/tagmanager\nhttps://www.google.com/chrome/webstore/detail/tag-assistant-by-google/kejbdjndbnbjgmefkgdddjlbokphdefk\nhttps://www.nccaom.org/\nhttps://www.accom.org/\nhttps://www.tcmreview.com/\nhttps://www.cedtcm.org/\n\n## 目标与约束\n- 用户希望找到适合自己的写作工具和时间管理方法\n- 需要帮助用户设置Google Analytics仪表盘来跟踪转化率\n- 用户想了解Pomodoro技术如何帮助写作\n- 需要帮助用户准备NCCAOM考试\n\n## 已完成\n- 介绍了各种写作工具和时间管理工具\n- 解释了Pomodoro技术如何帮助写作\n- 提供了NCCAOM考试准备建议\n\n## 未决问题\n- 用户是否需要更多关于写作工具的具体信息\n- 用户是否需要更多关于Pomodoro技术的具体信息\n- 用户是否需要更多关于NCCAOM考试准备的具体信息\n\n## 下一步\n- 用户可能需要更多关于写作工具的具体信息\n- 用户可能需要更多关于Pomodoro技术的具体信息\n- 用户可能需要更多关于NCCAOM考试准备的具体信息\n\n## 逐字锚点\n/Users/username/Documents/travel_plans/san_francisco_trip.txt\n/Users/username/Documents/travel_plans/new_york_trip.txt\n/Users/username/Documents/travel_plans/chicago_trip.txt\n/Users/username/Documents/travel_plans/san_francisco_weather.txt\n/Users/username/Documents/travel_plans/packing_tips.txt\n/Users/username/Documents/travel_plans/toiletries_packing.txt\n/Users/username/Documents/travel_plans/shoe_packing.txt\n/Users/username/Documents/travel_plans/clothing_packing.txt\n/Users/username/Documents/travel_plans/weather_packing.txt\n/Users/username/Documents/travel_plans/3-4-5_rule.txt\n/Users/username/Documents/travel_plans/core_outfit_rule.txt\n/Users/username/Documents/travel_plans/lightweight_jacket.txt\n/Users/username/Documents/travel_plans/water-repellent_jacket.txt\n/Users/username/Documents/travel_plans/poncho.txt\n/Users/username/Documents/travel_plans/waterproof_bag.txt\n/Users/username/Documents/travel_plans/merino_wool.txt\n/Users/username/Documents/travel_plans/cotton.txt\n/Users/username/Documents/travel_plans/polyester.txt\n/Users/username/Documents/travel_plans/thermal_tops.txt\n/Users/username/Documents/travel_plans/long-sleeved_tops.txt\n/Users/username/Documents/travel_plans/fleece.txt\n/Users/username/Documents/travel_plans/sweater.txt\n/Users/username/Documents/travel_plans/warm_socks.txt\n/Users/username/Documents/travel_plans/scarf.txt\n/Users/username/Documents/travel_plans/neck_warmer.txt\n/Users/username/Documents/travel_plans/breathable_fabrics.txt\n/Users/username/Documents/travel_plans/dress_up_or_down.txt\n/Users/username/Documents/travel_plans/neutral_colors.txt\n/Users/username/Documents/travel_plans/mix_and_match.txt\n/Users/username/Documents/travel_plans/single-use_items.txt\n/Users/username/Documents/travel_plans/versatile_pieces.txt\n/Users/username/Documents/travel_plans/multipurpose_items.txt\n/Users/username/Documents/travel_plans/decanting_liquids.txt\n/Users/username/Documents/travel_plans/travel-sized_toiletries.txt\n/Users/username/Documents/travel_plans/toiletry_bag.txt\n/Users/username/Documents/travel_plans/toiletry_case.txt\n/Users/username/Documents/travel_plans/refillable_toiletry_bag.txt\n/Users/username/Documents/travel_plans/comfortable_shoes.txt\n/Users/username/Documents/travel_plans/water-resistant_shoes.txt\n/Users/username/Documents/travel_plans/dress_shoes.txt\n/Users/username/Documents/travel_plans/loafers.txt\n/Users/username/Documents/travel_plans/dress_boots.txt\n/Users/username/Documents/travel_plans/wedges.txt\n/Users/username/Documents/travel_plans/Converse.txt\n/Users/username/Documents/travel_plans/Vans.txt\n/Users/username/Documents/travel_plans/New_Balance.txt\n/Users/username/Documents/travel_plans/Merrell.txt\n/Users/username/Documents/travel_plans/Keen.txt\n/Users/username/Documents/travel_plans/The_North_Face.txt\n/Users/username/Documents/travel_plans/protective_bag.txt\n/Users/username/Documents/travel_plans/clothing_wrap.txt\n/Users/username/Documents/travel_plans/undergarments.txt\n/Users/username/Documents/travel_plans/socks.txt\n/Users/username/Documents/travel_plans/layering_pieces.txt\n/Users/username/Documents/travel_plans/dressy_outfit.txt\n/Users/username/Documents/travel_plans/rolling_clothes.txt\n/Users/username/Documents/travel_plans/folding_clothes.txt\n/Users/username/Documents/travel_plans/wrinkles.txt\n/Users/username/Documents/travel_plans/space_in_luggage.txt\n/Users/username/Documents/travel_plans/weight_in_luggage.txt\n/Users/username/Documents/travel_plans/TSA_regulations.txt\n/Users/username/Documents/travel_plans/carry-on_luggage.txt\n/Users/username/Documents/travel_plans/checked_luggage.txt\n/Users/username/Documents/travel_plans/toiletry_kit.txt\n/Users/username/Documents/travel_plans/hotel_amenities.txt\n/Users/username/Documents/travel_plans/first_night_kit.txt\n/Users/username/Documents/travel_plans/multi-tasking_products.txt\n/Users/username/Documents/travel_plans/solid_shampoo.txt\n/Users/username/Documents/travel_plans/conditioner.txt\n/Users/username/Documents/travel_plans/face_wash.txt\n/Users/username/Documents/travel_plans/razor.txt\n/Users/username/Documents/travel_plans/shaving_cream.txt\n/Users/username/Documents/travel_plans/electric_razor.txt\n/Users/username/Documents/travel_plans/makeup.txt\n/Users/username/Documents/travel_plans/makeup_remover.txt\n/Users/username/Documents/travel_plans/foundation.txt\n/Users/username/Documents/travel_plans/mascara.txt\n/Users/username/Documents/travel_plans/lip_balm.txt\n/Users/username/Documents/travel_plans/hairbrush.txt\n/Users/username/Documents/travel_plans/comb.txt\n/Users/username/Documents/travel_plans/contact_lenses.txt\n/Users/username/Documents/travel_plans/solution.txt\n/Users/username/Documents/travel_plans/prescription_medication.txt\n/Users/username/Documents/travel_plans/documentation.txt\n/Users/username/Documents/travel_plans/moisturizer.txt\n/Users/username/Documents/travel_plans/sunscreen.txt\n/Users/username/Documents/travel_plans/travel-sized_essentials.txt\n/Users/username/Documents/travel_plans/eye_mask.txt\n/Users/username/Documents/travel_plans/earplugs.txt\n/Users/username/Documents/travel_plans/travel_pillow.txt\n/Users/username/Documents/travel_plans/toothbrush.txt\n/Users/username/Documents/travel_plans/toothpaste.txt\n/Users/username/Documents/travel_plans/dental_floss.txt\n/Users/username/Documents/travel_plans/deodorant.txt\n/Users/username/Documents/travel_plans/anti-perspirant.txt\n/Users/username/Documents/travel_plans/shampoo.txt\n/Users/username/Documents/travel_plans/body_wash.txt\n/Users/username/Documents/travel_plans/cotton_pads.txt\n/Users/username/Documents/travel_plans/Q-tips.txt\n/Users/username/Documents/travel_plans/bobby_pins.txt\n/Users/username/Documents/travel_plans/weather_forecast.txt\n/Users/username/Documents/travel_plans/unexpected_weather_conditions.txt\n/Users/username/Documents/travel_plans/breathable_fabrics.txt\n/Users/username/Documents/travel_plans/dress_up_or_down.txt\n/Users/username/Documents/travel_plans/neutral_colors.txt\n/Users/username/Documents/travel_plans/mix_and_match.txt\n/Users/username/Documents/travel_plans/single-use_items.txt\n/Users/username/Documents/travel_plans/versatile_pieces.txt\n/Users/username/Documents/travel_plans/multipurpose_items.txt\n/Users/username/Documents/travel_plans/decanting_liquids.txt\n/Users/username/Documents/travel_plans/travel-sized_toiletries.txt\n/Users/username/Documents/travel_plans/toiletry_bag.txt\n/Users/username/Documents/travel_plans/toiletry_case.txt\n/Users/username/Documents/travel_plans/refillable_toiletry_bag.txt\n/Users/username/Documents/travel_plans/comfortable_shoes.txt\n/Users/username/Documents/travel_plans/water-resistant_shoes.txt\n/Users/username/Documents/travel_plans/dress_shoes.txt\n/Users/username/Documents/travel_plans/loafers.txt\n/Users/username/Documents/travel_plans/dress_boots.txt\n/Users/username/Documents/travel_plans/wedges.txt\n/Users/username/Documents/travel_plans/Converse.txt\n/Users/username/Documents/travel_plans/Vans.txt\n/Users/username/Documents/travel_plans/New_Balance.txt\n/Users/username/Documents/travel_plans/Merrell.txt\n/Users/username/Documents/travel_plans/Keen.txt\n/Users/username/Documents/travel_plans/The_North_Face.txt\n/Users/username/Documents/travel_plans/protective_bag.txt\n/Users/username/Documents/travel_plans/clothing_wrap.txt\n/Users/username/Documents/travel_plans/undergarments.txt\n/Users/username/Documents/travel_plans/socks.txt\n/Users/username/Documents/travel_plans/layering_pieces.txt\n/Users/username/Documents/travel_plans/dressy_outfit.txt\n/Users/username/Documents/travel_plans/rolling_clothes.txt\n/Users/username/Documents/travel_plans/folding_clothes.txt\n/Users/username/Documents/travel_plans/wrinkles.txt\n/Users/username/Documents/travel_plans/space_in_luggage.txt\n/Users/username/Documents/travel_plans/weight_in_luggage.txt\n/Users/username/Documents/travel_plans/TSA_regulations.txt\n/Users/username/Documents/travel_plans/carry-on_luggage.txt\n/Users/username/Documents/travel_plans/checked_luggage.txt\n/Users/username/Documents/travel_plans/toiletry_kit.txt\n/Users/username/Documents/travel_plans/hotel_amenities.txt\n/Users/username/Documents/travel_plans/first_night_kit.txt\n/Users/username/Documents/travel_plans/multi-tasking_products.txt\n/Users/username/Documents/travel_plans/solid_shampoo.txt\n/Users/username/Documents/travel_plans/conditioner.txt\n/Users/username/Documents/travel_plans/face_wash.txt\n/Users/username/Documents/travel_plans/razor.txt\n/Users/username/Documents/travel_plans/shaving_cream.txt\n/Users/username/Documents/travel_plans/electric_razor.txt\n/Users/username/Documents/travel_plans/makeup.txt\n/Users/username/Documents/travel_plans/makeup_remover.txt\n/Users/username/Documents/travel_plans/foundation.txt\n/Users/username/Documents/travel_plans/mascara.txt\n/Users/username/Documents/travel_plans/lip_balm.txt\n/Users/username/Documents/travel_plans/hairbrush.txt\n/Users/username/Documents/travel_plans/comb.txt\n/Users/username/Documents/travel_plans/contact_lenses.txt\n/Users/username/Documents/travel_plans/solution.txt\n/Users/username/Documents/travel_plans/prescription_medication.txt\n/Users/username/Documents/travel_plans/documentation.txt\n/Users/username/Documents/travel_plans/moisturizer.txt\n/Users/username/Documents/travel_plans/sunscreen.txt\n/Users/username/Documents/travel_plans/travel-sized_essentials.txt\n/Users/username/Documents/travel_plans/eye_mask.txt\n/Users/username/Documents/travel_plans/earplugs.txt\n/Users/username/Documents/travel_plans/travel_pillow.txt\n/Users/username/Documents/travel_plans/toothbrush.txt\n/Users/username/Documents/travel_plans/toothpaste.txt\n/Users/username/Documents/travel_plans/dental_floss.txt\n/Users/username/Documents/travel_plans/deodorant.txt\n/Users/username/Documents/travel_plans/anti-perspirant.txt\n/Users/username/Documents/travel_plans/shampoo.txt\n/Users/username/Documents/travel_plans/body_wash.txt\n/Users/username/Documents/travel_plans/cotton_pads.txt\n/Users/username/Documents/travel_plans/Q-tips.txt\n/Users/username/Documents/travel_plans/bobby_pins.txt\n/Users/username/Documents/travel_plans/weather_forecast.txt\n/Users/username/Documents/travel_plans/unexpected_weather_conditions.txt\n\n## 目标与约束\n- 为用户规划5天的旧金山旅行，聚焦轻装行李\n- 避免过度包装，遵循3-4-5规则和核心单品规则\n- 考虑旧金山的天气特点，包括冷空气和雾霾\n- 优化行李空间和重量，避免多余的物品\n- 确保行李符合TSA规定，包括液体限制和随身行李要求\n\n## 已完成\n- 用户确认了轻装行李的策略，包括3-4-5规则和核心单品规则\n- 用户决定使用旅行小瓶和小样装洗漱用品\n- 用户确认了舒适鞋子的重要性，并选择了信任的运动鞋和舒适的靴子\n- 用户决定为旧金山的天气准备轻量级外套和额外的保暖层\n\n## 未决问题\n- 用户是否需要额外的雨具，如防水外套或雨衣\n- 用户是否需要额外的保暖物品，如保暖袜子或围巾\n- 用户是否需要额外的鞋子，\n\n## 逐字锚点\nultrachat_63063\n2023/05/23 (Tue) 19:15\n1 (14-ounce) can of crushed tomatoes\n1 clove garlic\n1 tablespoon olive oil\n1 teaspoon dried basil\n1/2 teaspoon dried oregano\nsharegpt_qluHQQA_0\n2023/05/23 (Tue) 20:18\nMichelle Sirois-Silver\nmichellesiroissilver.com\nsharegpt_kuYqYGw_87\n2023/05/23 (Tue) 20:30\nLAMP Stack\nLinux, Apache, MySQL, PHP\nMEAN Stack\nMongoDB, Express, AngularJS, Node.js\nServerless Architecture\nMonolithic Architecture\nMicroservices Architecture\nHybrid Architecture\nDjango\nRuby on Rails\n.NET\nsharegpt_Vitaqjl_15\n2023/05/24 (Wed) 01:06\nARP4754\nFederal Aviation Administration (FAA)\nEuropean Aviation Safety Agency (EASA)\nsharegpt_YmzANeT_0\n2023/05/24 (Wed) 02:23\nCasa de Campo Resort&Villas\nf4038906_2\n2023/05/24 (Wed) 05:55\nSarah Johnson\nThe Weight of Memory\nErin Morgenstern\nKazuo Ishiguro\nElizabeth Kostova\nAimee Bender\nClaire North\nMadeline Miller\nAliette de Bodard\nChina Miéville\nKim Edwards\nHaruki Murakami\nAlice Hoffman\nLaura Esquivel\nSarah Addison Allen\nKate Morton\nHelen Oyeyemi\nHelene Wecker\nWalter Moers\nGenevieve Cogman\nLaura Purcell\nKatherine Arden\nEmily St. John Mandel\nLauren Groff\nCeleste Ng\nBrittany Bundy\nRuth Ware\nKaren Thompson Walker\nMiranda July\nSandra Cisneros\nLeslye Walton\nsharegpt_WImRhBG_0\n2023/05/24 (Wed) 09:20\nXiaomi 360 camera\nGoogle Cloud Storage\nMi Home app\nsharegpt_K7liqgE_0\n2023/05/24 (Wed) 10:20\nOCR\nTesseract\nGoogle Cloud Vision API\nAmazon Textract\nultrachat_450272\n2023/05/24 (Wed) 14:55\nSingapore\nBarcelona\nPortland\nMelbourne\nCopenhagen\nultrachat_245457\n2023/05/25 (Thu) 01:26\nIMF\nWorld Bank\nultrachat_187458\n2023/05/25 (Thu) 12:33\nLeibniz\n\n## 目标与约束\n该跨度包含多个独立会话的历史记录，涵盖烹饪（披萨酱、烤蔬菜）、软件开发架构（LAMP, MEAN, Serverless 等对比）、航空系统工程（ARP4754 认证流程）、旅游 SEO 文案（Casa de Campo）、文学推荐（记忆与身份主题、魔幻现实主义）、智能硬件连接（小米摄像头至 Google Cloud）、OCR 系统架构、城市生物多样性及宏观经济学（大萧条原因）和哲学（莱布尼茨思想）。目标是将这些分散的对话内容压缩为可供后续代理继续工作的高密度摘要，重点保留实体名称、技术栈名称及具体书名/作者名等关键锚点。\n\n## 已完成\n1. 提供了自制披萨酱食谱及完美披萨饼皮和配料建议。\n2. 给出了多个初学者友好的蔬菜食谱及制作烤蔬菜脆度的技巧。\n3. 撰写了针对 michellesiroissilver.com 的 SEO 优化艺术家声明。\n4. 详细对比了 LAMP、MEAN、Serverless、Django、Ruby on Rails 和 .NET 架构的优缺点，并讨论了 UI 线框图的绘制步骤。\n5. 解释了 ARP4754 过程中的集成测试阶段、系统认证与安装认证的区别及操作批准阶段。\n6. 生成了一篇关于 Casa de Campo Resort&Villas 的 SEO 文章草稿（未完成，在 FAQ 部分中断）。\n7. 基于“记忆”和“身份”主题，以及魔幻现实主义风格，推荐了多本书籍和作者（如《夜马戏团》、《风之影》等）。\n8. 提供了将小米 360 摄像头连接到 Google Cloud Storage 的步骤说明。\n9. 描述了 OCR 应用的前后端流程、处理系统及工程选型。\n10. 列举了支持城市生物多样性的城市案例及个人花园建议。\n11. 分析了大萧条的国际贸易影响，讨论了现代经济挑战及防止类似崩溃的措施。\n12. 探讨了莱布尼茨的形而上学、道德哲学、政治哲学及其在现代政治中的相关性。\n\n## 未决问题\n- Casa de Campo 文章在“FAQs: Q: Is Casa de Campo Resort&Villas all-inclusive? A: While Casa de Campo Resort&Villas does offer all-inclusive packages, guests can also choose to pay à la carte for”处中断，需完成剩余内容并达到 1600 词要求。\n- 用户关于莱布尼茨政策的具体现代案例（如德国医疗保健、瑞典税收）已列出，但可能需要更深入的验证或扩展。\n- 书籍推荐列表较长，若用户需要更多特定细分领域（如非英语魔幻现实主义）的推荐，需进一步筛选。\n\n## 下一步\n1. 补全 Casa de Campo Resort&Villas 的 SEO 文章，包括完成 FAQ 部分和结论，确保字数达标且符合英国英语规范。\n2. 若用户继续提问，根据已提供的架构对比表（LAMP/MEAN/Serverless/Django/Rails/.NET）深入讨论特定技术栈的实施细节。\n3. 针对 ARP4754 流程，准备解释“运营批准阶段”后的最终认证证书颁发细节或监管沟通流程。\n4. 扩展莱布尼茨政治哲学的现代应用案例，具体探讨比例代表制或透明政府立法中的具体条文。\n\n## 逐字锚点\n\nd75245ea | 2023/05/25 (Thu) 19:59\nOrlando, FL\nWalt Disney World\nMagic Kingdom\nEpcot\nHollywood Studios\nAnimal Kingdom\nUniversal Orlando Resort\nUniversal Studios Florida\nUniversal's Islands of Adventure\nSeaWorld Orlando\nLEGOLAND Florida\nSheiKra\nBusch Gardens Tampa Bay\nMako\nKraken\nManta\nHollywood Rip Ride Rockit\nIncredible Hulk Coaster\nRock 'n' Roller Coaster Starring Aerosmith\nExpedition Everest - Legend of the Forbidden Mountain\nCoaster Con\nHalloween Horror Nights\nsharegpt_Wb27mkK_0 | 2023/05/25 (Thu) 20:23\nVANETs\nMANET\nADAS\nPKI\nKerberos\n84f2d563_1 | 2023/05/26 (Fri) 00:03\nCanon 24-70mm f/2.8\nFebruary 10th\nf/2.8\n1600-6400\nf/4-f/5.6\nRAW\nNikon D750\n2018\nCanon 24-70mm f/2.8\n100-400\n800-1600\n3200-6400\n12800-25600\n51200\nYosemite\nSan Francisco\nRachel\nSunny 16\nf/16\n1/100s\n2844b49f_1 | 2023/05/26 (Fri) 05:55\nultrachat_516692 | 2023/05/26 (Fri) 09:07\nBuddhism\nHinduism\nReincarnation\nKarma\nMeditation\nNonviolence\nNirvana\nMoksha\nJnana\nKarma\nBhakti\nEightfold Noble Path\nSiddhartha Gautama\nJainism\nSikhism\nBon\nLamaism\nBonpo\nYoga\nAyurveda\nultrachat_96437 | 2023/05/26 (Fri) 20:27\nZuora\n2020\n78%\n91%\n89%\n87%\n66%\n85%\n72%\n68%\n38%\n48%\n50%\nsharegpt_wcqglLd_0 | 2023/05/27 (Sat) 02:08\nproduct\\_name\nprice\nbrand\npattern\nmaterial\nFloral Print Maxi Dress\n98.99\nIn Bloom by Jonquil\nFloral\nCotton\nStriped T-Shirt Dress\n44.99\nCaslon\nStriped\nLinen\nSlim Fit Chino Pants\n69.99\nBOSS\nSolid\nCropped Denim Jacket\n79.99\nLevi's\nButton-Up Shirt Dress\n59.99\nCalvin Klein\nPlaid\nstyling\\_tip\nsearch\\_query\n49b78a55_1 | 2023/05/28 (Sun) 01:48\n51c82c8e_2 | 2023/05/28 (Sun) 02:10\n10 pounds\n5 pounds\n10 pounds\n5'8\"\n170 pounds\n3\nMondays\nWednesdays\nFridays\n7 am\n8 am\nHIIT\n30 seconds\nBurpees\nJump squats\nMountain climbers\n2.5-5 pounds\n60-90 seconds\n120-180 seconds\n1.6-2 grams\n120-140 grams\n500-750 calories\n1-2 pounds\n100-1000 calories\n1,987 calories\n1.55\n3,081 calories\n3,500-4,000 calories\n120-140 grams\n160-200 grams\n40-50 grams\n5-6\n2-3 hours\n400 calories\n30g protein\n200 calories\n20g protein\n500 calories\n40g protein\n150 calories\n8g protein\n300 calories\n30g protein\n\n## 目标与约束\n用户请求跨多个会话主题，包括奥兰多旅游、VANET 隐私认证、摄影技巧、宗教比较、订阅经济数据、StitchFix 造型建议、静物绘画技巧及健身计划。需要压缩会话历史以保留关键事实、参数和约束。\n\n## 已完成\n- 提供了奥兰多主题公园和过山车推荐，特别是万圣节惊魂夜（HHN）的详细信息。\n- 总结了 VANET 中隐私保护认证方法的架构、传统方法的挑战及未来方向。\n- 解答了关于 Canon 24-70mm f/2.8 镜头在 Nikon D750 上的兼容性问题（确认不兼容），并提供 ISO 设置建议。\n- 比较了佛教与印度教的异同及其对现代生活的影响。\n- 引用 Zuora 2020 年调查数据，分析了各行业订阅制和年度账单的普及率。\n- 生成了基于购买历史的 StitchFix 造型建议 JSON。\n- 提供了静物绘画（复古相机）的构图、纹理捕捉和平衡建议。\n- 为健身目标（2 个月减重 10 磅）制定了结构化的举重与 HIIT 计划，并估算了每日卡路里需求（~3,081 维持热量，建议摄入 3,500-4,000 磅支持增肌，此处原回答逻辑存在矛盾，但已提供数据）。\n\n## 未决问题\n- 健身计划中的卡路里建议数值（3,500-4,000）对于减重目标而言显得过高，且与之前的“热量缺口”建议不一致，可能需要用户澄清或修正。\n- 用户尚未确认是否接受当前的饮食方案。\n\n## 下一步\n- 等待用户对健身饮食计划的反馈。\n- 若用户继续追问，需根据上下文（奥兰多、摄影或绘画等）提供后续建议。\n\n## 逐字锚点\nsharegpt_u1AM5RT_281\n2023/05/28 (Sun) 05:31\nHouse of Marriage\nFortuna Major\nHouse of Wealth\nAmissio\nHouse of Love\nCauda Draconis\nHouse of Career\nLaetitia\nHouse of Family\nCaput Draconis\nHouse of the Ship\nPopulus\nHouse of the Moon\nHouse of the Scorpion\nHouse of the Tower\nVia\nHouse of the Shield\nCarcer\nHouse of Death\nHouse of Good Fortune\nFortuna Minor\nHouse of Friends\nPuella\nHouse of Health\nHouse of the 8th house\nAlbus\nHouse of the 7th house\nPuer\nHouse of the 1st house\nHouse of the 11th house\nHouse of the 6th house\nHouse of the 12th house\nHouse of the 10th house\nRubeus\nHouse of the 3rd house\nf8d0629e_1\n2023/05/28 (Sun) 08:18\nYamaha PSR-E263\n$99\nYamaha PSR-E363\n$149\nCasio SA-46\n$25\nCasio SA-76\n$40\nCasio LK-190\n$129\n400 built-in sounds\n100 rhythms\nEducation Suite\nanswer_669318cf_1\n2023/05/28 (Sun) 08:32\nThe Last Memory\nThe Stranger in the Mirror\nThe Secret Life\nThe Mysterious Box\nThe Time Loop\nThe Last Hope\nThe Floating City\nThe Underwater Colony\nThe Post-Apocalyptic Future\n\"For sale: baby shoes, never worn.\"\n\"Last night, I died again.\"\nThe Mysterious Neighbor\nultrachat_538174\n2023/05/28 (Sun) 09:10\nultrachat_320710\n2023/05/28 (Sun) 16:09\nUniversity of Exeter\nOld Library\nBodleian Library\nOxford\nReed Hall\nQueen's Building\nExeter Cathedral\nRoyal Albert Memorial Museum & Art Gallery\nUnderground Passages\nQuayside\nRougemont Gardens\n9b85a31d_1\n2023/05/28 (Sun) 18:50\nThe Last Mountain\nTribeca Film Festival\nMeru\nThe River Runs Red\nThe True Cost\nRacing Extinction\nChasing Coral\nThe Cove\nIf a Tree Falls: A Story of the Earth Liberation Front\nThe 11th Hour\nValley Uprising\nThe Dawn Wall\nFree Solo\nThe Rescue\nJimmy Chin\nElizabeth Chai Vasarhelyi\nRenan Ozturk\nYoussou N'Dour: I Bring What I Love\nIncorruptible\nYvon Chouinard\nRoyal Robbins\nLynn Hill\nSeattle International Film Festival\nSIFF\nThe Fight\nThe Truffle Hunters\nThe Reason I Jump\nAmmonite\nThe Assistant\nJumbo\nKate Winslet\nSaoirse Ronan\nSIFF Cinema Uptown\nSIFF Cinema Egyptian\nCapitol Hill\nPacific Place\nAMC Pacific Place 11\nFremont Outdoor Cinema\nSeattle Center\nMuseum of Pop Culture\nNorthwest Film Forum\nUptown Tavern\nca46d69f_1\n2023/05/29 (Mon) 02:07\nultrachat_116204\n2023/05/29 (Mon) 02:57\nlaser sensor\noptical sensor\nsharegpt_sTdVkLT_45\n2023/05/29 (Mon) 05:12\nDJing\nsharegpt_y1IBjYa_0\n2023/05/29 (Mon) 05:37\nultrachat_558017\n2023/05/29 (Mon) 07:22\nThe Dark Knight\nJoker\nBatman\nBruce Wayne\nGotham City\nHarvey Dent\nTwo-Face\nHeath Ledger\n288e7d30\n2023/05/29 (Mon) 13:44\nFrench Art Deco\nStyle Moderne\nExposition Internationale des Arts Décoratifs et Industriels Modernes\nChrysler Building\nPalais de la Porte Dorée\nÉmile-Jacques Ruhlmann\nJean-Michel Frank\nCoco Chanel\nElsa Schiaparelli\nsharegpt_DQjMfqI_0\n2023/05/29 (Mon) 14:46\n75d512dd_1\n2023/05/29 (Mon) 20:50\nsharegpt_7jNclxT_45\n2023/05/30 (Tue) 07:19\nPyrrhos\nArmageddon\nSatan\nanswer_669318cf_3\n2023/05/30 (Tue) 15:54\nforgotten memories\nThe Smell of Old Books\nScrivener\nEvernote\nTrello\nMindMeister\nSimplenote\nBear\nWorkflowy\nsharegpt_yoSUjfa_5\n2023/05/30 (Tue) 16:16\n#032B44\n#F7F7F7\n#FFFFFF\n#A7D3F3\nArial\nrgba(0, 0, 0, 0.1)\n36px\n24px\n18px\n16px\n4px\nstyles.css\ncustom-logo.png\n\n## 目标与约束\nThe user has engaged in multiple disparate threads across several sessions: developing a 50-question geomancy quiz with house/figure combinations; selecting a keyboard for a niece and discussing ukulele motivation; writing advice on perspective and story linkage; blockchain queries; touring Exeter; film festival and documentary recommendations; analyzing \"The Dark Knight\"; a fictional narrative about Pyrrhos; and organizing writing files with specific apps. The current active thread is web development, specifically refactoring a flight booking UI to use a separate CSS file with an overflow menu and card-style design.\n\n## 已完成\n- Generated multiple sets of geomancy quiz questions with answers and explanations.\n- Recommended Yamaha and Casio keyboards, detailed their features, and provided ukulele motivation tips and meetup search resources.\n- Offered writing prompts and tips for writing from an inanimate object's perspective, specifically linking a book to a character in \"The Mysterious Neighbor.\"\n- Answered questions on blockchain benefits/drawbacks and industry applications.\n- Provided Exeter tour recommendations and SIFF film/venue/transportation details.\n- Analyzed the Joker's role in \"The Dark Knight\" and its impact on Batman.\n- Discussed French Art Deco characteristics and care for family heirlooms.\n- Explored fictional scenarios involving a character named Pyrrhos and the gods.\n- Suggested workflows for organizing writing files using Evernote and Trello, including character, plot, and revision templates.\n- Refactored HTML/CSS for a flight booking site, separating styles into \"styles.css\" and implementing an overflow menu.\n\n## 未决问题\n- The CSS code in the last assistant message was truncated abruptly at \"box-shadow: 0 2px 4\". The full CSS file content was not provided.\n- The user has not yet confirmed if the truncated CSS meets their requirements or requested further adjustments.\n\n## 下一步\n- Complete the \"styles.css\" content, ensuring the \"box-shadow\" property and remaining header/footer styles are fully written.\n- Verify the overflow menu functionality (checkbox hack or JS toggle) is correctly implemented in the HTML/CSS pair.\n- Await user feedback on the code structure or visual appearance.",
+     "hitCeiling": 1,
+     "pieces": [
+      {
+       "index": 0,
+       "sessions": 10,
+       "tokens": 27712,
+       "budget": 3280,
+       "outputTokens": 489,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 19953,
+       "promptEstimate": 28117,
+       "cachedPromptTokens": 0,
+       "tokensPerSecond": 67.2,
+       "resolvedModel": "codestral-latest",
+       "carriesGoldSession": true,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 1,
+       "sessions": 10,
+       "tokens": 29220,
+       "budget": 3276,
+       "outputTokens": 3276,
+       "attempts": 1,
+       "finishReason": "length",
+       "hitCeiling": true,
+       "promptTokens": 21912,
+       "promptEstimate": 29626,
+       "cachedPromptTokens": 0,
+       "tokensPerSecond": 169.6,
+       "resolvedModel": "codestral-latest",
+       "carriesGoldSession": false,
+       "goldInPiece": false,
+       "error": null
+      },
+      {
+       "index": 2,
+       "sessions": 11,
+       "tokens": 25394,
+       "budget": 3276,
+       "outputTokens": 1412,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 17853,
+       "promptEstimate": 25799,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 44.9,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": true,
+       "error": null
+      },
+      {
+       "index": 3,
+       "sessions": 9,
+       "tokens": 26403,
+       "budget": 3276,
+       "outputTokens": 1463,
+       "attempts": 2,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 20036,
+       "promptEstimate": 26812,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 47,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": false,
+       "goldInPiece": true,
+       "error": null
+      },
+      {
+       "index": 4,
+       "sessions": 18,
+       "tokens": 43430,
+       "budget": 3276,
+       "outputTokens": 1805,
+       "attempts": 1,
+       "finishReason": "stop",
+       "hitCeiling": false,
+       "promptTokens": 32728,
+       "promptEstimate": 43836,
+       "cachedPromptTokens": null,
+       "tokensPerSecond": 52.6,
+       "resolvedModel": "agnes-3.0-flash",
+       "carriesGoldSession": true,
+       "goldInPiece": true,
+       "error": null
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "skipped": [
+  {
+   "question_id": "9ee3ecd6",
+   "question_type": "multi-session",
+   "reason": "gold session(s) [\"answer_66c23110_2\"] do not contain the gold text",
+   "preflight": {
+    "gold": "100",
+    "goldOccurrences": 12,
+    "goldSessionIds": [
+     "answer_66c23110_1",
+     "answer_66c23110_2"
+    ],
+    "containmentInformative": true,
+    "goldSessionIndices0": [
+     8,
+     49
+    ],
+    "goldSessions": [
+     {
+      "index0": 8,
+      "index1": 9,
+      "id": "answer_66c23110_1",
+      "tokens": 4889,
+      "hasGold": true
+     },
+     {
+      "index0": 49,
+      "index1": 50,
+      "id": "answer_66c23110_2",
+      "tokens": 2232,
+      "hasGold": false
+     }
+    ],
+    "goldSessionIndex0": 8,
+    "goldSessionIndex1": 9,
+    "goldSessionId": "answer_66c23110_1",
+    "goldSessionTokens": 4889,
+    "goldSessionHasGold": false,
+    "goldChunkIndices0": [
+     0,
+     4
+    ],
+    "goldChunkIndex0": 0,
+    "goldChunkIndex1": 1,
+    "goldChunkTokens": 27882,
+    "goldChunkBudget": 3280,
+    "haystackTokens": 148123,
+    "budget": 16384,
+    "sessions": 54,
+    "chunks": 5,
+    "mergedTrailing": true,
+    "coveredSessions": 54,
+    "failures": [
+     "gold session(s) [\"answer_66c23110_2\"] do not contain the gold text"
+    ]
+   }
+  },
+  {
+   "question_id": "gpt4_6dc9b45b",
+   "question_type": "temporal-reasoning",
+   "reason": "gold text does not occur in the rendered haystack; gold session(s) [\"answer_c4df007f_1\"] do not contain the gold text",
+   "preflight": {
+    "gold": "4 months ago",
+    "goldOccurrences": 0,
+    "goldSessionIds": [
+     "answer_c4df007f_1"
+    ],
+    "containmentInformative": false,
+    "goldSessionIndices0": [
+     44
+    ],
+    "goldSessions": [
+     {
+      "index0": 44,
+      "index1": 45,
+      "id": "answer_c4df007f_1",
+      "tokens": 7170,
+      "hasGold": false
+     }
+    ],
+    "goldSessionIndex0": 44,
+    "goldSessionIndex1": 45,
+    "goldSessionId": "answer_c4df007f_1",
+    "goldSessionTokens": 7170,
+    "goldSessionHasGold": false,
+    "goldChunkIndices0": [
+     4
+    ],
+    "goldChunkIndex0": 4,
+    "goldChunkIndex1": 5,
+    "goldChunkTokens": 34762,
+    "goldChunkBudget": 3276,
+    "haystackTokens": 144654,
+    "budget": 16384,
+    "sessions": 51,
+    "chunks": 5,
+    "mergedTrailing": true,
+    "coveredSessions": 51,
+    "failures": [
+     "gold text does not occur in the rendered haystack",
+     "gold session(s) [\"answer_c4df007f_1\"] do not contain the gold text"
+    ]
+   }
+  },
+  {
+   "question_id": "0bb5a684",
+   "question_type": "temporal-reasoning",
+   "reason": "gold text does not occur in the rendered haystack; gold session(s) [\"answer_e936197f_1\",\"answer_e936197f_2\"] do not contain the gold text",
+   "preflight": {
+    "gold": "7 days. 8 days (including the last day) is also acceptable.",
+    "goldOccurrences": 0,
+    "goldSessionIds": [
+     "answer_e936197f_1",
+     "answer_e936197f_2"
+    ],
+    "containmentInformative": false,
+    "goldSessionIndices0": [
+     5,
+     19
+    ],
+    "goldSessions": [
+     {
+      "index0": 5,
+      "index1": 6,
+      "id": "answer_e936197f_1",
+      "tokens": 5385,
+      "hasGold": false
+     },
+     {
+      "index0": 19,
+      "index1": 20,
+      "id": "answer_e936197f_2",
+      "tokens": 5308,
+      "hasGold": false
+     }
+    ],
+    "goldSessionIndex0": 5,
+    "goldSessionIndex1": 6,
+    "goldSessionId": "answer_e936197f_1",
+    "goldSessionTokens": 5385,
+    "goldSessionHasGold": false,
+    "goldChunkIndices0": [
+     0,
+     2
+    ],
+    "goldChunkIndex0": 0,
+    "goldChunkIndex1": 1,
+    "goldChunkTokens": 28063,
+    "goldChunkBudget": 3280,
+    "haystackTokens": 152629,
+    "budget": 16384,
+    "sessions": 43,
+    "chunks": 5,
+    "mergedTrailing": true,
+    "coveredSessions": 43,
+    "failures": [
+     "gold text does not occur in the rendered haystack",
+     "gold session(s) [\"answer_e936197f_1\",\"answer_e936197f_2\"] do not contain the gold text"
+    ]
+   }
+  },
+  {
+   "question_id": "71315a70",
+   "question_type": "knowledge-update",
+   "reason": "gold session(s) [\"answer_c44b9df4_1\"] do not contain the gold text",
+   "preflight": {
+    "gold": "10-12 hours",
+    "goldOccurrences": 3,
+    "goldSessionIds": [
+     "answer_c44b9df4_1",
+     "answer_c44b9df4_2"
+    ],
+    "containmentInformative": true,
+    "goldSessionIndices0": [
+     5,
+     33
+    ],
+    "goldSessions": [
+     {
+      "index0": 5,
+      "index1": 6,
+      "id": "answer_c44b9df4_1",
+      "tokens": 5649,
+      "hasGold": false
+     },
+     {
+      "index0": 33,
+      "index1": 34,
+      "id": "answer_c44b9df4_2",
+      "tokens": 4955,
+      "hasGold": true
+     }
+    ],
+    "goldSessionIndex0": 5,
+    "goldSessionIndex1": 6,
+    "goldSessionId": "answer_c44b9df4_1",
+    "goldSessionTokens": 5649,
+    "goldSessionHasGold": false,
+    "goldChunkIndices0": [
+     0,
+     3
+    ],
+    "goldChunkIndex0": 0,
+    "goldChunkIndex1": 1,
+    "goldChunkTokens": 28977,
+    "goldChunkBudget": 3280,
+    "haystackTokens": 152135,
+    "budget": 16384,
+    "sessions": 57,
+    "chunks": 5,
+    "mergedTrailing": true,
+    "coveredSessions": 57,
+    "failures": [
+     "gold session(s) [\"answer_c44b9df4_1\"] do not contain the gold text"
+    ]
+   }
+  },
+  {
+   "question_id": "26bdc477",
+   "question_type": "knowledge-update",
+   "reason": "gold session(s) [\"answer_f762ad8d_1\"] do not contain the gold text",
+   "preflight": {
+    "gold": "five",
+    "goldOccurrences": 4,
+    "goldSessionIds": [
+     "answer_f762ad8d_1",
+     "answer_f762ad8d_2"
+    ],
+    "containmentInformative": true,
+    "goldSessionIndices0": [
+     22,
+     42
+    ],
+    "goldSessions": [
+     {
+      "index0": 22,
+      "index1": 23,
+      "id": "answer_f762ad8d_1",
+      "tokens": 4065,
+      "hasGold": false
+     },
+     {
+      "index0": 42,
+      "index1": 43,
+      "id": "answer_f762ad8d_2",
+      "tokens": 5115,
+      "hasGold": true
+     }
+    ],
+    "goldSessionIndex0": 22,
+    "goldSessionIndex1": 23,
+    "goldSessionId": "answer_f762ad8d_1",
+    "goldSessionTokens": 4065,
+    "goldSessionHasGold": false,
+    "goldChunkIndices0": [
+     2,
+     4
+    ],
+    "goldChunkIndex0": 2,
+    "goldChunkIndex1": 3,
+    "goldChunkTokens": 25791,
+    "goldChunkBudget": 2730,
+    "haystackTokens": 152616,
+    "budget": 16384,
+    "sessions": 50,
+    "chunks": 6,
+    "mergedTrailing": false,
+    "coveredSessions": 50,
+    "failures": [
+     "gold session(s) [\"answer_f762ad8d_1\"] do not contain the gold text"
+    ]
+   }
+  }
+ ],
+ "boundaries": [
+  "n is disclosed, not implied: see dataset.scored. LongMemEval_S stores questions grouped by type, so --sample (even stride) is the only partial selection whose per-type mix is meaningful; --limit takes a single-type head.",
+  "Gold retention is case-insensitive LITERAL containment of the dataset's answer string, not a correctness judgement. A one-token gold (for example the answer 5) occurs hundreds of times in a 147k-token haystack, so containment is near-free for that question and must not be read as fidelity. Per-question goldOccurrences is recorded for exactly this reason.",
+  "The instrument compresses the haystack as text; it never runs src/summarize.js against a live session. Token counts are countTokens() estimates (word-class + CJK density), the same estimator the other bench harnesses use, not provider-side counts. Provider prompt_tokens/completion_tokens are recorded per call where the gateway returns them.",
+  "Both arms spend the SAME total budget, but not the same number of prompt tokens: arm B re-sends the instruction once per piece and pays that input cost. The comparison holds the output ceiling constant, not total cost.",
+  "Arm B budgets floor(total/pieces) per piece with the remainder to the first piece, so a piece's budget is not proportional to its own token count. That is deliberate (it is the shape a caller would use); per-piece tokens and budgets are recorded.",
+  "A merged trailing piece (below minChunkRatio * chunkTokens) changes the piece count and therefore every per-piece budget; mergedTrailing is recorded per question.",
+  "Failure policy: a piece that still fails after the configured retries marks the arm's gold result false and reports its error; failed pieces are never silently dropped from the totals.",
+  "Prompt accounting: every call records the provider's prompt_tokens next to this instrument's own countTokens() estimate of the same prompt. A provider count below 90% of the estimate means the gateway sent less than was built (input truncation); the arm then measures the truncation instead of the compressor, and the Prompt accounting table flags it.",
+  "The model is requested by the alias balanced-lite, which the gateway routes. The resolved model id reported by the gateway is recorded per call: a rerun that lands on a different backend is a different model, not a repeat. In this environment the same alias resolved to different backends on consecutive calls.",
+  "Hidden reasoning: the routed backends are reasoning models, and their reasoning_tokens are billed inside completion_tokens against the same max_tokens ceiling. Output tokens therefore overstate how much summary text a call actually wrote; visible summary tokens are reported separately (billed minus reasoning, plus this instrument's countTokens() of the returned text).",
+  "Retries: attempt 2 and later append a one-line '[retry N]' marker to the prompt, because the gateway replays an identical body from cache and would otherwise hand back the same broken stream forever. A retried call is therefore a marginally different prompt, at most a few tokens longer.",
+  "Wall-clock is the gateway's own latency. The gateway replays an identical prompt (same body) from cache, in which case elapsed can drop by an order of magnitude; content at temperature 0 is the same either way, but do not read elapsed as generation speed."
+ ]
+}
