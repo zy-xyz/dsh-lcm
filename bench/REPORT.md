@@ -26,6 +26,9 @@
 `bench/anchors.mjs`：去嵌套（只留极大元素）→ 按类型分层（单类 ≤35%）→ 按事实去重。
 原来 span.mjs 的抽取已换成它，`canaryPool` / `droppedNested` / `canaryTypes` 一并落盘。
 
+
+> **关于「completion token」这一列（2026-11-08 补注）**：这些表是早期跑的，当时把 provider 的 `completion_tokens` 直接当「写了多少摘要」用。**这个数是错的**：推理型后端把隐藏 reasoning 也计进同一个 `completion_tokens`，实测某个臂 12 953 里 **7 264 是 reasoning**，可见摘要只有 5 689。所以本节的 token 数字**不能**当摘要体积读，只能当账单读。要读摘要体积，看 §26 拆开后的 `visibleTokens`，或直接用 `estimateEntryTokens(返回文本)` —— 引擎内部一直是按**文本**定价的（`test/reasoning-not-counted.test.js` 钉住了这一点），只有这些早期表格混了。
+
 ## 3. 重测数据（唯一可采信的那批）
 
 ### 语料 c2（真实压缩跨度，8 065 tok，24 锚点：path4 env5 error5 hex4 command3 uuid3）
