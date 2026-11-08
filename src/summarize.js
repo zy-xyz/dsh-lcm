@@ -104,6 +104,29 @@ function nodeMessage(session, seq) {
 }
 
 /**
+ * How many times one summary may raise its own completion budget.
+ *
+ * Exactly one: a route that burns the whole budget on hidden reasoning needs
+ * more room to produce anything, and doubling once is cheap. A route that
+ * cannot produce text even at the doubled ceiling fails on the same request it
+ * would have failed on anyway, so a second escalation only multiplies spend.
+ * Deliberately not folded into `emptySummaryRetries`: that key counts retries at
+ * a FIXED budget, this one counts budget changes.
+ */
+const BUDGET_ESCALATIONS = 1;
+
+/**
+ * The deterministic truncation failure: same prompt and same budget reproduce
+ * it exactly, so it is thrown rather than retried.
+ * @returns the error, tagged `MAX_TOKENS`.
+ */
+function maxTokensTruncation() {
+  const error = new Error("lcm: summary truncated at the token cap (incomplete checkpoint)");
+  error.code = "MAX_TOKENS";
+  return error;
+}
+
+/**
  * Run one leaf summarization through `ctx.llm.stream()`.
  *
  * The conversation prefix (system head + the shadowed messages) is replayed
@@ -154,20 +177,26 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   }
 
   const priorDepth = maxAbsorbedDepth(session, prepared.shadowedSeqs);
-  const instruction = createUserMessage({
-    content: [
-      {
-        type: "text",
-        text: buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth)
-      }
-    ]
-  });
+  // The instruction states the budget ("Produce at most N tokens"), so it is
+  // rebuilt from the SAME number the request carries. Building it once outside
+  // the loop would leave a model told "512" while the request allows 1024 after
+  // a budget escalation — the model would compress to the stale, smaller limit.
+  const buildMessages = (budget) => {
+    const instruction = createUserMessage({
+      content: [
+        {
+          type: "text",
+          text: buildInstruction(budget, prepared.shadowedTokenCount, priorDepth)
+        }
+      ]
+    });
+    return system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
+  };
 
-  const messages = system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
-  const options = {
+  let options = {
     provider: target.provider,
     model: target.model,
-    messages,
+    messages: buildMessages(budgetTokens),
     ...(header?.tools === undefined ? {} : { tools: [...header.tools] }),
     maxTokens: budgetTokens,
     sessionId: session.id,
@@ -175,16 +204,25 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     ...(signal === undefined ? {} : { signal })
   };
 
-  // An empty response is retried, a truncated one is not. The two failure
-  // modes look alike on the wire (a finish chunk and no usable text) but mean
-  // opposite things: "no text block" is a sampling accident — typically a
-  // reasoning-first backend that spent the whole completion budget thinking —
-  // while "max-tokens" is deterministic truncation that a second attempt
-  // reproduces exactly, at full price. So only the empty case loops, and it
-  // loops on the SAME prompt and route: changing either would make the one
-  // reproducible failure unreproducible.
+  // Retry policy. Three failures look alike on the wire (a finish chunk and
+  // nothing usable) but mean different things:
+  //
+  //   empty      — no text AND a clean finish: a sampling accident. Retried on
+  //                the SAME prompt and route, because changing either would
+  //                make the one reproducible failure unreproducible.
+  //   max-tokens WITH text — deterministic truncation: the summary is too long
+  //                for the budget, so a second attempt truncates identically at
+  //                full price. Never retried.
+  //   max-tokens WITHOUT text — a reasoning-first backend spent the entire
+  //                completion budget thinking and never started writing. That
+  //                is the empty case wearing the truncation finish reason: more
+  //                budget usually produces text, so it gets ONE escalation
+  //                (budget × 2, clamped to checkpointCap) instead of a retry at
+  //                the same ceiling, which would only buy the same reasoning
+  //                spend again.
   const emptyRetries = config.emptySummaryRetries;
   let attempts = 0;
+  let escalations = 0;
   let raw;
   let produced = "";
   let usage;
@@ -195,17 +233,25 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk);
     const finish = assembler.finish;
     if (finish.kind === "error" || finish.kind === "aborted") throw finish.failure;
-    if (finish.kind === "max-tokens") {
-      const truncated = new Error("lcm: summary truncated at the token cap (incomplete checkpoint)");
-      truncated.code = "MAX_TOKENS";
-      throw truncated;
-    }
     raw = assembler.blocks();
     produced = raw
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n")
       .trim();
+    if (finish.kind === "max-tokens") {
+      const escalated = Math.min(config.checkpointCap, options.maxTokens * 2);
+      if (produced.length > 0 || escalations >= BUDGET_ESCALATIONS || escalated <= options.maxTokens) {
+        throw maxTokensTruncation();
+      }
+      escalations += 1;
+      engineDebug(
+        config,
+        `summarize budget-escalated attempt=${attempts} from=${options.maxTokens} to=${escalated} reason=max-tokens-without-text`
+      );
+      options = { ...options, maxTokens: escalated, messages: buildMessages(escalated) };
+      continue;
+    }
     if (produced.length > 0) {
       usage = assembler.usage;
       if (attempts > 1) engineDebug(config, `summarize empty-response retry succeeded attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind}`);
@@ -215,7 +261,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
       config,
       `summarize empty-response attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind} blocks=${raw
         .map((block) => block.type)
-        .join(",") || "none"} budget=${budgetTokens}`
+        .join(",") || "none"} budget=${options.maxTokens}`
     );
     if (attempts > emptyRetries) throw new Error("lcm: summarization produced no text content");
   }
@@ -232,7 +278,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     rawOutput: raw,
     provider: options.provider,
     model: options.model,
-    maxTokens: budgetTokens,
+    maxTokens: options.maxTokens,
     ...(usage === undefined ? {} : { usage })
   };
 }
