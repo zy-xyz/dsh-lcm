@@ -1,0 +1,130 @@
+{
+ "tag": "smoke",
+ "generatedAt": "2026-11-08T04:20:43.143Z",
+ "source": "/home/agent/workspaces/lcmx-study/dsh-lcm/bench/results/layer2-qa-sample20-20261108.json",
+ "dataset": {
+  "path": "/home/agent/workspaces/lcmx-study/data/longmemeval_s.json",
+  "sha256": "08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894"
+ },
+ "models": {
+  "compress": "balanced-lite",
+  "answer": "balanced-lite",
+  "judge": "deepseek-v4-flash-auto"
+ },
+ "instruction": {
+  "probe": "You are condensing an earlier span of THIS conversation so the agent can keep working.\n\nThe span you are given is 150000 tokens. Aim for roughly 16384 tokens (about 9.2:1) — that is a target, not a hard limit, so do not cut a section short to hit it.\nThe full original text is preserved in the append-only log and remains retrievable by the agent, so you may compress hard — but anything the agent will need *verbatim* must survive here.\n\nWrite exactly these sections, in this order:\n  ## 逐字锚点\n  ## 目标与约束\n  ## 已完成\n  ## 未决问题\n  ## 下一步\n\n第一节「逐字锚点」不是散文，是一张清单：把这整段里出现过的所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值，**每行一条，原样抄写**。不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。后面四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。如果锚点太多，**合并重复**（同一个路径反复出现只写一次），而不是删小节、也不是删掉锚点。\n\n顺序是硬性的：先写「逐字锚点」整张清单，再写后面四个叙述性小节。后面四节各自最多几句话 —— 它们的职责是让人读懂状态，「逐字锚点」才负责不丢东西。如果预算紧张，先砍叙述，不要砍清单。\n\nRules:\n- Output only the checkpoint text. Do not call any tool, and do not take any other action.\n- Do not address the user. Do not say what you are doing. Output the sections only.\n- Do not invent facts. If something is uncertain, write it as uncertain.\n- Do not restate tool output that was pure noise (progress bars, repeated listings); keep its conclusion.\n- This span contains no prior checkpoint.\n\nFormat the result as plain Markdown. Do not wrap it in a code fence.",
+  "summarySkeleton": [
+   "## 逐字锚点",
+   "## 目标与约束",
+   "## 已完成",
+   "## 未决问题",
+   "## 下一步"
+  ],
+  "perQuestionBudget": 16384
+ },
+ "totals": {
+  "n": 1,
+  "ran": 1,
+  "judgeCorrect": 0,
+  "judgeAccuracy": 0,
+  "stringCorrect": 0,
+  "stringAccuracy": 0,
+  "goldInCheckpoint": 0,
+  "meanAnchorShare": 0.538,
+  "meanCheckpointChars": 4853,
+  "meanNarrativeChars": 2220
+ },
+ "rows": [
+  {
+   "question_id": "e47becba",
+   "question": "What degree did I graduate with?",
+   "question_type": "single-session-user",
+   "gold": "Business Administration",
+   "goldChars": 23,
+   "haystackTokensEst": 148023,
+   "budget": 16384,
+   "instructionChars": 1314,
+   "goldLocation": {
+    "hits": [
+     {
+      "sessionIndex": 52,
+      "sessionId": "answer_280352e9",
+      "date": "2023/05/30 (Tue) 17:27",
+      "turn": 4,
+      "seq": 530,
+      "role": "user",
+      "snippet": "I graduated with a degree in Business Administration, which has definitely helped me in my new role. Do you have any advice on how to stay organized when it comes to paperwork and documentation, especially when it comes to tracking expenses"
+     },
+     {
+      "sessionIndex": 52,
+      "sessionId": "answer_280352e9",
+      "date": "2023/05/30 (Tue) 17:27",
+      "turn": 5,
+      "seq": 531,
+      "role": "assistant",
+      "snippet": "Congratulations on your degree in Business Administration! That's a great foundation for your new role.\n\nStaying organized with paperwork and documentation is crucial, especially when it comes to tracking expenses and reimbursements. Here a"
+     }
+    ],
+    "totalMessages": 550,
+    "totalSessions": 54
+   },
+   "compress": {
+    "checkpointChars": 4853,
+    "checkpointTokensEst": 1462,
+    "promptTokens": 106747,
+    "completionTokens": 6468,
+    "finishReason": "stop",
+    "model": "hy3",
+    "elapsedMs": 110509
+   },
+   "checkpoint": "## 逐字锚点\nsharegpt_yywfIrx_0\n85a1be56_1\nsharegpt_Jcy1CVN_0\nsharegpt_Cr2tc1f_0\nsharegpt_DGTCD7D_0\nsharegpt_qRdLQvN_7\nsharegpt_8dJs7Ai_0\nsharegpt_rnG0ZuV_0\nsharegpt_UnjngE7_65\nsharegpt_T1EiHWI_13\nsharegpt_gTknhGs_0\nsharegpt_PdnvIns_0\nsharegpt_QZMeA7V_17\nsharegpt_BvwQVCO_0\nsharegpt_1L5GXZJ_0\nf6859b48_2\n52c34859_1\nc3cd646c_1\n7045db85_1\n3418b277_3\n2ae4f277_2\n978c0e70\naae4411b_2\n47f00a5f\n3b3a77d9\na041cdd4_3\n0e9551fc_1\nd414cac5_4\nec6ca9ef\nd94b721b\n0586f435_3\n02bd2b90_3\ne27891d3_2\n84503ce4_1\n4fd76316\n5dac7cc2_1\n41abc171_4\nultrachat_231069\nultrachat_359984\nultrachat_422229\nultrachat_215809\nultrachat_45576\nultrachat_530213\nultrachat_336116\nultrachat_574556\nultrachat_286075\nultrachat_57566\nultrachat_514031\nultrachat_458322\nultrachat_486410\nanswer_280352e9\nstock_data.csv\npandas\npd\nmatplotlib.pyplot\nplt\naction_intensity_data\naction_intensity_df\ndf\nupdate_chart\ndash\ndash_core_components\ndcc\ndash_html_components\nhtml\nplotly.graph_objects\ngo\nCandlestick\napp\nDash\nRangeSlider\nDiv\nOutput\nInput\nState\nrelayout_data\ntime_range\ndf_filtered\nchart\nalarm_message\nreset_button\nn_interval\nxaxis.range[0]\nxaxis.range[1]\nshapes\nline\nx0\ny0\nx1\ny1\nxref\nyref\ncolor\nwidth\ndash\ndf['low'].min()\ndf['high'].max()\nlen(df)\ngraph TD\nTV\nAR\nENJOY\nIMMERSION\nENGAGEMENT\nVISUAL_APPEAL\nUSABILITY\nGRAPHICS\nANIMATION\nEASY_TO_USE\nINTERACTION\nACCESSIBILITY\nUSER_FRIENDLINESS\nCUSTOMIZATION\nFEEDBACK\nPRIVACY\nCOST\nADOPTION\n1\n2023/05/20\nFebruary 15th\nMarch 2nd\nMarch 10th\nMarch 22nd\nDecember 20th\nJanuary 15th\nJanuary 25th\nFebruary 10th\n$40\n6 months\n5-year-old\n3 weeks\n10 seconds\n30-minute\n3-4 times a week\n150 minutes\n75 minutes\n10-15 minutes\n2-3 times a week\n3-5 minutes\n7-8 hours\n2,300 milligrams\n1,500 mg\neight glasses\none drink women two men\n6:45 AM\n7:45 AM\n8:45 am\n8:15 am\n45 minutes\n30 minutes\n7:30 am\n15-30 minutes\n2 hours\nunder 2 hours\n116 minutes\n126 minutes\n101 minutes\n97 minutes\n87 minutes\n90 minutes\n108 minutes\n93 minutes\n102 minutes\n105 minutes\n112 minutes\n96 minutes\n177 minutes\n141 minutes\n161 minutes\n74 minutes\n100 minutes\n95 minutes\n82 minutes\n109 minutes\n128 minutes\n20% off\n15% off\n10% off\n$5,000\nJune 1st\nJuly 3rd\nJune 15th\nranked 10th\ntop 5\n1/1000th of a second\n200mm\nDC 15\n8 + proficiency bonus + Charisma modifier\n3-4 million euros\n60%\n€20 million\n4%\n1-2 millimeters per year\n25%\n106-56 record\n2.90 ERA\n1,458\n737\n214\n33.5 points per game\n8.6 rebounds\n8.1 assists\n51.5%\n43.5%\n25% seats\n1893\n$1 off\n10 out of 15\n5 movies per month\n2nd level\n1d4\n2d8\n3d6\n5th level\n2nd level druid\nbelow 30°C\n86°F\n10% (cashback)\n3 weeks ago (faucet)\nlast Thursday (binoculars)\nMother's Day\ntwo weeks (sister stay)\n9-to-5 schedule\n\n## 目标与约束\nThe conversation spans many independent user queries across personal, professional, and hobby topics with no single overarching project constraint. The user sought recommendations, plans, and factual explanations; the assistant provided tailored advice. Implicit constraint: respond helpfully, maintain context of previously mentioned personal details (dates, purchases, pets, trips) within sessions.\n\n## 已完成\nSolved river crossing puzzle; gave fitness/yoga/blood pressure/flu shot tips; outlined radiation therapy lectures; rewrote Heat bank heist with Joker and plotted intensity; discussed mussel defenses; recommended luxury cruise ships and Italy itinerary with wineries/olive oil; explained bitcoin mining; planned Tuscany/Umbria trip with Castello di Brolio etc.; gave BBQ sauces, wood chips, smoker tips; advised bike/token maintenance; organized coupons/cashback; built morning routines; recommended sci-fi/action/classic movies; suggested healthy snacks/hummus; explained sea turtle conservation; clarified D&D sorcerer/monk mechanics; discussed smart plugs/LED; running tracking; meditation apps; summarized GDPR; gender diversity resources; ANZAC history; Venice floods; bodybuilding supplements; UX case study for Grade A Steakhouse; animal communication; dinner party menu; market vendor prep; pirate/haiku cover letter; baby gift ideas; jewelry inventory list; roommate conflict tips; home office setup; bird watching at lake; species extinction actions; task management apps; Instant Pot recipes and kitchen organization.\n\n## 未决问题\nNo explicit unresolved technical question remains; user indicated intent to try suggestions (e.g., Todoist/Trello, Mint/Personal Capital, meal prep, dinner party, Tuscany trip, running route, meditation) but has not reported outcomes. Some sessions ended with assistant awaiting user follow-up (e.g., dinner party result, birding progress, jewelry list completion).\n\n## 下一步\nContinue assisting user on any follow-up: e.g., refine travel itineraries, review dinner party experience, update jewelry/watch repair log, track birding rankings, or expand task management setup. Be ready to recall prior personal anchors (dates, product prices, pet names Luna/Max, friend Rachel/Lucas, etc.) when user returns.",
+   "sections": {
+    "totalChars": 4806,
+    "sections": [
+     {
+      "name": "逐字锚点",
+      "chars": 2586,
+      "lineCount": 223
+     },
+     {
+      "name": "目标与约束",
+      "chars": 400,
+      "lineCount": 1
+     },
+     {
+      "name": "已完成",
+      "chars": 1127,
+      "lineCount": 1
+     },
+     {
+      "name": "未决问题",
+      "chars": 365,
+      "lineCount": 1
+     },
+     {
+      "name": "下一步",
+      "chars": 328,
+      "lineCount": 1
+     }
+    ],
+    "anchorChars": 2586,
+    "anchorShare": 0.538,
+    "narrativeChars": 2220,
+    "missingSections": []
+   },
+   "goldInCheckpoint": false,
+   "goldInCheckpointRaw": false,
+   "answer": "UNKNOWN",
+   "judge": {
+    "verdict": "WRONG",
+    "raw": "WRONG",
+    "model": "deepseek-v4.1-flash-1017",
+    "viaReasoning": false
+   },
+   "stringCorrect": false,
+   "error": null,
+   "answerFinish": "stop",
+   "elapsedMs": 118194
+  }
+ ]
+}
