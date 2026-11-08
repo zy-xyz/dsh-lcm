@@ -170,7 +170,12 @@ test("buildInstruction states the budget and an enumerated anchor section", () =
   // other four sections absent. Those sections are what a resuming agent reads to
   // know where it is, so the instruction now protects them and asks for
   // de-duplication instead of section removal.
-  assert.match(text, /后面四节\*\*必须都有内容\*\*/);
+  assert.match(text, /其余四节\*\*必须都有内容\*\*/);
+  // A value in the anchor list is not answerable on its own - two measured cases
+  // carried their gold there and the model still said UNKNOWN. The facts section
+  // is what makes a value sayable.
+  assert.match(text, /## 用户事实/);
+  assert.match(text, /等于没记住/);
   assert.match(text, /合并重复/);
   assert.doesNotMatch(text, /先压后面四节/);
   // Anchors come FIRST, and no line of the instruction may call them last: that

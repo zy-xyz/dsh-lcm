@@ -39,6 +39,12 @@ import { engineDebug } from "./debug.js";
  */
 export const SUMMARY_SKELETON = [
   "## 逐字锚点",
+  // Added after measuring that a value in the anchor list is NOT answerable by
+  // itself. On 15 paired failures, two carried their gold in the anchor list
+  // already ("10" on its own line; "30" and "minutes" on two lines) and the
+  // answering model still said UNKNOWN: a bare value in a list of 250 does not
+  // say what it counts. This section exists to hold facts as sentences.
+  "## 用户事实",
   "## 目标与约束",
   "## 已完成",
   "## 未决问题",
@@ -56,14 +62,20 @@ export const SUMMARY_SKELETON = [
  * anchors, the enumerated rule retains materially more at the same budget.
  */
 const ANCHOR_RULE = [
-  "第一节「逐字锚点」不是散文，是一张清单：把这整段里出现过的所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值，**每行一条，原样抄写**。",
+  // The enumeration IS a filter: measured on 15 paired failures (full context
+  // answered, checkpoint did not), the golds were 7 numeric/time, 6 short prose
+  // facts and 2 long prose, with ZERO identifiers - exactly the one category the
+  // original list collected. The list now names the shapes that actually get
+  // asked about, and asks for `fact: value` so a count or a degree has a slot.
+  "第一节「逐字锚点」不是散文，是一张清单，**每行一条，原样抄写**：所有文件路径、命令、URL、错误串、ID/uuid、函数或变量名、数值阈值；**每个数字连同它的单位和它计量的是什么**（计数、金额、时长、距离、尺寸、日期）；**每个人名、地名、机构名、产品名**；以及**其余关于用户或世界的一句短事实**（学位、职称、型号、数量），写成 `事实: 值`。",
   "不要合并同类项，不要翻译，不要改大小写，不要加解释，不要按重要性筛选 —— 只要出现过就列出来。",
   // Measured on 20 LongMemEval questions: with the old wording ("prefer long, cut
   // the later sections first") the anchor list reached 91% and 99.7% of one
   // checkpoint, and in the 99.7% case the other four sections were ABSENT. Those
   // four sections are what a resuming agent reads to know where it is, so the
   // instruction now protects them and asks for grouping instead of dropping.
-  "后面四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。",
+  "第二节「用户事实」装**成句的事实**，不是词表：每行一句，句子必须**带着那个值**，说清是谁、什么、多少。例：用户本科学位是 Business Administration；用户在开放麦看了 10 个业余喜剧演员；用户新电视是 55 英寸；用户周五比其他日子早起 30 分钟。**一个值只出现在上面的锚点清单里、没有出现在这类句子里，等于没记住** —— 接手的人看到孤零零的 10 不知道它在数什么。凡是这段里出现过的、关于用户自己或用户做过的事、以及任何带数值的结论，都要在这里成句写一遍。",
+  "其余四节**必须都有内容**：它们是接手的人读懂状态的地方，一节都不许省。",
   "如果锚点太多，**合并重复**（同一个路径反复出现只写一次），而不是删小节、也不是删掉锚点。"
 ].join("");
 
