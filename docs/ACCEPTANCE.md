@@ -196,6 +196,39 @@ compaction/end     seq 42
 ---
 
 
+
+### 0.3 安装到 dsh 的验收（2026-11-08，全新 profile，逐项实测）
+
+用一个**从 shipped 模板重建**的 profile（`dsh --profile lcmverify --from-default-profile headless`）做完整安装验证，不碰用户的 `web` profile。
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| profile 创建 | ✅ | `--from-default-profile headless`，`/home/agent/.dsh/profiles/lcmverify` |
+| 安装 | ✅ | `dsh plugin --profile lcmverify add …` → `package.json` 的 bundles 里出现 `dsh-lcm` |
+| 组合后只有一个引擎 | ✅ | `--dump-config`：`compaction-basic` 带 `disabled: true`；`compaction-lcm` / `tool-lcm-expand` / `command-lcm-search` 三行都在 |
+| 工具真的挂上 | ✅ | 请求头 27 个工具里含 **`lcm_expand`、`lcm_search`** |
+| 真压缩落地 | ✅ | 会话 39 事件：`compaction/start` ×2、`summary` ×1、`end` ×1，**failed compactions 0** |
+| 落盘字段符合契约 | ✅ | `summary seq 24` → `maxTokens=256`、**`targetTokens` 不存在**、`shadowedTokenCount=640`（启发式价） |
+| 新版指令生效 | ✅ | 同一 checkpoint 含 **`## 用户事实`** 节 |
+| 收缩重试 | ✅ | 日志 `oversize body=8649 >= shadowed=1287 → retry → 487`（ratio 2.64 落地） |
+| 重试仍不达标时失败**并带两个数** | ✅ | `summary body is still not shorter than the span it replaces (911 >= 593 after 2 attempts; the second stated a hard bound of 593 tokens)` |
+| 压缩后恢复会话 | ✅ | `--session-id` 重新加载 → 正常起、正常答、并再次压缩（`span=4 seqs=8-11 → done tokens=913 ratio=1.85`） |
+
+### 一个必须说清的观察（不是缺陷）
+
+上面那轮验证里反复出现 `compaction still above threshold after 2 compaction attempts (9428 >= 512)`。**这是我为了逼出压缩把 `thresholdRatio` 压到 0.002（阈值 512 token）**，而 system prompt + AGENTS.md + skills 本身就有 ~9k token 且**不可压缩**（不在 surface 的可压前缀里）。所以压完必然还在阈值以上，引擎会每一步再试一次。
+
+生产配置的触发点是 `0.8 × 窗口`（256k 窗口 → 204 800 token），不会出现这种追击。**这一条只说明「阈值设得比不可压缩基线还低时，引擎会一直追」** —— 要不要在这种情况下自动降级为 warning，是个可以讨论的产品决定，我没有改。
+
+### 真引擎跑出来的三类结束状态（都在日志里）
+
+1. **正常落地**：`summarize span=3 → done tokens=542 ratio=1.18`
+2. **超长→重试→落地**：`oversize body=8649 >= shadowed=1287 → retry → 487`
+3. **重试仍超长→报错并给两个数**：`911 >= 593 after 2 attempts …`
+4. **被我的 `timeout` 杀掉**：`Request was aborted`（不是引擎问题，`EXIT=124` 是我给的超时）
+
+---
+
 ### 0.2 契约对拍：与 dsh 0.2.2-rc.1 逐项核对，修了 11 处
 
 做法：读安装版本的真源码，把 `CompactionEngine` 的抽象契约、事件协议、错误词汇表、配置面、同类插件共存、生命周期逐项与 `dsh-compaction-basic` 对拍。**骨架全对**（三个抽象方法签名、`compaction/start|summary|end` 括号、`surfaceOp` 恰好三键、`sourceEventSeqs` 构成、6 个 `ManualCompactionError` code、pressure 路径 prune 时机、`auto:false` 零监听器）。缺陷全在细节，其中一处会污染 harness 自身状态：
