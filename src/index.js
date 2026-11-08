@@ -15,7 +15,7 @@
  */
 import z from "@deepseek-ai/schemastery";
 import { CompactionEngine, ManualCompactionError } from "@deepseek-ai/dsh-compaction";
-import { CONTEXT_WINDOW_EXCEEDED_CODE } from "@deepseek-ai/dsh-llm";
+import { CONTEXT_WINDOW_EXCEEDED_CODE, LlmError } from "@deepseek-ai/dsh-llm";
 import { assertNever } from "@deepseek-ai/dsh-util-values";
 import { COMPILER_REV, estimateEntryTokens, isCheckpointSource } from "./compiler.js";
 import { describeError, engineDebug } from "./debug.js";
@@ -27,7 +27,7 @@ import {
   resolveTargetPolicy
 } from "./config.js";
 import { assertNoActiveCompaction, compactSurfaceRegion, selectCompactableRange } from "./region.js";
-import { summarizeLeaf } from "./summarize.js";
+import { SUMMARY_SKELETON, summarizeLeaf } from "./summarize.js";
 
 export { TargetPressureConfigError, resolveCompactSpec, resolveConfig, resolveTargetPolicy };
 
@@ -52,6 +52,41 @@ export function routedTarget(session) {
  */
 function reservedCompletionTokens(header, defaultMaxTokens) {
   return header?.config?.maxTokens ?? defaultMaxTokens ?? 0;
+}
+
+// ── shrink-retry wording ───────────────────────────────────────────────────
+
+/** Join one summarizer result's text blocks into the checkpoint body. */
+function summaryBodyOf(result) {
+  return result.summary.map((block) => block.text ?? "").join("\n");
+}
+
+/**
+ * The extra instruction appended to ONE length-retry attempt.
+ *
+ * A model told "aim for roughly N tokens" overruns it routinely: a measured run
+ * wrote a 2438-token summary for a 1517-token span, 4.8x the 512-token target
+ * and longer than the text it replaced, so the shrink guarantee in `region.js`
+ * rejected the compiled checkpoint and the model call was wasted. The gate is
+ * right; the retry is what changes, and it has to change the PROMPT or the same
+ * request samples the same overrun. Three things go in, in this order: what
+ * went wrong last time (so the model does not repeat it), the hard upper bound
+ * as a NUMBER (a target worded as a target was already ignored), and what may
+ * be cut versus what must survive (a bare "be shorter" is satisfied by deleting
+ * the anchor list, which is the one section that carries fidelity).
+ * @param writtenTokens - estimated body size of the rejected attempt.
+ * @param limitTokens - hard upper bound: the shadowed span's own token count.
+ * @returns the instruction block appended after the normal instruction.
+ */
+function hardShrinkConstraint(writtenTokens, limitTokens) {
+  const [anchorHeading, ...stateHeadings] = SUMMARY_SKELETON;
+  const anchorSection = anchorHeading.replace(/^#+\s*/u, "");
+  return [
+    `HARD CONSTRAINT — the previous attempt was rejected: it produced a summary LONGER than the span it replaced (${writtenTokens} estimated tokens against ${limitTokens}).`,
+    `The summary body MUST be shorter than ${limitTokens} tokens. That is a hard upper bound, not a target.`,
+    `Cut narrative prose, restated tool output, and repeated explanation. Do NOT shorten the "${anchorSection}" list to save room — merge duplicate anchors instead, and keep every anchor you listed.`,
+    `All four state sections (${stateHeadings.join(" / ")}) must still carry content: shorten their sentences, never drop or empty a section.`
+  ].join("\n");
 }
 
 // ── schemastery surface (composition-time validation only) ─────────────────
@@ -115,8 +150,30 @@ export class LcmCompactionEngine extends CompactionEngine {
     maxOverflowRetries: maxOverflowRetriesSchema,
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
+    // ── LCM-only keys ──
+    // These MUST be declared here. schemastery's `simplify` is a whitelist: a
+    // key the schema never learned about is dropped when a patch re-route writes
+    // the configuration back through `fiber.update`, so an undeclared key is a
+    // key that silently disappears on the next settings change (measured: nine
+    // keys lost, `anchorPointers` and every `vector*` among them).
+    //
+    // Types mirror ./config.js's own validation exactly (boolean flags, positive
+    // integers, strings) and no `.default()` is declared, matching every other
+    // key in this schema: a default here would make `simplify` drop an
+    // explicitly-set value that happens to equal it, and ./config.js is already
+    // the single source for resolved defaults.
+    anchorPointers: z.boolean(),
+    emptySummaryRetries: compactionRetriesSchema,
     debug: z.boolean(),
-    debugLogPath: z.string()
+    debugLogPath: z.string(),
+    // ── optional vector recall layer (inert unless vectorEnabled) ──
+    vectorEnabled: z.boolean(),
+    vectorBaseUrl: z.string(),
+    vectorModel: z.string(),
+    vectorDim: maxTokensSchema,
+    vectorTopK: maxTokensSchema,
+    vectorTimeoutMs: maxTokensSchema,
+    vectorCacheDir: z.string()
   });
   /** Settings namespace for user-owned LCM compaction preferences. */
   /** Resolved and validated compaction configuration. */
@@ -144,9 +201,13 @@ export class LcmCompactionEngine extends CompactionEngine {
     if (active) this._autoDisposer = this._registerAutomaticCompaction();
   }
   /**
-   * Register automatic between-step pressure and model-request overflow
-   * recovery. `compactIfNeeded` stays dynamically dispatched so subclass
-   * overrides are honored at event time.
+   * Register automatic between-step pressure, model-switch pressure, and
+   * model-request overflow recovery. `compactIfNeeded` and `compactPressure`
+   * stay dynamically dispatched so subclass overrides are honored at event time.
+   *
+   * The five listeners are `dsh-compaction-basic`'s five: pre-step pressure,
+   * idle status, the `agent/request` model-switch gate, the session/event
+   * overflow bookkeeping, and `agent/request-error` overflow recovery.
    */
   _registerAutomaticCompaction() {
     const { ctx } = this;
@@ -253,11 +314,40 @@ export class LcmCompactionEngine extends CompactionEngine {
       this.config,
       `summarize span=${prepared.shadowedSeqs.length} seqs=${prepared.shadowedSeqs[0]}-${prepared.shadowedSeqs[prepared.shadowedSeqs.length - 1]} shadowedTokens=${prepared.shadowedTokenCount} budget=${budget}`
     );
-    const result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
+    // The hard bound is the shadowed span itself: a summary at least as long as
+    // the text it replaces cannot survive the shrink guarantee in `region.js`,
+    // so measuring the body against it is the cheapest honest pre-check. It is
+    // deliberately NOT the framed comparison: framing adds a header, an intro
+    // line and the retention footer, none of which the summarizer can control,
+    // so gating on framed tokens would retry summaries that are already fine and
+    // still fail the ones framing alone sinks.
+    const limit = prepared.shadowedTokenCount;
+    let result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
     signal?.throwIfAborted();
-
-    const text = result.summary.map((block) => block.text ?? "").join("\n");
-    const tokens = estimateEntryTokens(text);
+    let text = summaryBodyOf(result);
+    let tokens = estimateEntryTokens(text);
+    // `limit > 0` keeps the degenerate zero-token span on its historical path:
+    // the shrink gate rejects it either way, and a retry there would only add a
+    // full-price call to a guaranteed failure.
+    if (limit > 0 && tokens >= limit) {
+      engineDebug(this.config, `summarize oversize body=${tokens} >= shadowed=${limit} target=${budget}: retrying once with a hard length bound`);
+      // Exactly one retry: the second attempt either fits or the failure is
+      // reported with both numbers. No loop — a model that overruns twice on a
+      // restated hard bound is not going to fit on attempt four, and every
+      // attempt is a full-price call.
+      result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal, hardShrinkConstraint(tokens, limit));
+      signal?.throwIfAborted();
+      text = summaryBodyOf(result);
+      tokens = estimateEntryTokens(text);
+      if (tokens >= limit) {
+        const error = new Error(
+          `lcm: summary body is still not shorter than the span it replaces (${tokens} estimated tokens >= ${limit} allowed after 2 attempts; the second stated a hard bound of ${limit} tokens)`
+        );
+        error.code = "SUMMARY_NOT_SHRINKING";
+        throw error;
+      }
+      engineDebug(this.config, `summarize shrink retry done tokens=${tokens} shadowed=${limit}`);
+    }
     const entries = [
       {
         seq: prepared.shadowedSeqs[0],
@@ -428,11 +518,23 @@ export class LcmCompactionEngine extends CompactionEngine {
       throw new ManualCompactionError("busy", "manual compaction requires an idle agent with no waking queued work", { cause: error });
     }
   }
-  /** Bind the effective token meter and dynamically dispatched compile hook. */
+  /** Bind the effective token meter, the compile hook, and the summary-recovery waterfall. */
   regionDependencies() {
     return {
       meter: this.ctx.tokenMeter,
-      compile: (prepared, owner, abort) => this.compile(prepared, owner, abort)
+      compile: (prepared, owner, abort) => this.compile(prepared, owner, abort),
+      // The recovery seam every summarization backend exposes under
+      // `compaction/summary-error`; this is what `dsh-compaction-image-offload`
+      // listens on to offload the oldest retained images when a route answers
+      // `IMAGE_OFFLOAD_REQUIRED`. Without it the listener can never fire and an
+      // image-heavy region is unrecoverable. `false` is the documented default:
+      // the region transaction rethrows the original error.
+      recover: (error, agent, sourceEventSeqs, signal) => this.ctx.waterfall("compaction/summary-error", {
+        session: agent.session,
+        sourceEventSeqs,
+        error,
+        ...signal === undefined ? {} : { signal }
+      }, () => false)
     };
   }
 }

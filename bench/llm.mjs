@@ -69,9 +69,18 @@ export async function complete(options) {
     const body = await response.text();
     if (!response.ok) throw new Error("gateway " + response.status + ": " + body.slice(0, 300));
     const parsed = JSON.parse(body);
+    const usage = parsed.usage ?? {};
+    // Hidden reasoning is billed inside completion_tokens against the same
+    // ceiling, so that number overstates how much TEXT a call wrote - measured at
+    // 7264 of 12953 on one arm. Every caller that wants "how much summary came
+    // back" must use visibleCompletionTokens, never completion_tokens.
+    const reasoning = usage.completion_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning ?? 0;
+    const visible = typeof usage.completion_tokens === "number" ? Math.max(0, usage.completion_tokens - reasoning) : undefined;
     return {
       content: parsed.choices?.[0]?.message?.content ?? "",
-      usage: parsed.usage ?? {},
+      usage,
+      reasoningTokens: reasoning,
+      visibleCompletionTokens: visible,
       model: parsed.model ?? model,
       finishReason: parsed.choices?.[0]?.finish_reason ?? "unknown",
       elapsedMs: Date.now() - started

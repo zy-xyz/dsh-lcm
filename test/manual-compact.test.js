@@ -207,11 +207,13 @@ test("compactNow runs the manual /compact transaction on a real Session", { skip
   assert.deepEqual([result.startSeq, result.summarySeq, result.endSeq], [startSeq, summarySeq, endSeq]);
   const startEvent = session.eventAt(startSeq);
   const summaryEvent = session.eventAt(summarySeq);
-  // The durable record names the TARGET the instruction asked for, and carries
-  // no `maxTokens`: the request never had one, so recording one would claim a
-  // cap that was never sent.
-  assert.equal(summaryEvent.data.targetTokens, engine.effectiveMaxTokens(result.shadowedTokenCount), "the record names the instruction target");
-  assert.equal("maxTokens" in summaryEvent.data, false, "no request cap is recorded because none was sent");
+  // The durable field is the CONTRACT name `maxTokens` (dsh-compaction/types), and
+  // its meaning here is "the length the instruction asked for", not "the cap the
+  // request carried" — the request carries none. Renaming the field to match the
+  // new meaning was rejected by the released event validator, so the name stays
+  // and the meaning is documented instead.
+  assert.equal(summaryEvent.data.maxTokens, engine.effectiveMaxTokens(result.shadowedTokenCount), "the record names the instruction target");
+  assert.equal("targetTokens" in summaryEvent.data, false, "no out-of-contract field is written");
   const endEvent = session.eventAt(endSeq);
   assert.equal(endEvent.data.error, undefined, "a clean manual compaction records no error");
   assert.equal(endEvent.data.turn, null, "an idle manual compaction has no open turn to bracket");

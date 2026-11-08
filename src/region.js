@@ -167,7 +167,7 @@ export async function compactSurfaceRegion(dependencies, session, start, end, ag
   let stage = "summary";
   try {
     const prepared = prepareCompaction(dependencies, session, selection);
-    const compiled = await compileCompaction(dependencies, prepared, agent, compactionId, options.sourceCommandId, signal);
+    const compiled = await compileCompaction(dependencies, prepared, agent, compactionId, options.sourceCommandId, signal, assertStable);
     if (options.owner === null) signal?.throwIfAborted();
     assertStable(dependencies, session, compiled);
     stage = "commit";
@@ -271,7 +271,22 @@ export function prepareCompaction(dependencies, session, selection) {
     session,
     measurement,
     selectedNodes,
-    shadowedTokenCount: selectedNodes.reduce((total, node) => total + node.tokens, 0)
+    // Two prices, because the surface accounts in two of them.
+    //
+    // `dsh-token-meter` folds a `compaction/summary` event into a claim and
+    // then prices the following replacement as `estimateMessage(replacement) -
+    // claim.tokens`; its own surface total is summed from `node.heuristicTokens`
+    // (surface-projection.js, priceSurface's heuristic branch). So the durable
+    // shadow price must be the HEURISTIC price: writing the route price there
+    // mis-prices every replacement whose span holds an image or a file, which
+    // drifts the projected surface total and silently under-reports
+    // contextPressure. `dsh-compaction-basic` splits the same two numbers
+    // (shadowedTokenCount / shadowedRouteTokenCount) for this reason.
+    //
+    // The route price is still the number the shrink guarantee is stated in,
+    // because that is what the replacement request actually costs.
+    shadowedTokenCount: selectedNodes.reduce((total, node) => total + (node.heuristicTokens ?? node.tokens), 0),
+    shadowedRouteTokenCount: selectedNodes.reduce((total, node) => total + node.tokens, 0)
   };
 }
 
@@ -285,14 +300,40 @@ export function prepareCompaction(dependencies, session, selection) {
  * @param compactionId - owning transaction identity for checkpoint provenance.
  * @param sourceCommandId - initiating manual command, when present.
  * @param signal - optional cancellation signal.
+ * @param assertStable - the surface-stability rule this transaction was opened with.
  * @returns the compiled summary, provenance, and framed checkpoint message.
  */
-async function compileCompaction(dependencies, prepared, agent, compactionId, sourceCommandId, signal) {
-  const compiled = await dependencies.compile(prepared, agent, signal);
+async function compileCompaction(dependencies, prepared, agent, compactionId, sourceCommandId, signal, assertStable) {
+  let compiled;
+  let current = prepared;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      compiled = await dependencies.compile(current, agent, signal);
+      break;
+    } catch (error) {
+      // Recovery contract, verbatim from `dsh-compaction-basic`: a cancellable
+      // failure is never "recovered", the span must still be the one the summary
+      // was built for, and only a listener that synchronously recorded a durable
+      // change to the selected input (e.g. `image/offload`) may claim it. The
+      // selection is then re-derived and re-priced, because the recovery just
+      // changed what the summarizer will read.
+      if (signal?.aborted === true) throw error;
+      assertStable(dependencies, current.session, current);
+      const recovered = dependencies.recover === undefined ? false : dependencies.recover(error, agent, current.shadowedSeqs, signal);
+      if (!recovered) throw error;
+      current = prepareCompaction(dependencies, current.session, validateSurfaceRegion(current.session, current.start, current.end));
+    }
+  }
+  prepared = current;
   // The UI-facing summary IS the compiled body: the checkpoint row expands to
   // exactly the entries the model sees. The body is joined with separators
   // and wrapped in an adaptive Markdown fence, so the UI renders the whole
   // expansion as one tidy code block even when messages contain markdown.
+  // Display/log lines keep the HEURISTIC price: `compiled.stats.tokens` is our
+  // own tokenizer's estimate of the summary body, so the advertised ratio is
+  // estimator-to-estimator. `dsh-compaction-basic` logs the same heuristic
+  // number. The route price above is a contract comparison, not a readable size.
   const verb = sourceCommandId === undefined ? "自动压缩" : "手动 /compact";
   const ratio = (prepared.shadowedTokenCount / Math.max(1, compiled.stats.tokens)).toFixed(1);
   const introLine = `${verb}: 将 ${prepared.shadowedSeqs.length} 个节点 / ~${prepared.shadowedTokenCount} tokens 摘要为 ~${compiled.stats.tokens} tokens（${ratio}:1）`;
@@ -315,7 +356,12 @@ async function compileCompaction(dependencies, prepared, agent, compactionId, so
     source: compactCheckpointSource(compactionId, sourceCommandId)
   });
   const framedTokenCount = dependencies.meter.estimateMessage(checkpointMessage);
-  if (framedTokenCount >= prepared.shadowedTokenCount) throw new Error(`compiled checkpoint is not smaller than the shadowed content (${framedTokenCount} estimated framed tokens >= ${prepared.shadowedTokenCount})`);
+  // The shrink guarantee is stated in ROUTE prices, exactly as
+  // `dsh-compaction-basic` states it (its `shadowedRouteTokenCount`): the
+  // question is whether the replacement request is cheaper than the request it
+  // replaces, and only the route price answers that. The heuristic price above
+  // is the durable shadow price the token meter folds, not the comparison basis.
+  if (framedTokenCount >= prepared.shadowedRouteTokenCount) throw new Error(`compiled checkpoint is not smaller than the shadowed content (${framedTokenCount} estimated framed tokens >= ${prepared.shadowedRouteTokenCount})`);
   return {
     ...prepared,
     summary,
@@ -367,7 +413,7 @@ export function assertSelectedSpanStable(dependencies, session, prepared) {
 
 /** Append one completed checkpoint record and replacement body without yielding. */
 function commitCompactionBody(session, startEvent, compiled) {
-  const { start, end, shadowedSeqs, shadowedTokenCount, summary, provider, model, checkpointMessage, targetTokens, usage, rawOutput } = compiled;
+  const { start, end, shadowedSeqs, shadowedTokenCount, shadowedRouteTokenCount, summary, provider, model, checkpointMessage, targetTokens, usage, rawOutput } = compiled;
   const summaryEvent = session.append("compaction/summary", {
     compactionId: startEvent.data.compactionId,
     ...startEvent.data.sourceCommandId === undefined ? {} : { sourceCommandId: startEvent.data.sourceCommandId },
@@ -380,7 +426,12 @@ function commitCompactionBody(session, startEvent, compiled) {
     shadowedTokenCount,
     provider,
     model,
-    ...targetTokens === undefined ? {} : { targetTokens },
+    // The contract field is `maxTokens` (dsh-compaction/types, and the released
+    // v0/v1 payload validator rejects anything else as an unexpected member).
+    // The value is the summary TARGET this backend asked the model to aim for —
+    // no request cap was sent (see summarize.js) — so the field name is the
+    // contract's, while the semantic stays "the number the instruction named".
+    ...targetTokens === undefined ? {} : { maxTokens: targetTokens },
     ...usage === undefined ? {} : { usage },
     ...rawOutput === undefined ? {} : { rawOutput, llmStreamCall: true }
   });
@@ -412,7 +463,11 @@ function commitCompactionBody(session, startEvent, compiled) {
       end
     },
     shadowedSeqs: [...shadowedSeqs],
-    shadowedTokenCount
+    // The durable shadow price (heuristic) is the contract's `CompactionResult`
+    // field; the route price is carried beside it so a caller can log the real
+    // request cost without re-measuring the pre-compaction surface.
+    shadowedTokenCount,
+    shadowedRouteTokenCount
   };
 }
 

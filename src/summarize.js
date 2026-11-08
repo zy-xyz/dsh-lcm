@@ -21,7 +21,8 @@
  *
  * @module dsh-lcm/summarize
  */
-import { BlockAssembler, createUserMessage } from "@deepseek-ai/dsh-llm";
+import { BlockAssembler, LlmError, createUserMessage } from "@deepseek-ai/dsh-llm";
+import { resolveTargetPolicy } from "./config.js";
 import { resolveEventAt, sessionEvents } from "./events.js";
 import { renderEventBody } from "./compiler.js";
 import { engineDebug } from "./debug.js";
@@ -122,6 +123,35 @@ function nodeMessage(session, seq) {
 }
 
 /**
+ * Convert one terminal `finish.failure` into the error this backend throws.
+ *
+ * `finish.failure` is `@deepseek-ai/dsh-llm`'s provider-neutral FAILURE SNAPSHOT:
+ * a frozen plain object `{ message, code, ... }`, not an `Error` (see
+ * `normalizeLlmFailure`). Throwing it as-is meant every downstream
+ * `instanceof LlmError` routing check silently failed — most visibly the
+ * `compaction/summary-error` listener in `dsh-compaction-image-offload`, which
+ * matches on `error instanceof LlmError && error.code === IMAGE_OFFLOAD_REQUIRED_CODE`
+ * and therefore never fired, turning a recoverable image-heavy region into a
+ * hard compaction failure. `dsh-compaction-basic` re-wraps the same snapshot in
+ * `LlmError`; this does the same and keeps the snapshot as `cause`.
+ *
+ * An actual `Error` is passed through untouched: it is already an `Error`, and
+ * rebuilding it would discard its stack.
+ *
+ * @param failure - the terminal finish reason's failure snapshot.
+ * @returns the value to throw.
+ */
+function summarizationFailure(failure) {
+  if (failure instanceof Error) return failure;
+  const message = typeof failure?.message === "string" && failure.message.length > 0 ? failure.message : "summarization request failed";
+  const code = typeof failure?.code === "string" && failure.code.length > 0 ? failure.code : "UNKNOWN";
+  // Spread first so the validated provider facts (`status`, `requestId`,
+  // `providerRetryAfterMs`, `offloadImages`) reach `LlmError`, which re-freezes
+  // them onto `error.failure`; `cause` then keeps the original snapshot.
+  return new LlmError(message, code, { ...failure, cause: failure });
+}
+
+/**
  * The deterministic truncation failure: same prompt and same completion ceiling
  * reproduce it exactly, so it is thrown rather than retried.
  *
@@ -151,9 +181,13 @@ function maxTokensTruncation() {
  * @param budgetTokens - target summary length named in the instruction. NOT a
  *   request cap: no `maxTokens` is sent, so the provider's own default applies.
  * @param signal - cancellation forwarded to the adapter.
+ * @param instructionSuffix - extra text appended after the normal instruction.
+ *   Used by exactly one caller path: `compile()`'s length retry, which restates
+ *   the upper bound as a hard number after an over-long attempt. Omitted (and
+ *   therefore byte-identical to the historical prompt) on every other attempt.
  * @returns summary blocks plus provenance and usage.
  */
-export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, signal) {
+export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, signal, instructionSuffix) {
   signal?.throwIfAborted();
   const { session } = prepared;
 
@@ -167,12 +201,13 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   const header = session.requestHeader();
   const headSeq = session.surface.nodes[0];
   const headEvent = headSeq === undefined ? undefined : session.eventAt(headSeq);
-  const system = headEvent === undefined ? null : session.deriveEventMessage(headEvent);
+  // Only a `system/message` is the conversation head. When surface node 0 is any
+  // other message (a session whose first node is a user turn), prepending it as
+  // the "system" prefix ALSO leaves it inside `regionMessages`, so that message
+  // reached the summarizer twice. `dsh-compaction-basic` gates on the event type
+  // for the same reason; this is its rule, verbatim.
+  const system = headEvent === undefined || headEvent.type !== "system/message" ? null : session.deriveEventMessage(headEvent);
 
-  const configured =
-    config.summarizationProvider.length > 0
-      ? { provider: config.summarizationProvider, model: config.summarizationModel }
-      : undefined;
   const latest = header?.config;
   const agentTarget =
     agent.options?.provider !== undefined &&
@@ -180,6 +215,25 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     agent.options.model !== undefined &&
     agent.options.model.length > 0
       ? { provider: agent.options.provider, model: agent.options.model }
+      : undefined;
+  // Per-route policy: `summarizationProvider`/`summarizationModel` are POLICY
+  // fields, so an exact-route `modelPolicies` row may point the summarizer at a
+  // different model than the top-level default. Reading them off `config`
+  // directly ignored that override entirely (a route configured to summarize
+  // with its own model silently summarized with the global one). Resolve the
+  // routed target first, then take the pair from its merged policy, exactly as
+  // `dsh-compaction-basic`'s `summarize()` does.
+  const conversationTarget =
+    latest !== undefined && latest.provider.length > 0 && latest.model.length > 0
+      ? { provider: latest.provider, model: latest.model }
+      : agentTarget;
+  const policy =
+    conversationTarget === undefined || !Array.isArray(config.modelPolicies)
+      ? config
+      : resolveTargetPolicy(config, conversationTarget);
+  const configured =
+    policy.summarizationProvider.length > 0
+      ? { provider: policy.summarizationProvider, model: policy.summarizationModel }
       : undefined;
   const target = configured ?? latest ?? agentTarget;
   if (target === undefined) {
@@ -193,11 +247,15 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   // `maxTokens` (see below), so nothing truncates the answer at this number.
   // It still earns its place — a model told "roughly 2400 tokens" writes a
   // 2400-token summary instead of a 400-token stub or a 40k-token transcript.
+  const instructionText = buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth);
   const instruction = createUserMessage({
     content: [
       {
         type: "text",
-        text: buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth)
+        // The suffix goes LAST, after "Format the result as plain Markdown":
+        // recency is where a correction lands hardest, and the over-long retry
+        // is the only caller that passes one.
+        text: typeof instructionSuffix === "string" && instructionSuffix.length > 0 ? `${instructionText}\n\n${instructionSuffix}` : instructionText
       }
     ]
   });
@@ -250,7 +308,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     const assembler = new BlockAssembler();
     for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk);
     const finish = assembler.finish;
-    if (finish.kind === "error" || finish.kind === "aborted") throw finish.failure;
+    if (finish.kind === "error" || finish.kind === "aborted") throw summarizationFailure(finish.failure);
     finishKind = finish.kind;
     raw = assembler.blocks();
     produced = raw
