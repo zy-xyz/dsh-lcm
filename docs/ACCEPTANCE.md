@@ -5,7 +5,7 @@
 
 ## 0. 当前状态（2026-11-07）
 
-引擎代码在 [`dsh-lcm/`](dsh-lcm) v0.4.2（https://github.com/zy-xyz/dsh-lcm ），80 项测试全绿。
+引擎代码在 [`dsh-lcm/`](dsh-lcm) v0.4.2（https://github.com/zy-xyz/dsh-lcm ），81 项测试全绿。
 
 > ⚠️ 本表 2026-11-07 有一次**口径修正**：`bench/retrieval.mjs` 的 rank 曾多加 2，导致 recall@1 恒为 0、NDCG 抄的是 recall@10，据此得出的“相关性重排不如时间序”结论**作废并反向**。凡引用本表旧数字的地方，以 REPORT.md §1 撤回记录为准。
 
@@ -32,7 +32,7 @@
 | **G1.3** 安全闸不误触 | ✅ PASS（单测级） | `test/region.test.js`：framed ≥ shadowed 必抛，且抛后仍写出唯一 `compaction/end` |
 | **G1.4** 失败不丢锁 | ✅ PASS（单测级） | 编译抛错后锁可再次进入、无孤儿 summary |
 | **G1.5** 位置语义正确 | ✅ PASS（单测级） | surfaceOp 必须是 `{op,startSeq,endSeq}`，已用 harness 的 `foldSurface` 断言 |
-| G1.2 | ⬜ 待办 | 需要在运行中的引擎里同时挂两份实现 |
+| **G1.2** 引擎唯一性 | ✅ PASS（真机制已找到并测） | **`composeEntries` 不拦**：把 patch 里的 `disabled: true` 去掉，它照样返回两条 active 行（实测，不报错）。真正拦住双压的是 Cordis 的 Service 唯一性：同一 context 上第二次注册 `ctx.compaction` 抛 `service "compaction" has been registered`。`test/engine-uniqueness.test.js` 钉住了这一点 |
 | **G2.3** 稳态压缩比 | ✅ 114:1（实测，basic 生产日志） | `verify-lcm.mjs` D1 |
 | **G2.4** 净开销 ≤30% | ⚠️ **门槛算错了，不是没达标** —— 摘要式压缩的下界是 101.3%，见 §0「G2.4 的更正」 | **正确口径是摊销回本周期 ≈ 1.12 轮**，不是单次事件的 111%。理由与算术见 §0「G2.4 的更正」：花掉的 484 623 里有 436 194（90%）就是被压的原文本身，任何摘要式压缩器都必须读一遍要压掉的内容，下界 =（span+输出）/span = **101.3%** > 30%。这是口径错误，不是实现缺陷，换任何引擎都一样 |
 | **G2.5** 成本对基线 ≤1.05× | ⬜ **本门已撤出判决范围** | 用户明示「成本不需要压制，成本相关的也不需要测」。历史实测留在 `bench/REPORT.md` §16 备查，不再作为切换判据 |
