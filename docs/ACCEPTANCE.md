@@ -5,7 +5,7 @@
 
 ## 0. 当前状态（2026-11-07）
 
-引擎代码在 [`dsh-lcm/`](dsh-lcm) v0.4.2（https://github.com/zy-xyz/dsh-lcm ），81 项测试全绿。
+引擎代码在 [`dsh-lcm/`](dsh-lcm) v0.4.2（https://github.com/zy-xyz/dsh-lcm ），80 项测试全绿。
 
 > ⚠️ 本表 2026-11-07 有一次**口径修正**：`bench/retrieval.mjs` 的 rank 曾多加 2，导致 recall@1 恒为 0、NDCG 抄的是 recall@10，据此得出的“相关性重排不如时间序”结论**作废并反向**。凡引用本表旧数字的地方，以 REPORT.md §1 撤回记录为准。
 
@@ -25,7 +25,9 @@
 | 门 | 状态 | 证据 |
 |---|---|---|
 | **G0.1** 组合后只有一个引擎 | ✅ PASS | `test/compose.test.js`：用 boot 的 `composeEntries` 叠加 bundle patch，结果 basic=disabled / lcm=ACTIVE / `/compact` 保留 / 工具挂载 |
-| **G0** 其余（真跑一次压缩） | ⬜ 待办 | 需要 `dsh plugin add` + 重启 dsh；重启需你点头 |
+| **G0.2** 发生 ≥1 次真实压缩 | ✅ **PASS（真引擎、真会话）** | 用 `dsh --profile lcmhead`（headless 模板的隔离 profile，**不碰用户的 web profile**）装插件 + 极小阈值跑真实任务。会话日志实测：`compaction/start seq 22` → `compaction/summary seq 23`（858 字符 checkpoint，含带 `(seq N)` 的锚点）→ `compaction/end seq 25`，替换节点 `surfaceOp {"op":"replace","startSeq":8,"endSeq":11}`；第二次压缩 seq 39/40/42，替换 `24-31`。**这一步顺带抓到 6 处 `session.events` 假设错误 —— 插件此前在真实会话里从未成功压缩过一次**（见 `CHANGELOG` 0.4.3） |
+| **G0.3** `/compact` 手动压缩 | ⬜ 待办 | 真实压缩已通，手动路径未单跑 |
+| **G0.4** 压缩后重启不崩 | ⬜ 待办 | 需要在 lcmhead profile 上 kill + resume |
 | **G1.1** 11 个键全吃 | ✅ PASS | 28 项单测 `resolveConfig` 全键矩阵 |
 | **G1.1b** 默认值与 basic 相同 | ✅ PASS | 0.8 / 65536 / 0.16 / 65536 / 1 / 1 / true，逐项断言 |
 | **G1.1c** 预算公式与 basic 相同 | ✅ PASS | W∈{32K,128K,200K,1M} × O∈{0,8K,64K} 差分矩阵 |
@@ -130,6 +132,60 @@ cacheRead  = 114 176 tok
 
 
 > 注：另外 103 个会话零 `compaction/*`，印证 `billion-context` 把 host-plane 的 `compaction-basic` 关了（`auto:false`），`bili-compaction-gate` 也是 `disabled: true`。**G0 依然是第一道门。**
+---
+
+
+---
+
+## 0.1 G0 已经用**真引擎 + 真会话**跑通了（2026-11-08）
+
+做法：不动用户的 `web` profile，用 headless 模板开一个隔离 profile：
+
+```bash
+dsh --profile lcmhead --from-default-profile headless --dump-config   # 建 profile
+dsh plugin --profile lcmhead add /home/agent/workspaces/lcmx-study/dsh-lcm
+# 写 cordis.patch.yml：极低阈值 + omniroute 路由
+OMNIROUTE_API_KEY=... dsh --profile lcmhead "Use bash to run: echo one. Then echo two. Then say done."
+```
+
+（阈值调到 `thresholdRatio: 0.001` / `headroomTokens: 8000`，让一个两步任务就跨过触发线）
+
+### 会话日志实测（`~/.dsh/sessions/--tmp--/session-f3e7d283…`）
+
+```
+compaction/start   seq 22
+compaction/summary seq 23   858 字符 checkpoint
+compaction/end     seq 25
+替换节点 seq 24   surfaceOp {"op":"replace","startSeq":8,"endSeq":11}
+
+compaction/start   seq 39
+compaction/summary seq 40   963 字符 checkpoint
+compaction/end     seq 42
+替换节点 seq 41   surfaceOp {"op":"replace","startSeq":24,"endSeq":31}
+```
+
+落地的 checkpoint 实测内容（节选），锚点**确实带指针**：
+
+```
+[lcm leaf summary · 4 nodes · seqs 8-11 · ~918 → ~261 tokens · anchors below carry (seq N):
+ restore with lcm_expand, or find anything else with lcm_search]
+## 逐字锚点
+- `echo one` (seq 8)
+- `echo two` (seq 8)
+- `/tmp` (seq 10)
+- `~/.dsh/AGENTS.md` (seq 9)
+```
+
+### 这一步抓到了什么（这是 G0 存在的全部理由）
+
+**插件在此前从未在真实 dsh 会话里成功压缩过。** 真实 `Session` 有 `log` 与 `snapshotEvents()`，**没有 `events` 属性**；我们 6 处读 `session.events` 全拿到 `undefined`，第一次自动压缩就抛 `Cannot read properties of undefined (reading 'length')`。而错误被设计性地吞掉（`continuing the turn`），日志里静默无事。
+
+84 个测试全绿也拦不住它 —— 因为所有测试都用带 `events` 的假 session。**只有真跑才看得见。** 已修（`sessionEvents()` 访问器 + 用真实形状的回归测试），修复前把访问器还原成旧行为，新测试 3/3 全红且报错文案与生产一致。
+
+### 顺带发现的一个健壮性缺口（未修，记录）
+
+压缩后阈值仍被跨过时，引擎会尝试把**刚生成的 checkpoint 节点本身**（span=1）再压一次，此时模型返回空文本，整次压缩以 `lcm: summarization produced no text content` 失败。这在正常阈值下不会发生（我把阈值压到 256 token 才逼出来），但**模型偶发返回空文本**是真实现象，值得有一次重试。记在这里，未改。
+
 ---
 
 ## 1. 门禁总览
