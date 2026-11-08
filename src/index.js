@@ -592,6 +592,15 @@ export class LcmCompactionEngine extends CompactionEngine {
       // the call was guaranteed to fail after paying for it.
       const range = selectCompactableRange(agent.session, measurement, spec.retainTokens, this.config.summaryFloorTokens, this.config.leafSpanTokens, this.config.condensationFanin);
       if (range === null) {
+        // Silence here was misleading: "over threshold but nothing to compact" and
+        // "compaction is broken" looked identical in the log. Measured case - a
+        // 14 372-token session with retainTokens 4 472 leaves ONE 233-token node
+        // compactable, and the span floor refuses it (233 <= 2 x 512), so the
+        // session stays over its threshold and nothing happens, correctly.
+        engineDebug(
+          this.config,
+          `pressure declined: ${measurement.totalTokens} >= ${spec.thresholdTokens} but no range passed the guards (retain=${spec.retainTokens} floor=${this.config.summaryFloorTokens} leaf=${this.config.leafSpanTokens} fanin=${this.config.condensationFanin})`
+        );
         // A step-boundary attempt that cannot make progress is a no-op; a model
         // switch that cannot is a refusal, because admitting the new model would
         // send an over-threshold request.
