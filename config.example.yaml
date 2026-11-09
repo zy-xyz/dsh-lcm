@@ -68,6 +68,9 @@ modelPolicies: []
 summaryRatio: 0.12
 
 # 摘要预算下限，保证小片段也能产出可用摘要。默认 512。
+# 注意它和 maxTokens/checkpointCap 的先后：target = min(cap, max(floor, span×ratio)) 再取 min(maxTokens)。
+# 也就是说 maxTokens 是最后一道上限，把它设到 floor 以下时 floor 会被压下去（maxTokens: 100 + floor: 512 → target 100）。
+# 想要 floor 生效，就别把 maxTokens 设得比它小。
 summaryFloorTokens: 512
 
 # 单次摘要目标长度的上限。默认 16384。
