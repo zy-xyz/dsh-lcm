@@ -6,9 +6,11 @@
  * is the smallest one that works:
  *
  *   - the session log stays the only store — vectors are a *side index*;
- *   - the index lives in memory for one call and on disk as a flat
- *     content-addressed cache (`sha256(model + "\n" + text)` → raw Float32s);
- *   - no database, no new dependency: built-in `fetch` and `node:crypto`;
+ *   - the index lives in memory for one call and on disk as a
+ *     content-addressed cache (`sha256(model + "\n" + text)` → raw Float32s),
+ *     one directory per model and width under `vectorCacheDir`;
+ *   - no database, no new dependency: built-in `fetch`, `node:crypto` and
+ *     `node:fs/promises`;
  *   - the whole layer is inert unless `vectorEnabled: true`, and it is only
  *     consulted when `rank` is explicitly `vector` or `hybrid`.
  *
@@ -19,8 +21,9 @@
  * @module dsh-lcm/vectors
  */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 
 // ── defaults ───────────────────────────────────────────────────────────────
 
@@ -88,6 +91,9 @@ export const VECTOR_TEXT_LIMIT = 4000;
 
 /** Cache file suffix; the payload is little-endian Float32 with no header. */
 const CACHE_EXT = ".f32";
+
+/** Credential store file name inside the dsh home. */
+const CREDENTIAL_STORE_FILE = ".credentials.yaml";
 
 /**
  * HTTP statuses that reject the request body, not the request.
@@ -378,23 +384,127 @@ function reasonOf(error) {
 }
 
 /**
- * The Authorization header for one request, or nothing.
+ * Authorization for one request, and which source answered it.
  *
- * Read at request time rather than resolved once, so an operator can rotate the
- * secret in the environment of a long-running process without a rebuild. An
- * empty or unset variable yields no header, which is what a keyless backend
- * expects; a variable that is NAMED but empty is treated the same way, because a
- * backend that needs a key answers 401 and that surfaces in the degradation
- * notice rather than being silently swallowed here.
+ * The configuration carries the NAME of a variable, never a key: this bundle
+ * ships in a repository, so the literal secret cannot live in the composition.
+ * Two sources can satisfy that name, in priority order:
  *
- * @param cfg - resolved vector settings.
- * @returns the header object to spread into the request, possibly empty.
+ *   1. the process environment — read per request, so a long-running process
+ *      can rotate the secret without a rebuild;
+ *   2. the dsh credential store, `$DSH_HOME/.credentials.yaml` (or
+ *      `$HOME/.dsh/.credentials.yaml` when `DSH_HOME` is unset), whose
+ *      top-level `refs:` block holds `NAME: value` pairs. This is what makes
+ *      the layer operable without exporting a variable into every process.
+ *
+ * An unset OR empty variable is not a key, so it falls through to the store; a
+ * named-but-empty store entry is the same. Nothing found yields no header at
+ * all, which is what a keyless backend expects — a backend that does need one
+ * answers 401, and that surfaces in the degradation notice instead of being
+ * silently swallowed here.
+ *
+ * The record names the source and puts the secret in exactly one place (the
+ * header), so the record itself can be logged.
+ *
+ * @param cfg - vector settings (raw or resolved).
+ * @returns `{ header, source }` — header is the object to spread into fetch
+ *   headers (`{}` when none), source is "env" | "credential-store" | "none".
  */
-function authHeader(cfg) {
-  if (typeof cfg.apiKeyEnv !== "string" || cfg.apiKeyEnv.length === 0) return {};
-  const key = typeof process === "undefined" ? undefined : process.env?.[cfg.apiKeyEnv];
-  if (typeof key !== "string" || key.length === 0) return {};
-  return { authorization: `Bearer ${key}` };
+export async function resolveVectorAuth(cfg) {
+  const resolved = resolveVectorConfig(cfg);
+  const name = resolved.apiKeyEnv;
+  if (typeof name !== "string" || name.length === 0) return { header: {}, source: "none" };
+  const fromEnv = typeof process === "undefined" ? undefined : process.env?.[name];
+  if (typeof fromEnv === "string" && fromEnv.length > 0) {
+    return { header: { authorization: `Bearer ${fromEnv}` }, source: "env" };
+  }
+  for (const path of credentialStorePaths()) {
+    const stored = parseCredentialRefs(await readCredentialStore(path)).get(name);
+    if (typeof stored === "string" && stored.length > 0) {
+      return { header: { authorization: `Bearer ${stored}` }, source: "credential-store" };
+    }
+  }
+  return { header: {}, source: "none" };
+}
+
+/**
+ * Where the credential store may live, most specific first.
+ *
+ * Only these two paths are consulted; an operator who keeps the file elsewhere
+ * sets `DSH_HOME` at it, which is the documented dsh home.
+ *
+ * @returns absolute candidate paths, de-duplicated, never empty unless the
+ *   process has neither `DSH_HOME` nor a home directory.
+ */
+function credentialStorePaths() {
+  const env = typeof process === "undefined" ? undefined : process.env;
+  const paths = [];
+  const dshHome = env?.DSH_HOME;
+  if (typeof dshHome === "string" && dshHome.length > 0) paths.push(join(dshHome, CREDENTIAL_STORE_FILE));
+  const home = typeof env?.HOME === "string" && env.HOME.length > 0 ? env.HOME : homedir();
+  if (typeof home === "string" && home.length > 0) {
+    const fallback = join(home, ".dsh", CREDENTIAL_STORE_FILE);
+    if (!paths.includes(fallback)) paths.push(fallback);
+  }
+  return paths;
+}
+
+/**
+ * Read one credential file, or "" when it is absent.
+ *
+ * The store is optional and is consulted on every request that has no
+ * environment value, so a missing, unreadable or directory-shaped path is an
+ * empty store rather than a failed search. The content is never logged.
+ *
+ * @param path - absolute path of the credential store.
+ * @returns the file text, or "" when it cannot be read.
+ */
+async function readCredentialStore(path) {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Parse the top-level `refs:` block of the credential store.
+ *
+ * Deliberately not a YAML parser: the store also holds a nested `records:`
+ * block whose keys contain "/" and whose values are quoted blobs, and all this
+ * layer needs is the flat `NAME: value` map under `refs:`. A new top-level
+ * key ends the block, so `records:` content can never be mistaken for a ref
+ * even when it appears first.
+ *
+ * @param text - raw file content.
+ * @returns a Map of reference name to value; empty when the block is absent.
+ */
+function parseCredentialRefs(text) {
+  const refs = new Map();
+  let inRefs = false;
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    if (line.trim().length === 0 || line.trimStart().startsWith("#")) continue;
+    const top = /^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/.exec(line);
+    if (top !== null) {
+      inRefs = top[1] === "refs";
+      continue;
+    }
+    if (!inRefs) continue;
+    const entry = /^\s+([A-Za-z0-9_.-]+)\s*:\s*(.*)$/.exec(line);
+    if (entry === null) continue;
+    const value = unquote(entry[2].trim());
+    if (value.length > 0) refs.set(entry[1], value);
+  }
+  return refs;
+}
+
+/** Strip one pair of matching YAML quotes from a scalar. */
+function unquote(value) {
+  const first = value[0];
+  if (value.length >= 2 && (first === '"' || first === "'") && value.endsWith(first)) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 /** POST one batch and decode its vectors, with a bounded wall clock. */
@@ -412,11 +522,12 @@ async function requestBatch(cfg, batch, signal) {
     else signal.addEventListener("abort", forwardAbort, { once: true });
   }
   try {
+    const auth = await resolveVectorAuth(cfg);
     let response;
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json", ...authHeader(cfg) },
+        headers: { "content-type": "application/json", accept: "application/json", ...auth.header },
         body: JSON.stringify({ model: cfg.model, input: batch }),
         signal: controller.signal
       });
@@ -466,21 +577,41 @@ function decodeEmbeddings(payload, cfg, url, expected) {
 // ── disk cache ─────────────────────────────────────────────────────────────
 
 /**
+ * The directory one model owns under the cache root.
+ *
+ * Flat, every model wrote into one directory and an old model's files were
+ * indistinguishable from live ones — visible bytes with an invisible owner.
+ * Twelve hex characters of the model digest plus the vector width name the
+ * owner, so two models never share a directory, a stale model can be deleted as
+ * one unit, and the per-text key stays what it always was.
+ *
+ * @param resolved - resolved vector settings.
+ * @returns absolute directory path for this model and width.
+ */
+function vectorCacheDirOf(resolved) {
+  const modelTag = createHash("sha256").update(resolved.model, "utf8").digest("hex").slice(0, 12);
+  return join(resolved.cacheDir, `${modelTag}-${resolved.dim}`);
+}
+
+/**
  * Open the content-addressed vector cache.
  *
- * Key is `sha256(model + "\n" + text)`, value is a headerless little-endian
- * Float32 blob written to a temporary file and renamed into place, so a
- * concurrent reader never sees a half-written vector. Every failure to read is
- * a miss (the cache is an optimisation, never a source of truth); a failed
- * write is dropped by callers.
+ * Directory is `<cacheDir>/<12 hex of sha256(model)>-<dim>/`, key is
+ * `sha256(model + "\n" + text)`, value is a headerless little-endian Float32
+ * blob written to a temporary file and renamed into place, so a concurrent
+ * reader never sees a half-written vector. Every failure to read is a miss (the
+ * cache is an optimisation, never a source of truth); a failed write is dropped
+ * by callers.
  *
  * @param cfg - vector settings (raw or resolved).
- * @returns `{ dir, model, key, path, get, set, getMany, setMany }`.
+ * @returns `{ dir, model, key, path, get, set, getMany, setMany }` — `dir` is
+ *   the model's own directory, not the shared root.
  */
 export function vectorCache(cfg) {
   const resolved = resolveVectorConfig(cfg);
+  const dir = vectorCacheDirOf(resolved);
   const digest = (text) => createHash("sha256").update(resolved.model + "\n" + String(text ?? ""), "utf8").digest("hex");
-  const fileOf = (text) => join(resolved.cacheDir, digest(text) + CACHE_EXT);
+  const fileOf = (text) => join(dir, digest(text) + CACHE_EXT);
 
   /** Read one cached vector, or null on a miss, a short file, or bad bytes. */
   async function get(text) {
@@ -501,7 +632,7 @@ export function vectorCache(cfg) {
     if (!(vector instanceof Float32Array) || vector.length !== resolved.dim) {
       throw new Error(`vector cache: expected a ${resolved.dim}-dimensional Float32Array`);
     }
-    await mkdir(resolved.cacheDir, { recursive: true });
+    await mkdir(dir, { recursive: true });
     const target = fileOf(text);
     const temp = `${target}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     try {
@@ -530,7 +661,92 @@ export function vectorCache(cfg) {
     for (const entry of entries ?? []) await set(entry.text, entry.vector);
   }
 
-  return { dir: resolved.cacheDir, model: resolved.model, key: digest, path: fileOf, get, set, getMany, setMany };
+  return { dir, model: resolved.model, key: digest, path: fileOf, get, set, getMany, setMany };
+}
+
+/**
+ * What the current model's cache directory holds.
+ *
+ * `dir` is reported even when nothing has been cached yet, because the caller
+ * needs to know WHERE the layer would write; a missing directory is zeros, not
+ * an error — the first search legitimately runs before any file exists.
+ *
+ * @param cfg - vector settings (raw or resolved).
+ * @returns `{ dir, model, dim, files, bytes }`, counting `.f32` files only.
+ */
+export async function vectorCacheStats(cfg) {
+  const resolved = resolveVectorConfig(cfg);
+  const dir = vectorCacheDirOf(resolved);
+  const report = { dir, model: resolved.model, dim: resolved.dim, files: 0, bytes: 0 };
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return report;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(CACHE_EXT)) continue;
+    report.bytes += (await stat(join(dir, entry.name))).size;
+    report.files += 1;
+  }
+  return report;
+}
+
+/**
+ * Delete every sibling cache directory that belongs to another model.
+ *
+ * The cache root is the layer's own (`vectorCacheDir`), and each subdirectory
+ * under it is one model's index, so anything that is not the current one is a
+ * superseded or foreign model. Removal is per directory, recursively, and a
+ * missing root removes nothing.
+ *
+ * @param cfg - vector settings (raw or resolved).
+ * @returns `{ removed, bytes }` — directories deleted and the bytes they held.
+ */
+export async function pruneForeignVectorCaches(cfg) {
+  const resolved = resolveVectorConfig(cfg);
+  const keep = basename(vectorCacheDirOf(resolved));
+  let entries;
+  try {
+    entries = await readdir(resolved.cacheDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return { removed: 0, bytes: 0 };
+    throw error;
+  }
+  let removed = 0;
+  let bytes = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === keep) continue;
+    const path = join(resolved.cacheDir, entry.name);
+    bytes += await directoryBytes(path);
+    await rm(path, { recursive: true, force: true });
+    removed += 1;
+  }
+  return { removed, bytes };
+}
+
+/**
+ * Total bytes of the regular files under one directory, recursively.
+ *
+ * @param dir - directory to measure.
+ * @returns bytes, or 0 for a directory that vanished before it could be read.
+ */
+async function directoryBytes(dir) {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return 0;
+    throw error;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) total += await directoryBytes(path);
+    else if (entry.isFile()) total += (await stat(path)).size;
+  }
+  return total;
 }
 
 // ── ranking ────────────────────────────────────────────────────────────────

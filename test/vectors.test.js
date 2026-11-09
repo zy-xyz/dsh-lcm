@@ -15,14 +15,22 @@
  */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { searchSession, searchSessionHybrid } from "../src/search.js";
 import { resolveConfig as resolveToolConfig } from "../src/tool.js";
-import { DEFAULT_VECTOR_CANDIDATE_LIMIT, rankByVector, resolveVectorConfig } from "../src/vectors.js";
+import {
+  DEFAULT_VECTOR_CANDIDATE_LIMIT,
+  pruneForeignVectorCaches,
+  rankByVector,
+  resolveVectorAuth,
+  resolveVectorConfig,
+  vectorCache,
+  vectorCacheStats
+} from "../src/vectors.js";
 
 /** A session whose first event is a long dump and whose second is the answer. */
 function fixture() {
@@ -646,6 +654,201 @@ test("the header's compacted count counts content, not log plumbing", async () =
     assert.equal(result.hits[0]?.seq, 0);
   } finally {
     await server.close();
+    await cache.clean();
+  }
+});
+
+
+/**
+ * A temp DSH_HOME holding one credential store, shaped like the real one:
+ * a nested `records:` block first, then the flat `refs:` block this layer
+ * reads.
+ * @param refs - reference name to value.
+ * @returns the directory and a closer.
+ */
+async function scratchCredentialHome(refs) {
+  const dir = await mkdtemp(join(tmpdir(), "lcm-dsh-home-"));
+  const lines = ["version: 1", "records:", "  client-connection/browser-session:", "    kind: default", "refs:"];
+  for (const [name, value] of Object.entries(refs)) lines.push("  " + name + ": " + value);
+  await writeFile(join(dir, ".credentials.yaml"), lines.join("\n") + "\n", "utf8");
+  return { dir, clean: () => rm(dir, { recursive: true, force: true }) };
+}
+
+test("the credential store answers when the variable is missing, and the environment outranks it", async () => {
+  // A hosted gateway needs a token, but exporting a variable into every process
+  // is not operable: dsh already keeps credentials in $DSH_HOME/.credentials.yaml.
+  // The store is the fallback, never the override — a rotated environment value
+  // must win without touching the file.
+  const cache = await scratch();
+  const home = await scratchCredentialHome({ LCM_TEST_STORE_KEY: "sk-test-value" });
+  const query = "how do we store the target token column";
+  const server = await embeddingServer({ [query]: [1, 0, 0], alpha: [1, 0, 0] });
+  const NAME = "LCM_TEST_STORE_KEY";
+  const savedDshHome = process.env.DSH_HOME;
+  const savedName = process.env[NAME];
+  const items = [{ seq: 1, text: "alpha" }];
+
+  try {
+    process.env.DSH_HOME = home.dir;
+    delete process.env[NAME];
+
+    // Unset variable, value in the store: the store answers.
+    const stored = await resolveVectorAuth({ vectorApiKeyEnv: NAME });
+    assert.equal(stored.source, "credential-store", "an unset variable must fall back to the store");
+    assert.deepEqual(stored.header, { authorization: "Bearer sk-test-value" });
+
+    const cacheStore = await scratch();
+    try {
+      await rankByVector(vectorConfig(server, cacheStore.dir, { vectorApiKeyEnv: NAME }), items, query);
+      assert.equal(server.state.authorizations.at(-1), "Bearer sk-test-value", "the stored value must reach the wire");
+    } finally {
+      await cacheStore.clean();
+    }
+
+    // Set variable: the environment wins over the same name in the store.
+    process.env[NAME] = "sk-env-value";
+    const fromEnv = await resolveVectorAuth({ vectorApiKeyEnv: NAME });
+    assert.equal(fromEnv.source, "env", "a set variable must be reported as the env source");
+    assert.deepEqual(fromEnv.header, { authorization: "Bearer sk-env-value" });
+
+    const cacheEnv = await scratch();
+    try {
+      await rankByVector(vectorConfig(server, cacheEnv.dir, { vectorApiKeyEnv: NAME }), items, query);
+      assert.equal(server.state.authorizations.at(-1), "Bearer sk-env-value", "the environment must outrank the store");
+    } finally {
+      await cacheEnv.clean();
+    }
+
+    // Named but empty: not a key, so the store answers again.
+    process.env[NAME] = "";
+    const emptyValue = await resolveVectorAuth({ vectorApiKeyEnv: NAME });
+    assert.equal(emptyValue.source, "credential-store", "an empty variable must not shadow the store");
+
+    // Neither source: no header, and a keyless backend stays keyless.
+    const emptyHome = await mkdtemp(join(tmpdir(), "lcm-dsh-home-empty-"));
+    try {
+      process.env.DSH_HOME = emptyHome;
+      delete process.env[NAME];
+      assert.deepEqual(await resolveVectorAuth({ vectorApiKeyEnv: NAME }), { header: {}, source: "none" });
+
+      const cacheNone = await scratch();
+      try {
+        await rankByVector(vectorConfig(server, cacheNone.dir, { vectorApiKeyEnv: NAME }), items, query);
+        assert.equal(server.state.authorizations.at(-1), null, "no source must mean no header");
+      } finally {
+        await cacheNone.clean();
+      }
+    } finally {
+      await rm(emptyHome, { recursive: true, force: true });
+    }
+
+    // No configured name at all: "none" without reading any store, unchanged
+    // from the keyless behaviour this layer shipped with.
+    assert.deepEqual(await resolveVectorAuth({}), { header: {}, source: "none" });
+    assert.deepEqual(await resolveVectorAuth({ vectorApiKeyEnv: "" }), { header: {}, source: "none" });
+  } finally {
+    if (savedDshHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = savedDshHome;
+    if (savedName === undefined) delete process.env[NAME];
+    else process.env[NAME] = savedName;
+    await server.close();
+    await cache.clean();
+    await home.clean();
+  }
+});
+
+test("two models own different cache directories and never read each other's vectors", async () => {
+  // Flat, both models wrote into one directory and an old model's files were
+  // indistinguishable from live ones. The directory now names the owner.
+  const cache = await scratch();
+  const query = "how do we store the target token column";
+  const server = await embeddingServer({ [query]: [1, 0, 0], alpha: [1, 0, 0] });
+  const items = [{ seq: 1, text: "alpha" }];
+  try {
+    const modelA = vectorConfig(server, cache.dir, { vectorModel: "model-a" });
+    const modelB = vectorConfig(server, cache.dir, { vectorModel: "model-b" });
+    const cacheA = vectorCache(modelA);
+    const cacheB = vectorCache(modelB);
+
+    assert.notEqual(cacheA.dir, cacheB.dir, "each model must own its own directory");
+    assert.equal(dirname(cacheA.dir), cache.dir, "both directories sit under the configured root");
+    assert.match(cacheA.dir, /[0-9a-f]{12}-3$/, "the directory names the model digest and the vector width");
+
+    await rankByVector(modelA, items, query);
+    assert.equal(server.state.requests, 1);
+    const statsA = await vectorCacheStats(modelA);
+    assert.deepEqual(
+      { dir: statsA.dir, model: statsA.model, dim: statsA.dim, files: statsA.files },
+      { dir: cacheA.dir, model: "model-a", dim: 3, files: 2 },
+      "the query and the candidate are both on disk"
+    );
+    assert.equal(statsA.bytes, 2 * 3 * 4, "one headerless Float32 triple per file");
+
+    // The same text under a second model is a miss, so the backend is asked
+    // again instead of serving the first model's geometry.
+    await rankByVector(modelB, items, query);
+    assert.equal(server.state.requests, 2, "the second model must not reuse the first model's vectors");
+    const statsB = await vectorCacheStats(modelB);
+    assert.equal(statsB.files, 2);
+    assert.notEqual(statsB.dir, statsA.dir);
+    assert.notEqual(cacheA.path("alpha"), cacheB.path("alpha"), "the same text resolves to two files");
+
+    // A text only model A embedded is absent for model B.
+    await cacheA.set("gamma", Float32Array.from([0, 1, 0]));
+    assert.equal(await cacheB.get("gamma"), null, "model B must not read model A's vector");
+    assert.deepEqual(Array.from(await cacheA.get("gamma")), [0, 1, 0], "model A still reads its own");
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("vectorCacheStats reports what is on disk, and pruneForeignVectorCaches drops a stale model", async () => {
+  // No request is made here: these are the cache-management surfaces, and the
+  // root is the layer's own directory.
+  const cache = await scratch();
+  const currentConfig = {
+    vectorEnabled: true,
+    vectorBaseUrl: "http://127.0.0.1:1/v1",
+    vectorModel: "model-a",
+    vectorDim: 3,
+    vectorCacheDir: cache.dir
+  };
+  const staleConfig = { ...currentConfig, vectorModel: "model-b" };
+  try {
+    const currentCache = vectorCache(currentConfig);
+    const staleCache = vectorCache(staleConfig);
+
+    // Nothing cached yet: zeros, not an error, and the directory is still named.
+    const empty = await vectorCacheStats(currentConfig);
+    assert.deepEqual(empty, { dir: currentCache.dir, model: "model-a", dim: 3, files: 0, bytes: 0 });
+
+    await currentCache.set("alpha", Float32Array.from([1, 0, 0]));
+    await staleCache.set("alpha", Float32Array.from([0, 1, 0]));
+    await staleCache.set("beta", Float32Array.from([0, 0, 1]));
+
+    const currentStats = await vectorCacheStats(currentConfig);
+    assert.equal(currentStats.files, 1, "exactly the current model's file is counted");
+    assert.equal(currentStats.bytes, 3 * 4);
+    assert.deepEqual((await vectorCacheStats(staleConfig)).files, 2);
+
+    const pruned = await pruneForeignVectorCaches(currentConfig);
+    assert.deepEqual(pruned, { removed: 1, bytes: 2 * 3 * 4 }, "the stale model is reported byte for byte");
+    await assert.rejects(() => readdir(staleCache.dir), { code: "ENOENT" }, "the foreign directory must be gone");
+
+    const kept = await vectorCacheStats(currentConfig);
+    assert.deepEqual(kept, currentStats, "the current model's directory is untouched");
+    assert.deepEqual(Array.from(await currentCache.get("alpha")), [1, 0, 0], "and still readable");
+
+    assert.deepEqual(await pruneForeignVectorCaches(currentConfig), { removed: 0, bytes: 0 }, "a second prune is a no-op");
+
+    const absent = { ...currentConfig, vectorCacheDir: join(cache.dir, "absent") };
+    assert.deepEqual(await pruneForeignVectorCaches(absent), { removed: 0, bytes: 0 }, "a missing root prunes nothing");
+    const absentStats = await vectorCacheStats(absent);
+    assert.equal(absentStats.files, 0);
+    assert.equal(absentStats.bytes, 0);
+    assert.equal(absentStats.dir.startsWith(join(cache.dir, "absent")), true, "the missing path is still reported");
+  } finally {
     await cache.clean();
   }
 });

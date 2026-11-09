@@ -151,10 +151,27 @@ test("the tool row declares exactly the keys its resolveConfig consumes", () => 
   assert.deepEqual(Object.keys(tool.Config.dict).sort(), [...LEXICAL_KEYS, ...VECTOR_KEYS].sort());
 });
 
-test("the command row declares the lexical keys and no vector key it would ignore", () => {
-  // /lcm-search reads none of the vector keys, so declaring them would advertise
-  // configuration that does nothing.
-  assert.deepEqual(Object.keys(command.Config.dict).sort(), [...LEXICAL_KEYS].sort());
+test("the command row declares every key its resolveConfig reads, both command families", () => {
+  // This row mounts TWO families now: `commandSet: "search"` (the historical
+  // /lcm-search + /lcm-status + recall names) and `commandSet: "embed"`
+  // (/lcm-embed). /lcm-embed reads the vector block, so those keys are declared
+  // rather than merely tolerated.
+  //
+  // Declaring them is not cosmetic: schemastery's `validate` keeps an unknown
+  // key but `simplify` — whose output a fiber.update re-route writes back —
+  // drops it. An undeclared `commandSet` therefore survives until the operator
+  // changes a setting, then reverts the embed row to the default `search`
+  // family, which re-registers /lcm-search on a row where the search row
+  // already owns the name and the command registry aborts.
+  assert.deepEqual(
+    Object.keys(command.Config.dict).sort(),
+    [...LEXICAL_KEYS, "commandSet", ...VECTOR_KEYS].sort()
+  );
+  // The measured difference between the two schemastery entry points, which is
+  // why an undeclared key is a silent time bomb rather than a hard failure.
+  const probe = { rank: "density", commandSet: "embed", vectorEnabled: true };
+  assert.equal(command.Config(probe).commandSet, "embed", "validate keeps it");
+  assert.equal("commandSet" in command.Config.simplify(probe), true, "and simplify keeps it too, now that it is declared");
 });
 
 test("rank's enum matches the modes each row accepts, vector ranks included only where they route", () => {

@@ -369,6 +369,37 @@ accepting one it would ignore: it is answered inline at a prompt, and a ~20 s
 stall is a thing a human feels, while the tool is where a wording mismatch
 actually needs help.
 
+### Switching embedding models, and filling the cache
+
+Three things make the model swappable rather than merely configurable:
+
+| concern | how it is answered |
+|---|---|
+| a stale vector must never be read | the on-disk directory is `<cacheDir>/<12 hex of sha256(model)>-<dim>/`, and the per-text key is `sha256(model + "\n" + text)`; two models share neither a directory nor a key, and a wrong-width file is a miss (`bytes.byteLength !== dim * 4`) |
+| the stale model must be deletable as one unit | `pruneForeignVectorCaches(cfg)` removes every sibling directory under the root except the current model/width one, and reports `{removed, bytes}`; `vectorCacheStats(cfg)` reports `{dir, model, dim, files, bytes}` for the live one |
+| a fresh model must not cost a cold search | `/lcm-embed backfill` walks the same candidate set the search route embeds (`collectVectorItems`, exported from `src/search.js` for exactly this caller) and writes the same cache keys, so a warmed cache is the cache the next search reads; dry-run by default, `--apply` spends the calls, `--limit` keeps the newest N |
+
+Why one implementation of the candidate rule and not two: which texts get
+embedded is decided by four interacting rules — message-producing types only,
+nothing still on the surface, a token-priced window, and the 4 000-character
+slice that IS the cache key. A second copy would drift and fill keys no search
+ever looks up, which looks like a working backfill and changes nothing.
+
+Measured on a real 1M-window session (`bench`, no longer in the tree): 16 hidden
+texts, dry run 0 requests, `--apply` 16 embedded in 2.7 s, second `--apply`
+`already cached 16, embedded 0`, and `status` reporting 15 files / 92 160 bytes —
+15 because two events with identical bodies share one cache entry.
+
+**The bearer token is addressed, never stored.** `vectorApiKeyEnv` carries the
+NAME of a variable; `resolveVectorAuth` reads `process.env[name]` first and then
+the dsh credential store (`$DSH_HOME/.credentials.yaml`, top-level `refs:` block)
+so a hosted gateway needs no exported variable and the repository never holds a
+secret. `""` sends no header at all, which is what a keyless local backend wants.
+`/lcm-embed status` prints which source answered — the one line that separates
+"the layer is off" from "the layer is on and the gateway is refusing us".
+Measured: with no environment variable at all, `source` is `credential-store`,
+the header is `Bearer <35 chars>`, and the endpoint answers 200 with 1536 floats.
+
 ### How a configuration change reaches the running engine
 
 Every one of the 28 keys is ordinary — none is declared `.volatile()`, and the

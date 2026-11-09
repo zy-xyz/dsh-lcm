@@ -434,11 +434,18 @@ export async function searchSessionHybrid(session, patternSource, config, signal
  * remain unreachable by similarity, and only a lexical pattern reaches them.
  * `rank: "hybrid"` keeps those lexical hits in the answer.
  *
+ * Exported because `/lcm-embed backfill` must warm EXACTLY the texts this route
+ * later looks up. Two copies of this rule would drift — surface eligibility, the
+ * visible-set skip, the token pricing and the 4 000-character slice all decide
+ * which cache key is written — and a drifted copy would fill keys no search ever
+ * reads, which looks like a working backfill and changes nothing.
+ *
  * @param session - session-shaped value with events, optionally a surface.
  * @param bounds - `{ events, tokens }` ceilings (positive integers).
- * @returns `[{ seq, text }]` in log order.
+ * @returns `[{ seq, text }]` in log order, plus the priced window and the
+ *   hidden-event count (`null` when the session exposes no surface).
  */
-function collectVectorItems(session, bounds) {
+export function collectVectorItems(session, bounds) {
   const visible = visibleSeqs(session);
   const maxEvents = Number.isSafeInteger(bounds.events) ? bounds.events : Number.POSITIVE_INFINITY;
   const maxTokens = Number.isSafeInteger(bounds.tokens) ? bounds.tokens : Number.POSITIVE_INFINITY;

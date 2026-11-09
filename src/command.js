@@ -10,6 +10,13 @@
  * Lexical on purpose, not by omission: the semantic route lives on the
  * `search` tool (see `resolveConfig` for the measured reason).
  *
+ * The exception is `/lcm-embed`, which does not search at all: it inspects and
+ * fills the vector cache the `search` tool reads. Backfill is what makes the
+ * semantic route useful on an existing log — a session that predates the layer
+ * has no cached vectors, and every cold search pays for the same texts again.
+ * Mirroring lcm-x's `/lcm embed backfill`, the default is a dry run: the count
+ * is a preview until the operator types `--apply`.
+ *
  * @module dsh-lcm/command
  */
 import z from "@deepseek-ai/schemastery";
@@ -18,11 +25,32 @@ import { estimateEntryTokens } from "./compiler.js";
 import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
-import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, searchSession } from "./search.js";
+import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, collectVectorItems, searchSession } from "./search.js";
+import { VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats } from "./vectors.js";
 
 const name = "command-lcm-search";
 const inject = ["commands"];
 const USAGE = "Usage: /lcm-search <keyword|regex>";
+const EMBED_NAME = "lcm-embed";
+const EMBED_USAGE = "Usage: /lcm-embed status | /lcm-embed backfill [--apply] [--limit N]";
+
+/**
+ * lcm-x's backfill default. A pass is bounded because the cost is the texts,
+ * not the call: an unbounded first run on a 24k-event log would embed thousands
+ * of events before the operator sees a single line of output.
+ */
+const DEFAULT_BACKFILL_LIMIT = 200;
+
+/**
+ * Which command set one Loader row mounts.
+ *
+ * Command names are global in the registry and a duplicate name is a hard
+ * error ("command ... is already registered"), so the two rows that share this
+ * module cannot both register everything. `search` is the historical row (and
+ * the default, so an existing patch keeps working untouched); `embed` is the
+ * vector-cache row.
+ */
+const COMMAND_SETS = Object.freeze(["search", "embed"]);
 
 /**
  * Why /lcm-search has no per-call budget argument — decided, not overlooked.
@@ -56,14 +84,18 @@ function resolveConfig(config = {}) {
   if (!RANK_MODES.includes(rank)) {
     throw new Error("CommandRecallConfig: rank must be one of " + RANK_MODES.join(", ") + " — /lcm-search is lexical; set a vector rank on the lcm_search tool row instead");
   }
-  return { maxRecallTokens, maxSearchHits, legacyNames, rank };
+  const commandSet = config.commandSet ?? "search";
+  if (!COMMAND_SETS.includes(commandSet)) throw new Error("CommandRecallConfig: commandSet must be one of " + COMMAND_SETS.join(", "));
+  // Spread, not nest: the embed handlers read `enabled`, `model`, `dim`,
+  // `cacheDir` and the candidate bounds directly, the way the tool row does.
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank, commandSet, ...resolveVectorConfig(config) };
 }
 
 /**
  * Composition-time schema for this row — same contract as the tool row's, and
  * the same reason: without it the Loader skips validation, `apply` runs, and a
  * bad value is only caught by {@link resolveConfig} after the old instance is
- * already disposed. With it the value is refused before the restart.
+ * already disposed. With it a DECLARED value is refused before the restart.
  *
  * The `rank` enum is the SCHEMA HALF of the lexical-only decision
  * {@link resolveConfig} states: `RANK_MODES` only, so `vector` / `hybrid` are
@@ -71,11 +103,24 @@ function resolveConfig(config = {}) {
  * runtime check would put the two layers in disagreement — the schema accepting
  * what `apply` refuses — which is the defect class this schema removes.
  *
- * The vector keys are deliberately absent: this row reads none of them, so
- * declaring them would advertise configuration that does nothing. schemastery
- * cannot reject an unknown KEY (an object resolver re-merges undeclared keys
- * into its output), so an operator's stray `vectorEnabled` is ignored here
- * instead of failing — the rank enum is the part that must fail.
+ * `commandSet` and the whole vector block ARE declared here, because this module
+ * now mounts two different command families and `/lcm-embed` reads every one of
+ * those keys. Leaving them undeclared was measured to be unsafe, not merely
+ * loose: schemastery's `validate` keeps an unknown key, but `simplify` — the
+ * function whose output a `fiber.update` re-route writes back through the
+ * Loader — is a whitelist and drops it. Measured:
+ *
+ *   Config({rank:"density", commandSet:"embed", vectorEnabled:true})
+ *     validate -> {rank, commandSet, vectorEnabled}      (kept)
+ *     simplify -> {rank}                                 (dropped)
+ *
+ * So an undeclared `commandSet` survives until the operator changes any setting,
+ * then silently reverts the embed row to the default `search` family — which
+ * re-registers `lcm-search` and `lcm-status` on a row where the search row
+ * already owns those names, and the command registry aborts on a duplicate. That
+ * is the exact trap src/index.js documents for the engine row, and the reason
+ * /lcm-search being lexical is expressed by the `rank` ENUM rather than by
+ * omission.
  *
  * No `.default()` calls: see the tool row's schema for why (schemastery's
  * `simplify` would omit an explicitly-set value that equals the default).
@@ -84,7 +129,20 @@ const Config = z.object({
   rank: z.union([...RANK_MODES]),
   maxSearchHits: z.number().step(1).min(1),
   maxRecallTokens: z.number().step(1).min(1),
-  legacyNames: z.boolean()
+  legacyNames: z.boolean(),
+  commandSet: z.union([...COMMAND_SETS]),
+  // The vector block: read by /lcm-embed, inert on a `search` row. `vectorApiKeyEnv`
+  // is a variable NAME, so "" is legal (it means "send no Authorization header").
+  vectorEnabled: z.boolean(),
+  vectorBaseUrl: z.string().min(1),
+  vectorModel: z.string().min(1),
+  vectorDim: z.number().step(1).min(1),
+  vectorTopK: z.number().step(1).min(1),
+  vectorCandidateTokens: z.number().step(1).min(1),
+  vectorCandidateLimit: z.number().step(1).min(1),
+  vectorTimeoutMs: z.number().step(1).min(1),
+  vectorCacheDir: z.string().min(1),
+  vectorApiKeyEnv: z.string()
 });
 
 /** Execute one grep-based recall request against the calling agent's session. */
@@ -146,21 +204,29 @@ function defineRecallCommand(resolved, commandName = "lcm-search") {
 }
 
 /**
- * Register `/lcm-search` for every composed human-command adapter.
+ * Register this row's commands for every composed human-command adapter.
+ *
+ * One row, one command family: `commandSet` decides which, because the two
+ * rows that mount this module share one global registry and a duplicate name
+ * aborts the second row. Default `search` keeps a patch written before
+ * `/lcm-embed` existed working byte for byte.
  * @param ctx - context carrying the command registry.
- * @param config - `{ maxRecallTokens?, maxSearchHits? }`.
+ * @param config - `{ commandSet?, maxRecallTokens?, maxSearchHits?, vector* }`.
  */
 function apply(ctx, config) {
   const resolved = resolveConfig(config);
   ctx.effect(() => {
-    const disposers = [
-      ctx.commands.register(defineRecallCommand(resolved, "lcm-search")),
+    const disposers = [];
+    if (resolved.commandSet === "embed") {
+      disposers.push(ctx.commands.register(defineEmbedCommand(resolved)));
+    } else {
+      disposers.push(ctx.commands.register(defineRecallCommand(resolved, "lcm-search")));
       // G6.1: the state surface. A command, not a tool - it answers an operator's
       // question, and a tool would spend model attention on every request.
-      ctx.commands.register(defineStatusCommand())
-    ];
-    // Keep the original backend's command name working too.
-    if (resolved.legacyNames) disposers.push(ctx.commands.register(defineRecallCommand(resolved, "recall")));
+      disposers.push(ctx.commands.register(defineStatusCommand()));
+      // Keep the original backend's command name working too.
+      if (resolved.legacyNames) disposers.push(ctx.commands.register(defineRecallCommand(resolved, "recall")));
+    }
     return () => {
       for (const dispose of disposers) dispose();
     };
@@ -239,4 +305,219 @@ function defineStatusCommand(commandName = "lcm-status") {
   };
 }
 
-export { Config, USAGE, apply, buildStatus, defineRecallCommand, defineStatusCommand, inject, name, resolveConfig };
+/**
+ * The texts one backfill pass may consider: surface-eligible events the model
+ * cannot currently read.
+ *
+ * The rule is the search route's candidate window (src/search.js
+ * `collectVectorItems`), and it has to be the same rule or the cache would be
+ * warmed for events a search never asks about: message-producing types only
+ * (plumbing was never compacted content), events off the session surface (the
+ * visible tail is in context verbatim), newest first, priced in estimated
+ * tokens rather than event count because the endpoint's cost tracks length.
+ *
+ * The text is the slice the search route embeds (`VECTOR_TEXT_LIMIT`), so the
+ * cache key written here is the key a later search looks up. Empty text is
+ * dropped: the endpoint answers HTTP 400 for "" and there is no key to write.
+ *
+ * @param session - the calling agent's session.
+ * @param cfg - resolved vector settings (candidate bounds included).
+ * @returns `[{ seq, text }]` in log order.
+ */
+function embedCandidates(session, cfg) {
+  // The search route's own collector, not a copy.
+  //
+  // Which texts get embedded is decided by four interacting rules: message-
+  // producing types only, nothing still on the surface, a token-priced window,
+  // and the 4 000-character slice that IS the cache key. A second copy of those
+  // rules would fill keys the search route never looks up — a backfill that
+  // reports success and changes nothing. `collectVectorItems` is exported from
+  // ./search.js for exactly this caller.
+  const { items } = collectVectorItems(session, { events: cfg.candidateLimit, tokens: cfg.candidateTokens });
+  return items
+    .map((item) => ({ seq: item.seq, text: String(item.text ?? "").slice(0, VECTOR_TEXT_LIMIT) }))
+    .filter((item) => item.text.trim().length > 0);
+}
+
+/**
+ * Parse `/lcm-embed`'s raw input.
+ *
+ * No free-form input: the subcommand grammar is two verbs and two flags, and
+ * anything else is a typo the operator wants to see rather than a pattern the
+ * command would silently ignore.
+ * @param rawInput - the text after `/lcm-embed`.
+ * @returns `{ action, apply, limit }` or `{ error }`.
+ */
+function parseEmbedArgs(rawInput) {
+  const tokens = String(rawInput ?? "").trim().split(/\s+/).filter((token) => token.length > 0);
+  const action = tokens.shift();
+  if (action === "status") {
+    if (tokens.length > 0) return { error: EMBED_USAGE };
+    return { action: "status", apply: false, limit: DEFAULT_BACKFILL_LIMIT };
+  }
+  if (action !== "backfill") return { error: EMBED_USAGE };
+  let apply = false;
+  let limit = DEFAULT_BACKFILL_LIMIT;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index].toLowerCase();
+    if (token === "--apply") {
+      apply = true;
+      continue;
+    }
+    if (token === "--limit") {
+      const raw = tokens[index + 1];
+      const value = Number(raw);
+      if (raw === undefined || !Number.isInteger(value) || value < 1) return { error: "`--limit` must be a positive integer." };
+      limit = value;
+      index += 1;
+      continue;
+    }
+    return { error: EMBED_USAGE };
+  }
+  return { action: "backfill", apply, limit };
+}
+
+/**
+ * `/lcm-embed status` — what the cache holds and whether the layer is on.
+ *
+ * `dir` is reported even when it does not exist yet: the operator needs to know
+ * where a backfill would write. `rank` is stated as not applicable instead of
+ * invented — filling a cache never ranks anything, and the surface that does
+ * rank is the `lcm_search` tool.
+ * @param cfg - resolved settings (raw config is accepted too).
+ * @returns the human-readable status block.
+ */
+async function buildEmbedStatus(cfg) {
+  const stats = await vectorCacheStats(cfg);
+  // Which source answers the bearer token is the ONE line that separates "the
+  // layer is off" from "the layer is on and the gateway is refusing us" — the
+  // difference between a 401 and an unset flag is otherwise invisible from here.
+  const auth = await resolveVectorAuth(cfg);
+  return [
+    "lcm-embed status",
+    "  model: " + stats.model,
+    "  dim: " + stats.dim,
+    "  cache: " + stats.dir,
+    "  files: " + stats.files,
+    "  bytes: " + stats.bytes,
+    "  rank: n/a — /lcm-embed only fills the cache; the lcm_search tool ranks",
+    "  auth: " + describeAuth(auth.source, cfg.apiKeyEnv),
+    cfg.enabled
+      ? "  layer: enabled"
+      : "  layer: disabled — vectorEnabled is false, so a backfill would embed nothing"
+  ].join("\n");
+}
+
+/**
+ * One line describing where the bearer token comes from, never the token.
+ *
+ * `none` with a configured name is the interesting case: the layer is on, the
+ * endpoint needs a key, and the name resolves to nothing — that is a 401 on the
+ * wire and a lexical fallback in the search, and it must not look like a
+ * configuration that is merely switched off.
+ * @param source - "env" | "credential-store" | "none".
+ * @param name - the configured environment-variable name ("" when unset).
+ * @returns the human-readable line.
+ */
+function describeAuth(source, name) {
+  if (typeof name !== "string" || name.length === 0) return "none (no vectorApiKeyEnv; keyless backend)";
+  if (source === "env") return "env " + name;
+  if (source === "credential-store") return "credential store " + name;
+  return "none — " + name + " is set in neither the environment nor the credential store, so a hosted gateway will answer 401";
+}
+
+/**
+ * One backfill pass: measure, and embed only when asked.
+ *
+ * Dry run is the default because the cost is real (one provider request per 32
+ * texts) and the count is what an operator needs first. The cache is the
+ * short-circuit: a text whose vector is already on disk is never sent again,
+ * which is what makes a second `--apply` a no-op.
+ *
+ * @param session - the calling agent's session.
+ * @param cfg - resolved vector settings.
+ * @param options - `{ apply, limit }`.
+ * @returns `{ report, text }` with `{ scanned, alreadyCached, embedded, failed, limit, applied }`.
+ */
+async function embedBackfill(session, cfg, options = {}) {
+  const limit = options.limit ?? DEFAULT_BACKFILL_LIMIT;
+  const apply = options.apply === true;
+  const candidates = embedCandidates(session, cfg);
+  // `--limit` keeps the NEWEST N of the window: recent-but-compacted is the
+  // more likely answer, the order the search route ranks in as well.
+  const selected = candidates.slice(Math.max(0, candidates.length - limit));
+  const cache = vectorCache(cfg);
+  const pending = [];
+  let alreadyCached = 0;
+  for (const candidate of selected) {
+    if (await cache.get(candidate.text) !== null) alreadyCached += 1;
+    else pending.push(candidate.text);
+  }
+  let embedded = 0;
+  let failed = 0;
+  if (apply && pending.length > 0) {
+    const result = await embedTextsTolerant(cfg, pending);
+    for (let index = 0; index < pending.length; index += 1) {
+      const vector = result.vectors[index];
+      if (vector === undefined) {
+        failed += 1;
+        continue;
+      }
+      // The cache file is the entire product of a backfill; a write that
+      // silently vanished would report a pass that did not happen.
+      await cache.set(pending[index], vector);
+      embedded += 1;
+    }
+  }
+  const report = { scanned: selected.length, alreadyCached, embedded, failed, limit, applied: apply };
+  return { report, text: renderEmbedBackfill(cfg, candidates.length, pending.length, report, cache.dir) };
+}
+
+/** Render one backfill report. */
+function renderEmbedBackfill(cfg, windowSize, pending, report, dir) {
+  const lines = [
+    "lcm-embed backfill (" + (report.applied ? "apply" : "dry-run") + ")",
+    "  model: " + cfg.model,
+    "  cache: " + dir,
+    "  candidates: " + windowSize + " hidden text(s)",
+    "  scanned: " + report.scanned,
+    "  already cached: " + report.alreadyCached
+  ];
+  if (report.applied) {
+    lines.push("  embedded: " + report.embedded, "  failed: " + report.failed);
+  } else {
+    lines.push("  would embed: " + pending, "  note: preview only; no provider call was made");
+  }
+  lines.push("  limit: " + report.limit, "  applied: " + (report.applied ? "yes" : "no"));
+  if (!report.applied && pending > 0) lines.push("  next: /lcm-embed backfill --apply  (embeds the " + pending + " pending text(s))");
+  return lines.join("\n");
+}
+
+/**
+ * Build the `lcm-embed` command definition (for tests and introspection).
+ * @param resolved - validated config, vector settings spread in.
+ * @returns a registry-ready CommandDefinition.
+ */
+function defineEmbedCommand(resolved, commandName = EMBED_NAME) {
+  return {
+    name: commandName,
+    description: "Inspect and fill the vector cache for compacted events: status | backfill [--apply] [--limit N]",
+    handler: async (invocation) => {
+      const parsed = parseEmbedArgs(invocation.rawInput);
+      if (parsed.error !== undefined) return { kind: "error", text: parsed.error };
+      try {
+        if (parsed.action === "status") return { kind: "success", text: await buildEmbedStatus(resolved) };
+        if (parsed.apply && !resolved.enabled) return {
+          kind: "error",
+          text: "lcm-embed: the vector layer is disabled (vectorEnabled: false) — enable it on the command-lcm-embed row, then retry --apply."
+        };
+        const result = await embedBackfill(invocation.agent.session, resolved, parsed);
+        return { kind: "success", text: result.text };
+      } catch (error) {
+        return { kind: "error", text: error instanceof Error ? error.message : String(error) };
+      }
+    }
+  };
+}
+
+export { Config, EMBED_USAGE, USAGE, apply, buildEmbedStatus, buildStatus, defineEmbedCommand, defineRecallCommand, defineStatusCommand, embedBackfill, inject, name, parseEmbedArgs, resolveConfig };

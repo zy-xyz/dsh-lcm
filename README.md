@@ -236,6 +236,9 @@ the measured response stopped being truncated.
 | `lcm_search` | keyword/regex search over the whole durable log, including content a checkpoint omitted; optional `vector`/`hybrid` ranking when embeddings are configured |
 | `recall` / `search` | **the original backend's names, kept as aliases** — identical behaviour |
 | `/lcm-search <pattern>` | the human-side search; appends hits as a durable user message |
+| `/lcm-status` | checkpoints, depth, tokens saved |
+| `/lcm-embed status` | model, width, cache directory, files, **which source answers the bearer token**, and whether the layer is on |
+| `/lcm-embed backfill [--apply] [--limit N]` | preview (default) or fill the vector cache for compacted events — lcm-x's `/lcm embed backfill` |
 | `/recall <pattern>` | **the original command name, kept as an alias** |
 
 Nothing that already pointed at `recall`, `search` or `/recall` breaks when

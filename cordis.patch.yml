@@ -95,6 +95,31 @@
         vectorCandidateLimit: 500
     - id: command-lcm-search
       name: dsh-lcm/command
+    # The vector-cache surface, a second row of the same module. It must be a
+    # separate row because its vector settings belong to it alone, and it must
+    # say which commands it owns (`commandSet`): command names are global in
+    # the registry and a duplicate registration is a hard error, so the search
+    # row keeps /lcm-search, /lcm-status and /recall while this one owns
+    # /lcm-embed.
+    #
+    # Same endpoint, model, width and window as the tool row above, and the
+    # same DEFAULT cache root (.lcm-vectors): backfill would be pointless if it
+    # filled a cache the search tool never reads. The directory is per model
+    # (12 hex of the model digest + width), so sharing the root is safe.
+    #
+    # /lcm-embed backfill is dry-run by default, like lcm-x's `/lcm embed
+    # backfill`; `--apply` is the operator's switch to spend provider calls.
+    - id: command-lcm-embed
+      name: dsh-lcm/command
+      config:
+        commandSet: embed
+        vectorEnabled: true
+        vectorBaseUrl: http://10.126.126.4:20128/v1
+        vectorModel: mistral-proxy/codestral-embed
+        vectorDim: 1536
+        vectorApiKeyEnv: OMNIROUTE_API_KEY
+        vectorCandidateTokens: 100000
+        vectorCandidateLimit: 500
     - id: lcm-compaction-gate
       name: dsh-lcm/gate
 

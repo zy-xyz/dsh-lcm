@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.11.0 — 2026-11-09 — the embedding model is swappable, and the cache can be filled
+
+Three gaps stood between "the vector layer is configured" and "the vector layer
+works on an existing log". The reference implementation (lcm-x) answers all three
+with `/lcm embed backfill` plus a `vector_profiles` table keyed by model identity;
+this closes them the same way.
+
+### Added — `/lcm-embed status` and `/lcm-embed backfill [--apply] [--limit N]`
+
+`backfill` walks the same candidate set the search route embeds and writes the
+same cache keys, dry-run by default (lcm-x semantics: the count is a preview
+until the operator types `--apply`). `--limit` keeps the newest N, default 200.
+`status` reports model, width, cache directory, files, bytes, the auth source,
+and whether the layer is on at all.
+
+The candidate rule is NOT duplicated: `collectVectorItems` is now exported from
+`src/search.js` and the command calls it. Which texts get embedded is decided by
+four interacting rules — message-producing types only, nothing still on the
+surface, a token-priced window, and the 4 000-character slice that is the cache
+key — and a second copy would drift into filling keys no search ever reads.
+
+Measured on a real 1M-window session against the live endpoint: 16 hidden texts,
+dry run 0 requests, `--apply` 16 embedded / 0 failed in 2.7 s, second `--apply`
+`already cached 16, embedded 0`, `status` 15 files / 92 160 bytes (15 because two
+events with identical bodies share one entry).
+
+### Added — the bearer token can come from the dsh credential store
+
+`resolveVectorAuth(cfg)` reads `process.env[vectorApiKeyEnv]` first, then
+`$DSH_HOME/.credentials.yaml` (or `$HOME/.dsh/`) top-level `refs:` block, and
+returns `{ header, source }` with `source ∈ env | credential-store | none`. The
+secret appears only in the header — never logged, never returned. This is what
+makes a hosted gateway work with no exported variable and no secret in the
+repository; `""` still sends no header, so keyless backends are unchanged.
+
+Verified against the real store with the environment variable deleted: source
+`credential-store`, `Bearer <35 chars>`, endpoint 200 with 1536 floats.
+
+### Changed — the on-disk cache is per model
+
+Directory moved from `<cacheDir>/` to `<cacheDir>/<12 hex of sha256(model)>-<dim>/`.
+Per-text key unchanged. A stale model is now one deletable unit instead of
+indistinguishable live bytes: `vectorCacheStats(cfg)` reports what the current
+model holds and `pruneForeignVectorCaches(cfg)` removes every other sibling.
+No migration — entries written under the old flat layout are simply never read
+again (706 of them sit in this repository's `bench/.lcm-vectors`; delete by hand
+if wanted, `prune` only removes sibling directories).
+
+### Fixed — the embed row would have silently reverted to the search family
+
+`commandSet` and the vector block were first left undeclared in the command row's
+`Config`, on the belief that schemastery re-merges unknown keys. It does not:
+`validate` keeps them, `simplify` — whose output a `fiber.update` re-route writes
+back — drops them, measured. An undeclared `commandSet` therefore survived until
+the operator changed any setting, then reverted the embed row to the default
+`search` family and re-registered `/lcm-search` where the search row already owns
+it, which the command registry aborts on. Both the key and the vector block are
+now declared, and `test/compat.test.js` pins the row to the full set.
+
+Tests: 236 → 246.
+
+
 ## 0.10.0 — 2026-11-09 — the semantic route can authenticate, and points at OmniRoute's codestral-embed
 
 ### Added — `vectorApiKeyEnv`

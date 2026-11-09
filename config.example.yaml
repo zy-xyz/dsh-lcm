@@ -159,6 +159,30 @@ debug: false
 #
 # 候选只取「当前表面看不到的」那些事件。给 live 尾部做排序是纯浪费
 # （那些消息本来就在模型上下文里）；从没压缩过的会话因此没有候选，hybrid 结果等同词面。
+#
+# 密钥来源（vectorApiKeyEnv 给的是名字）按顺序找两处：
+#   1. 进程环境变量 <NAME>
+#   2. dsh 凭证库 $DSH_HOME/.credentials.yaml 顶层 refs: 下的 <NAME>: <value>
+# 都没有就不发 Authorization 头；托管网关会回 401，检索降级到词面并在结果里带一条 notice。
+# /lcm-embed status 的 auth: 那一行会明确写出当前是哪一处供的密钥。
+#
+# ── 向量缓存行（id: command-lcm-embed，name: dsh-lcm/command）──
+# 同一模块的第二个 Loader 行。命令名在注册表里是全局的，重名注册是硬错误，
+# 所以 commandSet 决定这一行挂哪一族：search（默认，/lcm-search + /lcm-status + /recall）
+# 或 embed（/lcm-embed）。下面是 embed 行：
+# commandSet: embed
+# vectorEnabled: true
+# vectorBaseUrl: "http://10.126.126.4:20128/v1"
+# vectorModel: "mistral-proxy/codestral-embed"
+# vectorDim: 1536
+# vectorApiKeyEnv: "OMNIROUTE_API_KEY"
+# vectorCandidateTokens: 100000
+# vectorCandidateLimit: 500
+# 缓存根目录保持默认 .lcm-vectors：backfill 填的是 lcm_search 要读的那份缓存，
+# 换个目录等于白填。目录本身按模型分（模型摘要前 12 位 hex + 维度），共用根目录是安全的。
+#
+# 换模型：改 vectorModel 与 vectorDim，旧模型的目录会留下来但再不会被读到。
+# 想把旧目录一起清掉用 pruneForeignVectorCaches；/lcm-embed 只填不删。
 
 # 调试日志落盘路径。默认 $DSH_HOME/compaction-debug.log。
 # debugLogPath: /tmp/compaction-debug.log
