@@ -507,8 +507,66 @@ function unquote(value) {
   return value;
 }
 
-/** POST one batch and decode its vectors, with a bounded wall clock. */
+/**
+ * Transient attempts per batch, including the first.
+ *
+ * Measured on the shipped endpoint (mistral-proxy/codestral-embed, 2026-11-09):
+ * eight consecutive 32-text batches returned 200 in 2.6/5.1/3.0/65.6/2.6/... s,
+ * and a longer run produced an HTTP 500 mid-way. The 500 aborted a whole backfill
+ * pass — one server-side hiccup and nothing was warmed — so a batch retries once
+ * before the failure is believed.
+ *
+ * A TIMEOUT is deliberately not retried: the wall clock was already spent, and a
+ * second 20 s wait inside a live search is worse than degrading to lexical.
+ */
+const TRANSIENT_ATTEMPTS = 2;
+
+/** Delay before the retry, long enough for a proxy hiccup to clear. */
+const TRANSIENT_RETRY_MS = 250;
+
+/**
+ * Whether a failure is worth one more identical request.
+ *
+ * 5xx and transport errors are the server's problem, so the same bytes may
+ * succeed. A payload verdict (400/413/422) and a timeout are not retried here:
+ * the first is about these bytes and belongs to the bisection path, the second
+ * has no budget left.
+ *
+ * @param error - the failure from one attempt.
+ * @returns true when the same request may be repeated once.
+ */
+function isTransientBackendFailure(error) {
+  if (!(error instanceof VectorBackendError)) return false;
+  if (error.poison === true) return false;
+  if (/timed out|aborted/u.test(error.message)) return false;
+  if (typeof error.status === "number") return error.status >= 500;
+  return true;
+}
+
+/**
+ * POST one batch, retrying a transient failure once.
+ *
+ * @param cfg - vector settings.
+ * @param batch - input strings.
+ * @param signal - optional caller abort signal.
+ * @returns one Float32Array per input.
+ */
 async function requestBatch(cfg, batch, signal) {
+  let last;
+  for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt += 1) {
+    try {
+      return await requestBatchOnce(cfg, batch, signal);
+    } catch (error) {
+      if (signal?.aborted === true || !isTransientBackendFailure(error)) throw error;
+      last = error;
+      if (attempt < TRANSIENT_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_MS));
+    }
+  }
+  throw last;
+}
+
+/** POST one batch and decode its vectors, with a bounded wall clock. */
+async function requestBatchOnce(cfg, batch, signal) {
   const url = cfg.baseUrl + "/embeddings";
   const controller = new AbortController();
   let timedOut = false;
@@ -542,6 +600,7 @@ async function requestBatch(cfg, batch, signal) {
       // 400/413/422 are verdicts on the request payload, so they can be about
       // one string; auth, routing, rate-limit and server errors cannot.
       error.poison = POISON_STATUS.has(response.status);
+      error.status = response.status;
       throw error;
     }
     let payload;

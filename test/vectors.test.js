@@ -133,6 +133,43 @@ async function inputSensitiveServer(table, isPoison) {
   };
 }
 
+/**
+ * A stand-in endpoint that fails its first `failures` requests with `status`.
+ *
+ * The shipped endpoint produced an HTTP 500 part-way through a long run and that
+ * single hiccup aborted an entire backfill pass, so one retry has to exist. This
+ * stub is what pins it.
+ *
+ * @param table - text to vector table.
+ * @param failures - how many leading requests to fail.
+ * @param status - the failure status.
+ * @returns base URL, request counter, and closer.
+ */
+async function flakyServer(table, failures, status = 500) {
+  const state = { requests: 0, bodies: [] };
+  const server = createServer(async (request, response) => {
+    state.requests += 1;
+    const body = await readJson(request);
+    const inputs = Array.isArray(body.input) ? body.input : [body.input];
+    state.bodies.push(JSON.stringify(inputs));
+    if (state.requests <= failures) {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "upstream hiccup" } }));
+      return;
+    }
+    const data = inputs.map((text, index) => ({ object: "embedding", index, embedding: table[text] }));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ object: "list", model: body.model, data, usage: { prompt_tokens: 0, total_tokens: 0 } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  return {
+    state,
+    baseUrl: "http://127.0.0.1:" + address.port + "/v1",
+    close: () => new Promise((resolve) => server.close(resolve))
+  };
+}
+
 /** The exact string the production backend refuses. */
 const POISON = "import x from 'rn-maps';";
 
@@ -238,6 +275,44 @@ test("a gateway key comes from the environment, and a keyless backend gets no he
     delete process.env[NAME];
     await server.close();
     await cache.clean();
+  }
+});
+
+test("one transient 5xx is retried, and a payload verdict is not", async () => {
+  // Measured on the shipped endpoint: an HTTP 500 part-way through a long run
+  // aborted a whole backfill pass, so a single server hiccup warmed nothing.
+  const cache = await scratch();
+  const query = "how do we store the target token column";
+  const flaky = await flakyServer({ [query]: [1, 0, 0], alpha: [1, 0, 0] }, 1);
+  try {
+    const ranked = await rankByVector(vectorConfig(flaky, cache.dir), [{ seq: 1, text: "alpha" }], query);
+    assert.deepEqual(ranked.map((entry) => entry.seq), [1], "the retry produced the vectors");
+    assert.equal(flaky.state.requests, 2, "one failure plus one successful retry");
+  } finally {
+    await flaky.close();
+    await cache.clean();
+  }
+
+  // A 400 is a verdict on these bytes: the bisection path handles it, and a
+  // retry would spend a call to be told the same thing. Every text here is
+  // refused, so the call still fails — that is the existing "refuses
+  // everything" contract — but it must fail WITHOUT doubling the request count.
+  const cache2 = await scratch();
+  const bad = await flakyServer({}, 99, 400);
+  try {
+    await assert.rejects(rankByVector(vectorConfig(bad, cache2.dir), [{ seq: 1, text: "alpha" }], query), /HTTP 400/u);
+    // The bisection path legitimately sends DIFFERENT payloads (smaller batches,
+    // then a cleaned variant), so the property is not a request count: it is that
+    // no identical payload is ever sent twice. A retry would repeat one verbatim.
+    const seen = new Set();
+    for (const body of bad.state.bodies) {
+      assert.equal(seen.has(body), false, "a payload verdict must not resend the same body: " + body.slice(0, 60));
+      seen.add(body);
+    }
+    assert.ok(bad.state.requests > 1, "the bisection did run, so this is not a trivially passing assertion");
+  } finally {
+    await bad.close();
+    await cache2.clean();
   }
 });
 

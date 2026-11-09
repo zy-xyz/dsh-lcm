@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.11.1 — 2026-11-09 — the remote endpoint is slow, so the layer is tuned for it
+
+First live search after switching to `mistral-proxy/codestral-embed` degraded to
+lexical: `vector backend unreachable: … timed out after 20000ms`. The auth path
+worked (a 401 would have said so) and the model was right; the SHAPE of the layer
+was tuned for the backend it replaced.
+
+Measured on the shipped endpoint, eight consecutive 32-text batches:
+
+```
+32 x 4000 chars -> 200 2641ms
+32 x 4000 chars -> 200 5126ms
+32 x 1000 chars -> 200 3011ms
+32 x 1000 chars -> 200 65555ms   <- the tail
+32 x 4000 chars -> 200 2570ms
+```
+
+A local LM Studio answered in ~30 ms/text; this endpoint answers in 2.6-5.1 s per
+batch with a 65.6 s tail, and a longer run produced one HTTP 500. Three changes
+follow from that.
+
+### Fixed — one HTTP 500 aborted a whole backfill pass
+
+`requestBatch` now retries once on a transient failure (5xx or transport) after
+250 ms, and never retries a timeout: the wall clock was already spent, and a
+second 20 s wait inside a live search is worse than degrading to lexical. A
+payload verdict (400/413/422) is still never retried — that belongs to the
+bisection path. Pinned by a stub server that fails the first request and by one
+that refuses every payload, with the assertion that no identical body is sent
+twice.
+
+### Fixed — a backfill wrote nothing until every batch returned
+
+`embedBackfill` embedded the whole pending set in one call and only then wrote
+the vectors, so a stall or a 5xx discarded every batch before it: measured, one
+65 s stall plus one 500 lost a 76-event pass entirely. It now embeds one
+`MAX_EMBED_BATCH` (32) at a time and writes as each returns, so paid work
+survives and a re-run resumes from the cache. A batch the endpoint refuses
+outright is counted in `failed` instead of vanishing.
+
+### Changed — the candidate window and the timeout are sized for a slow endpoint
+
+| key | before | after |
+|---|---|---|
+| `vectorCandidateTokens` (search row) | `100000` (~200 events, ~7 batches) | `30000` (~60 events, 2 batches) |
+| `vectorTimeoutMs` (search row) | default `20000` | `30000` |
+| `vectorTimeoutMs` (backfill row) | default `20000` | `240000` |
+
+The search row has to answer interactively, so it keeps a short leash and
+degrades; the backfill row is offline work and waits out the tail. Once the cache
+is warm the window costs nothing, which is what `/lcm-embed backfill` is for.
+
+Measured after warming three sessions into the live cache root: 100 vectors /
+874 KB written, 76 events for one session in 43.6 s and 24 for another in 2.5 s,
+`failed 0`.
+
+Tests: 246 → 247.
 ## 0.11.0 — 2026-11-09 — the embedding model is swappable, and the cache can be filled
 
 Three gaps stood between "the vector layer is configured" and "the vector layer

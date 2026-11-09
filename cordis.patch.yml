@@ -88,11 +88,20 @@
         #
         # Cost tracks length, not event count (32 texts: 27/33/60/119/230 ms per
         # text at 40/200/800/2000/4000 chars ~ 18 ms + 0.23 ms per token), so the
-        # primary bound is tokens. 100k admitted the newest 203 of 4213 compacted
-        # events and measured 26.7 s cold, 132 ms warm; the count cap only stops a
-        # log of one-line events from buying the same cost in tiny pieces.
-        vectorCandidateTokens: 100000
+        # primary bound is tokens.
+        #
+        # Retuned 2026-11-09 for a REMOTE endpoint. 100 000 used to be right for a
+        # local LM Studio at ~30 ms/text; mistral-proxy/codestral-embed measures
+        # 2.6-5.1 s per 32-text batch with a 65.6 s tail, so a 200-event window was
+        # ~7 batches and the first live search timed out at 20 s and fell back to
+        # lexical. 30 000 is ~60 events, two batches: a cold search finishes inside
+        # the timeout, and once /lcm-embed backfill has warmed the cache the window
+        # costs nothing anyway. Raise it again on a local endpoint.
+        vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
+        # 30 s, not the 20 s default: it covers a typical pair of batches plus one
+        # moderate stall, and still degrades rather than hanging on the 65 s tail.
+        vectorTimeoutMs: 30000
     - id: command-lcm-search
       name: dsh-lcm/command
     # The vector-cache surface, a second row of the same module. It must be a
@@ -120,6 +129,12 @@
         vectorApiKeyEnv: OMNIROUTE_API_KEY
         vectorCandidateTokens: 100000
         vectorCandidateLimit: 500
+        # A backfill pass is offline work, so it tolerates the endpoint's tail.
+        # Measured 2026-11-09 on mistral-proxy/codestral-embed: eight consecutive
+        # 32-text batches returned 200 at 2.6/5.1/3.0/65.6/2.6 s, and a longer
+        # run produced one HTTP 500. The search row keeps the 20 s default so an
+        # interactive search degrades quickly instead of hanging; this row waits.
+        vectorTimeoutMs: 240000
     - id: lcm-compaction-gate
       name: dsh-lcm/gate
 

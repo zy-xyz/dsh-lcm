@@ -26,7 +26,7 @@ import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, collectVectorItems, searchSession } from "./search.js";
-import { VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats } from "./vectors.js";
+import { MAX_EMBED_BATCH, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats } from "./vectors.js";
 
 const name = "command-lcm-search";
 const inject = ["commands"];
@@ -456,17 +456,36 @@ async function embedBackfill(session, cfg, options = {}) {
   let embedded = 0;
   let failed = 0;
   if (apply && pending.length > 0) {
-    const result = await embedTextsTolerant(cfg, pending);
-    for (let index = 0; index < pending.length; index += 1) {
-      const vector = result.vectors[index];
-      if (vector === undefined) {
-        failed += 1;
+    // One batch at a time, writing as each returns.
+    //
+    // A single call over the whole pending set looked simpler and was wrong: the
+    // vectors are only written AFTER it returns, so one stalled or refused batch
+    // discarded every batch before it. Measured on a 76-event window against a
+    // remote endpoint: one 65 s stall plus an HTTP 500 lost the entire pass. Per
+    // batch, the work already paid for survives, and a re-run resumes from the
+    // cache instead of starting over.
+    for (let start = 0; start < pending.length; start += MAX_EMBED_BATCH) {
+      const batch = pending.slice(start, start + MAX_EMBED_BATCH);
+      let result;
+      try {
+        result = await embedTextsTolerant(cfg, batch);
+      } catch (error) {
+        // The endpoint refused the whole batch (auth, routing, a dead server).
+        // Those texts stay uncached and are counted, not silently dropped.
+        failed += batch.length;
         continue;
       }
-      // The cache file is the entire product of a backfill; a write that
-      // silently vanished would report a pass that did not happen.
-      await cache.set(pending[index], vector);
-      embedded += 1;
+      for (let index = 0; index < batch.length; index += 1) {
+        const vector = result.vectors[index];
+        if (vector === undefined) {
+          failed += 1;
+          continue;
+        }
+        // The cache file is the entire product of a backfill; a write that
+        // silently vanished would report a pass that did not happen.
+        await cache.set(batch[index], vector);
+        embedded += 1;
+      }
     }
   }
   const report = { scanned: selected.length, alreadyCached, embedded, failed, limit, applied: apply };
