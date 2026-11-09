@@ -189,3 +189,90 @@ function readPackageJson(name) {
     : new URL(`../node_modules/${name}/package.json`, import.meta.url);
   return readFileSync(url, "utf8");
 }
+
+// ── the two layers must agree value by value, not only key by key ──────────
+
+/**
+ * One valid sample and one INVALID sample per declared key.
+ *
+ * The key-set test above proves the two layers know the same NAMES. This proves
+ * they agree on VALUES, which is the other half of the same defect class:
+ * `stallCooldownMs` was declared in the schema with `min(1)` and never validated
+ * in ./config.js, so the composition layer refused `0`, `1.5` and `"60000"`
+ * while the runtime accepted them — and a string there turned the stall deadline
+ * into `NaN`, silently disarming the hold (`Date.now() < NaN` is always false).
+ * A key that is typed in only one of the two layers is a key whose acceptance
+ * depends on which code path reads the configuration.
+ */
+const KEY_SAMPLES = {
+  thresholdRatio: { config: { thresholdRatio: 0.7 }, bad: { thresholdRatio: "0.7" } },
+  headroomTokens: { config: { headroomTokens: 4096 }, bad: { headroomTokens: 4096.5 } },
+  retainRatio: { config: { retainRatio: 0.125 }, bad: { retainRatio: "0.125" } },
+  retainTokens: { config: { retainTokens: 4096 }, bad: { retainTokens: "4096" } },
+  summarizationProvider: {
+    config: { summarizationProvider: "summary-provider", summarizationModel: "summary-model" },
+    bad: { summarizationProvider: 12 }
+  },
+  summarizationModel: {
+    config: { summarizationProvider: "summary-provider", summarizationModel: "summary-model" },
+    bad: { summarizationModel: 12 }
+  },
+  maxTokens: { config: { maxTokens: 8192 }, bad: { maxTokens: "8192" } },
+  compactionRetries: { config: { compactionRetries: 2 }, bad: { compactionRetries: 1.5 } },
+  maxOverflowRetries: { config: { maxOverflowRetries: 2 }, bad: { maxOverflowRetries: -1 } },
+  modelPolicies: { config: { modelPolicies: [{ provider: "p", model: "m" }] }, bad: { modelPolicies: "rows" } },
+  auto: { config: { auto: false }, bad: { auto: 1 } },
+  summaryRatio: { config: { summaryRatio: 0.15 }, bad: { summaryRatio: "0.15" } },
+  summaryFloorTokens: { config: { summaryFloorTokens: 768 }, bad: { summaryFloorTokens: 0 } },
+  checkpointCap: { config: { checkpointCap: 9000 }, bad: { checkpointCap: 0 } },
+  leafSpanTokens: { config: { leafSpanTokens: 24000 }, bad: { leafSpanTokens: 0 } },
+  condensationFanin: { config: { condensationFanin: 4 }, bad: { condensationFanin: 1 } },
+  stallCooldownMs: { config: { stallCooldownMs: 60000 }, bad: { stallCooldownMs: 0 } },
+  anchorPointers: { config: { anchorPointers: false }, bad: { anchorPointers: "no" } },
+  emptySummaryRetries: { config: { emptySummaryRetries: 2 }, bad: { emptySummaryRetries: 1.5 } },
+  debug: { config: { debug: true }, bad: { debug: "yes" } },
+  debugLogPath: { config: { debugLogPath: "/tmp/lcm-surface.log" }, bad: { debugLogPath: false } },
+  vectorEnabled: { config: { vectorEnabled: true }, bad: { vectorEnabled: 1 } },
+  vectorBaseUrl: { config: { vectorBaseUrl: "http://127.0.0.1:1234/v1" }, bad: { vectorBaseUrl: 12 } },
+  vectorModel: { config: { vectorModel: "embed-model" }, bad: { vectorModel: 12 } },
+  vectorDim: { config: { vectorDim: 1024 }, bad: { vectorDim: 0 } },
+  vectorTopK: { config: { vectorTopK: 4 }, bad: { vectorTopK: 0 } },
+  vectorTimeoutMs: { config: { vectorTimeoutMs: 15000 }, bad: { vectorTimeoutMs: 0 } },
+  vectorCacheDir: { config: { vectorCacheDir: "/tmp/lcm-vectors-surface" }, bad: { vectorCacheDir: false } }
+};
+
+test("every declared key is typed the same way in both layers", () => {
+  assert.deepEqual(Object.keys(KEY_SAMPLES).sort(), [...CONFIG_KEYS].sort(), "the sample table must cover exactly the declared surface");
+  const disagreements = [];
+  for (const [key, sample] of Object.entries(KEY_SAMPLES)) {
+    const runtimeAccepts = accepts(() => resolveConfig(sample.config));
+    const schemaAccepts = accepts(() => LcmCompactionEngine.Config(sample.config));
+    if (!runtimeAccepts || !schemaAccepts) disagreements.push(`${key}: a valid value was refused (config.js ${runtimeAccepts}, schema ${schemaAccepts})`);
+    const runtimeRefuses = !accepts(() => resolveConfig(sample.bad));
+    const schemaRefuses = !accepts(() => LcmCompactionEngine.Config(sample.bad));
+    if (!runtimeRefuses || !schemaRefuses) disagreements.push(`${key}: an invalid value was accepted (config.js refuses ${runtimeRefuses}, schema refuses ${schemaRefuses})`);
+  }
+  assert.deepEqual(disagreements, [], "both layers must accept and refuse the same values: " + disagreements.join("; "));
+});
+
+test("stallCooldownMs is the key that regressed, and it now agrees", () => {
+  // Named separately because it is the measured defect, and because a table that
+  // only reports "no disagreements" is easy to satisfy by weakening a sample.
+  assert.equal(typeof resolveConfig({ stallCooldownMs: 60000 }).stallCooldownMs, "number");
+  for (const value of [0, -1, 1.5, "60000", Number.NaN]) {
+    assert.throws(() => resolveConfig({ stallCooldownMs: value }), /stallCooldownMs.*positive integer/u, "config.js must refuse " + JSON.stringify(value));
+    assert.throws(() => LcmCompactionEngine.Config({ stallCooldownMs: value }), "the schema must refuse " + JSON.stringify(value) + " too");
+  }
+  // and a NaN deadline is exactly what used to disarm the hold
+  assert.ok(Number.isNaN(Date.now() + Number("60000")) === false);
+});
+
+/** Whether one configuration call returns instead of throwing. */
+function accepts(call) {
+  try {
+    call();
+    return true;
+  } catch {
+    return false;
+  }
+}

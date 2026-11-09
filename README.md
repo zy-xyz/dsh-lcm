@@ -240,12 +240,33 @@ aliases and register only the LCM names.
 
 ## Install
 
+One command, no hand-editing of profile files:
+
 ```bash
-dsh plugin --profile web add dsh-lcm
+dsh plugin --profile web add <path-to-this-package-or-its-tarball>
 ```
 
-The bundle patch disables `compaction-basic` (one `ctx.compaction` per context)
-and inserts this engine plus its tools.
+That runs pnpm in the profile, then the plugin manager's own reconciliation
+(`reconcileBundleSelection`) registers the package in `dsh.profile.bundles`
+because this package declares `dsh.bundle.patch`. From then on the bundle patch is
+a layer of the profile: it stands `compaction-basic` down with `disabled: true`
+(one `ctx.compaction` per context — `config: {auto: false}` is NOT enough, the row
+still registers the service and this engine then fails to take the seam), inserts
+this engine plus its tools, and adds the preset-plane latch described in
+`cordis.patch.yml`. Restart the process to load it; nothing else needs touching.
+
+Verify without booting:
+
+```bash
+dsh --profile web --dump-config | grep -A1 -E 'id: compaction-basic|id: compaction-lcm'
+```
+
+Expected: `compaction-basic` carries `disabled: true`, and `compaction-lcm` is
+present. Remove it with `dsh plugin --profile web remove dsh-lcm`; the stock
+composition returns.
+
+`docs/PRODUCTION-INSTALL.md` carries the rollback commands and what was actually
+verified in a live profile.
 
 ## Design notes
 

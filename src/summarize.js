@@ -451,7 +451,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
 const ANCHOR_HEADING_RE = /^#{1,6}\s*逐字锚点/u;
 
 /** A line that already carries a pointer the model copied out of a child checkpoint. */
-const EXISTING_POINTER_RE = /\((?:seqs?\s+[\d,\s-]+)\)\s*$/u;
+const EXISTING_POINTER_RE = /\((?:seqs?\s+([\d,\s-]+))\)\s*$/u;
 
 /** Bullet or ordered-list marker in front of one anchor. */
 const BULLET_RE = /^(?:[-*+]|\d+[.)])\s+/u;
@@ -508,6 +508,10 @@ function buildSpanIndex(session, shadowedSeqs) {
   const parts = [];
   const starts = [];
   const seqs = [];
+  // Per-event folded body, kept alongside the concatenated haystack so a pointer
+  // the model COPIED out of a child checkpoint can be checked against the one
+  // event it names rather than against the span as a whole (see verify()).
+  const bodies = new Map();
   let cursor = 0;
   for (const seq of shadowedSeqs ?? []) {
     const body = spanBody(session, seq);
@@ -516,11 +520,32 @@ function buildSpanIndex(session, shadowedSeqs) {
     starts.push(cursor);
     seqs.push(seq);
     parts.push(folded);
+    bodies.set(seq, folded);
     cursor += folded.length + 1;
   }
   const haystack = parts.join("\n");
   return {
     haystack,
+    /**
+     * Whether one specific event's rendered body contains the anchor verbatim.
+     *
+     * Exists because a pointer is not self-validating: the model copies child
+     * checkpoints forward, and a checkpoint's text is a REWORDING of its span, so
+     * a string can be in the span and absent from the event the pointer names.
+     * Measured over 1054 attributed pointers in 46 real checkpoints: 1 (0.095%)
+     * named an event that does not contain its anchor (session-dd78fcfd,
+     * checkpoint seq 64, `命令: \`echo alpha\`, ... (seq 39)` — seq 39 is a
+     * checkpoint whose text is a reworded summary, not the literal). Small, but it
+     * is a pointer that sends lcm_expand to the wrong text, which is the one thing
+     * a pointer must never do.
+     * @param seq - seq the pointer names.
+     * @param anchor - literal anchor text.
+     * @returns true when that event's body holds the anchor.
+     */
+    verify(seq, anchor) {
+      const body = bodies.get(seq);
+      return body !== undefined && body.includes(anchor.toLowerCase());
+    },
     /**
      * First seq in the span whose rendered body contains the anchor verbatim.
      * @param anchor - literal anchor text.
@@ -658,6 +683,55 @@ function anchorContentOf(line) {
 }
 
 /**
+ * Seqs named by a pointer the model copied forward, with `a-b` ranges expanded.
+ *
+ * A copied pointer is a CLAIM, not provenance, so it has to be read back before
+ * it is trusted. See the verification pass in `attributeAnchorPointers`.
+ * @param line - one line of the summary.
+ * @returns the seqs the pointer names; empty when the line carries none.
+ */
+function pointerSeqsOf(line) {
+  const match = EXISTING_POINTER_RE.exec(line.trim());
+  if (match === null) return [];
+  const seqs = [];
+  for (const part of match[1].split(",")) {
+    const bounds = part
+      .trim()
+      .split("-")
+      .map((value) => Number(value.trim()));
+    if (bounds.length === 2 && Number.isInteger(bounds[0]) && Number.isInteger(bounds[1])) {
+      for (let seq = bounds[0]; seq <= bounds[1]; seq += 1) seqs.push(seq);
+    } else if (Number.isInteger(bounds[0])) {
+      seqs.push(bounds[0]);
+    }
+  }
+  return seqs;
+}
+
+/**
+ * One line with its trailing pointer removed, the text kept.
+ *
+ * Used when a copied pointer is provably wrong and the span holds the anchor
+ * nowhere: the pointer goes, the line stays. Dropping the line instead would
+ * throw away text that may well be real — only the PROVENANCE is disproven.
+ * @param line - one line of the summary.
+ * @returns the line without its pointer.
+ */
+function withoutPointer(line) {
+  return line.replace(EXISTING_POINTER_RE, "").replace(/\s+$/u, "");
+}
+
+/**
+ * One line carrying `(seq N)`, any previous pointer replaced rather than stacked.
+ * @param line - one line of the summary.
+ * @param seq - the verified seq.
+ * @returns the line with exactly one pointer.
+ */
+function withPointer(line, seq) {
+  return withoutPointer(line) + " (seq " + seq + ")";
+}
+
+/**
  * Order anchors worst-first for deletion when the section overflows.
  *
  * The instruction's own wording — 「唯一性优先、具体优先」 — made checkable
@@ -727,11 +801,30 @@ export function attributeAnchorPointers(text, session, shadowedSeqs) {
   // particular span happened to contain.
   if (index.haystack.length > 0) {
     for (let line = heading + 1; line < sectionEnd; line += 1) {
+      // A pointer the model copied out of a child checkpoint is a CLAIM, not
+      // provenance. A checkpoint's text is a REWORDING of the events it absorbed,
+      // so a copied pointer can name an event that does not contain the literal at
+      // all — and that pointer sends lcm_expand to the wrong text, which is the one
+      // failure a pointer must never have. Measured over 1054 attributed pointers
+      // in 46 real checkpoints: 1 wrong (session-dd78fcfd, checkpoint seq 64,
+      // `命令: \`echo alpha\`, \`echo beta\`, \`echo gamma\` (seq 39)`, where seq 39
+      // is a reworded checkpoint). Rare, cheap to check, and unrecoverable if wrong.
+      const copied = pointerSeqsOf(lines[line]);
+      if (copied.length > 0) {
+        const anchor = anchorContentOf(lines[line]);
+        if (anchor === null) continue;
+        if (copied.some((seq) => index.verify(seq, anchor))) continue;
+        // Not in the event it names. Re-attribute to the event that does hold it;
+        // when the span holds it nowhere, drop only the pointer and keep the text.
+        const seq = index.lookup(anchor);
+        lines[line] = seq === undefined ? withoutPointer(lines[line]) : withPointer(lines[line], seq);
+        continue;
+      }
       const anchor = anchorTextOf(lines[line]);
       if (anchor === null) continue;
       const seq = index.lookup(anchor);
       if (seq === undefined) continue;
-      lines[line] = lines[line].replace(/\s+$/u, "") + " (seq " + seq + ")";
+      lines[line] = withPointer(lines[line], seq);
     }
   }
   // Rebuild the section in one pass. A dropped line is not an anchor at all, so
@@ -761,7 +854,25 @@ export function attributeAnchorPointers(text, session, shadowedSeqs) {
     const worst = [...anchors].sort(byDeletionPriority).slice(0, anchors.length - ANCHOR_LINE_CAP);
     for (const row of worst) doomed.add(row);
   }
-  const kept = rows.filter((row) => !doomed.has(row)).map((row) => row.text);
+  const keptRows = rows.filter((row) => !doomed.has(row));
+  const kept = keptRows.map((row) => row.text);
+  // A silent cut reads as "this list is everything the span held". Measured on a
+  // real span: 300 in-span anchors kept 120, 180 dropped, and a
+  // /truncat|cut|omitted/ search over the checkpoint body found nothing — the
+  // reader cannot tell a complete anchor list from a capped one, which turns the
+  // cap into invisible loss. The note goes AFTER the list on its own line, so it
+  // consumes no anchor slot (the section still holds exactly ANCHOR_LINE_CAP
+  // anchors) and cannot be mistaken for an anchor; it is written in the section's
+  // own language, because the checkpoint follows the span's language, not this
+  // module's, and it names the recovery path each dropped string still has.
+  if (doomed.size > 0) {
+    const keptAnchors = anchors.length - doomed.size;
+    // Last line of the section region, after the list's own trailing blank line:
+    // the blank is what separates "anchor list" from "everything else", so a note
+    // before it would read as one more anchor to any consumer that counts lines up
+    // to that blank.
+    kept.push(`（逐字锚点已截断：保留 ${keptAnchors} / ${anchors.length} 条，其余请用 lcm_search 在原始日志中检索）`);
+  }
   return [...lines.slice(0, heading + 1), ...kept, ...lines.slice(sectionEnd)].join("\n");
 }
 

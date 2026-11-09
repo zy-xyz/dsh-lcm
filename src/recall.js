@@ -23,6 +23,25 @@ export const DEFAULT_MAX_RECALL_TOKENS = 16000;
 export const MAX_RECALL_SPAN = 1000;
 
 /**
+ * Widest per-call budget a caller may request, in density-aware tokens — the
+ * same kind of bound as MAX_RECALL_SPAN, on the output side instead of the
+ * input side: a span limit stops one selection from expanding into unbounded
+ * work, and this stops one expansion from filling the context it was called to
+ * save.
+ *
+ * The number is measured, not picked. Across 21 compacted sessions, 10630
+ * shadowed seqs were sampled: 2 exceeded the 16000 default and were truncated
+ * on every call. The largest was a tool result of 23251 tokens / 49930 chars
+ * that came back as 34621 chars (69.3%); raising the budget by hand returned it
+ * whole, so the bytes were never missing, only the channel was too narrow.
+ * 32768 is that largest measured event rounded up to the next power of two —
+ * ~41% headroom over 23251 for an event somewhat bigger than the sampled max —
+ * and it is exactly a quarter of a 128k-token window, so no single expansion
+ * can consume more than a quarter of a full context.
+ */
+export const MAX_RECALL_TOKENS = 32768;
+
+/**
  * Parse one seq selection string into ordered inclusive ranges.
  *
  * Accepted forms per comma-separated part: `12`, `3-7`, `seq 12`,
@@ -58,6 +77,46 @@ export function parseSeqSpec(input) {
     selections.push({ start, end });
   }
   return { selections, errors };
+}
+
+/**
+ * Resolve one caller-supplied recall budget against the configured default.
+ *
+ * The tool's `maxTokens` argument is the only way past DEFAULT_MAX_RECALL_TOKENS,
+ * and it is bounded here rather than in the handler so the clamp and the
+ * rejection live next to the constant that justifies them.
+ * @param requested - raw budget from the caller; `undefined`/`null` means "not given".
+ * @param fallback - the configured budget (`config.maxRecallTokens`).
+ * @returns the budget to enforce, clamped to {@link MAX_RECALL_TOKENS}.
+ * @throws RangeError when the value is not a positive integer.
+ */
+export function resolveRecallBudget(requested, fallback) {
+  if (requested === undefined || requested === null) return fallback;
+  if (typeof requested !== "number" || !Number.isInteger(requested) || requested <= 0) {
+    throw new RangeError(`maxTokens must be a positive integer (got ${JSON.stringify(requested)})`);
+  }
+  return Math.min(requested, MAX_RECALL_TOKENS);
+}
+
+/**
+ * The actionable tail appended after a truncation marker: what came back, of
+ * how much, and the argument that returns the rest.
+ *
+ * Deliberately not a paging cursor — the log is indexed by seq and the budget is
+ * applied to the whole call, so there is no offset to hand back. Re-calling with
+ * a larger budget IS the page.
+ * @param returned - the already-truncated text, marker included.
+ * @param full - the untruncated body.
+ * @param maxRecallTokens - the budget this call actually enforced.
+ * @returns one bracketed line, newline-separated from the text it follows.
+ */
+function recallBudgetNote(returned, full, maxRecallTokens) {
+  const cap = maxRecallTokens >= MAX_RECALL_TOKENS
+    ? `${MAX_RECALL_TOKENS} is the ceiling for maxTokens`
+    : `raise maxTokens (up to ${MAX_RECALL_TOKENS}) to restore the rest`;
+  return "\n[recall budget " + maxRecallTokens + " tokens: returned ~" + estimateEntryTokens(returned)
+    + " of ~" + estimateEntryTokens(full) + " tokens (" + returned.length + " of " + full.length
+    + " chars) — " + cap + "]";
 }
 
 /** Re-exported so existing importers keep working; the definition is in compiler.js. */
@@ -154,8 +213,10 @@ export function resolveRecallReference(session, type, id) {
  * Recall the full original content of the requested seqs from one session's
  * durable log. Message events project through `deriveEventMessage`; log-only
  * events render as a labeled data dump. The total output is bounded by
- * `config.maxRecallTokens`; a cut appends a provenance marker and remaining
- * requested seqs are accounted in `skipped`.
+ * `config.maxRecallTokens` (already resolved through
+ * {@link resolveRecallBudget} when a caller asked for a different budget); a cut
+ * appends a provenance marker plus the sizes and the argument that returns the
+ * remainder, and remaining requested seqs are accounted in `skipped`.
  * @param session - session-shaped value with `events` and `deriveEventMessage`.
  * @param selections - parsed inclusive ranges.
  * @param config - `{ maxRecallTokens }`.
@@ -189,7 +250,13 @@ export function recallSession(session, selections, config) {
       : `[seq ${seq}: ${event.type}]\n${JSON.stringify(event.data).slice(0, maxRecallTokens * 4)}`;
     const kept = truncateTokens(body, budget, "recall budget");
     budget -= estimateEntryTokens(kept.text);
-    if (kept.truncated) truncated = true;
+    if (kept.truncated) {
+      // The cut used to end at "…(truncated from recall budget)" and stop, which
+      // told the reader that bytes were missing but not that a bigger budget
+      // brings them back — the one thing they could act on.
+      truncated = true;
+      kept.text += recallBudgetNote(kept.text, body, maxRecallTokens);
+    }
     entries.push({ seq, text: kept.text, truncated: kept.truncated });
     seqs.push(seq);
   }

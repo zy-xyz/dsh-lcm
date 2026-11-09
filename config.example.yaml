@@ -75,6 +75,24 @@ summaryFloorTokens: 512
 # region 层的 shrink 保证（framed 摘要必须小于被替换的区间）。
 checkpointCap: 16384
 
+# 一次压缩最多吃掉多少 token。默认 24000（借自 lcm-x 的 leaf_chunk_tokens）。
+# 为什么要有这个上限：整段一次压完时，单次响应常被 provider 的上限截断，
+# 实测 147k 跨度一次压完 → 5/15 题只剩一节；切成 7 个 20-23k 的叶 → 7/7 六节齐全、finish=stop。
+# 上限不是越小越好：叶越多，固定前缀（system + tools 定义）每叶重发一次，
+# 成本按叶数线性涨。0 关闭上限（回到整段一次压完）。
+leafSpanTokens: 24000
+
+# 同深度 checkpoint 凑够几个就合并成上一层的一个节点。默认 4（同 lcm-x 的 condensation_fanin）。
+# **下限是 2，不是 1**：`fanin > 1` 是唯一会「跳过已在表面上的 checkpoint」的分支，
+# 设 1 等于把它和凝聚一起关掉 —— 每叶都从上一个 checkpoint 起，表面永远只有一个节点、深度一路涨。
+# 所以 1 在 schema 和 config 两层都会被拒绝。
+condensationFanin: 4
+
+# 「有压力但没东西可压」时的冷却时间（毫秒）。默认 60000。
+# 越阈值却选不出可压区间（保留尾部太大、span 低于下限）时，不必每个 step 重判一次：
+# 三个条件任一成立即解除 —— 存下了新 checkpoint、会话又长了 leafSpanTokens、或冷却到期。
+stallCooldownMs: 60000
+
 # 给摘要「逐字锚点」清单里的每一条事后补上 (seq N) 指针，让 lcm_expand 可以直接跟进，
 # 不必先 lcm_search 猜一次。归因只扫被压缩区间，锚点在该区间里逐字找不到就不加指针。
 # 纯本地计算、零网络、零额外 token，所以默认 true；设 false 输出与不开启时逐字节相同。

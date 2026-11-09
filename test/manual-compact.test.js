@@ -209,11 +209,14 @@ test("compactNow runs the manual /compact transaction on a real Session", { skip
   const startEvent = session.eventAt(startSeq);
   const summaryEvent = session.eventAt(summarySeq);
   // The durable field is the CONTRACT name `maxTokens` (dsh-compaction/types), and
-  // its meaning here is "the length the instruction asked for", not "the cap the
-  // request carried" — the request carries none. Renaming the field to match the
-  // new meaning was rejected by the released event validator, so the name stays
-  // and the meaning is documented instead.
-  assert.equal(summaryEvent.data.maxTokens, engine.effectiveMaxTokens(result.shadowedTokenCount), "the record names the instruction target");
+  // its meaning is the contract's: "the generation cap the summarize call sent".
+  // It used to carry the instruction TARGET under a comment claiming the request
+  // carried no cap — false since the ceiling became `max(4096, 2 x target)`, and
+  // measured here: 512 written against a request that actually carried 4096.
+  // Asserted against the options the transport received, so the record cannot
+  // drift away from the request it describes.
+  assert.equal(summaryEvent.data.maxTokens, llmCalls[0].maxTokens, "the record states the cap the request actually carried");
+  assert.equal(summaryEvent.data.maxTokens, Math.max(4096, 2 * engine.effectiveMaxTokens(result.shadowedTokenCount)), "which is max(4096, 2 x target)");
   assert.equal("targetTokens" in summaryEvent.data, false, "no out-of-contract field is written");
   const endEvent = session.eventAt(endSeq);
   assert.equal(endEvent.data.error, undefined, "a clean manual compaction records no error");

@@ -10,7 +10,10 @@
  *      \`contextPressure\` under-report forever and the threshold never fire.
  *   2. The durable field names are the CONTRACT's: \`maxTokens\`, never
  *      \`targetTokens\`. The released v0/v1 payload validator rejects an
- *      unexpected member, so a renamed field is a record the migration refuses.
+ *      unexpected member, so a renamed field is a record the migration refuses —
+ *      and the field's VALUE is the contract's too: the generation cap the
+ *      summarize call sent, not the instruction target this backend used to
+ *      write under a comment that claimed no cap was sent at all.
  *   3. A summarization failure must be an \`Error\` (specifically \`LlmError\`),
  *      not the frozen plain snapshot the LLM seam reports, because every
  *      downstream recovery listener routes on \`instanceof LlmError\`.
@@ -115,7 +118,8 @@ function stubCompile(prepared) {
     capped: false,
     provider: "p",
     model: "m",
-    targetTokens: 1024
+    // The cap the summarize call SENT (`max(4096, 2 x target)`), not the target.
+    maxTokens: 4096
   };
 }
 
@@ -212,7 +216,14 @@ test("compaction/summary writes maxTokens and never targetTokens", { skip }, asy
 
   const summary = summaryEventOf(session);
   assert.equal("maxTokens" in summary.data, true, "the contract field maxTokens must be written");
-  assert.equal(summary.data.maxTokens, 1024, "it carries the summary target the instruction named");
+  // The contract type documents this field as "the generation cap the summarize
+  // call sent" (dsh-compaction/types), and `dsh-compaction-basic` fills it from
+  // its own `options.maxTokens`. The instruction TARGET used to be written here
+  // instead, under a comment claiming no cap was sent - while the request carried
+  // `max(4096, 2 x target)`. So the record under-reported the cap by 2x or more,
+  // which is exactly the number an operator reads to judge "could the response
+  // have been cut off?".
+  assert.equal(summary.data.maxTokens, 4096, "it carries the completion cap the call sent, not the instruction target");
   assert.equal("targetTokens" in summary.data, false, "targetTokens is not a compaction/summary member");
 });
 

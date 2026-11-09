@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { resolveConfig } from "../src/config.js";
+import { LcmCompactionEngine } from "../src/index.js";
 import { attributeAnchorPointers, summarizeLeaf } from "../src/summarize.js";
 
 /** A session whose events each render one line of text. */
@@ -181,6 +182,94 @@ test("overflow cuts the anchor the span repeats most before a one-off literal", 
   assert.ok(section.includes("- uniq_0 (seq 0)"), "a literal mentioned once keeps its slot");
   assert.ok(!section.some((line) => line.startsWith("- uniq_128")), "ties drop the latest-listed");
 });
+
+test("a copied pointer that names the wrong event is re-attributed to the right one", () => {
+  // The measured shape: checkpoint seq 39 is a REWORDED summary, so a pointer
+  // copied forward from it names an event whose text does not hold the literal.
+  const session = sessionOf([
+    "命令: `echo alpha`, `echo beta`, `echo gamma`",
+    "这一条是被改写过的摘要，原命令不在里面"
+  ]);
+  const summary = ["## 逐字锚点", "- 命令: `echo alpha`, `echo beta`, `echo gamma` (seq 1)", "", "## 目标与约束", "- 写报告"].join("\n");
+  const lines = attributeAnchorPointers(summary, session, [0, 1]).split("\n");
+  assert.equal(lines[1], "- 命令: `echo alpha`, `echo beta`, `echo gamma` (seq 0)", "the verified event wins over the copied claim");
+
+  // A copied pointer that IS right costs nothing: the line comes back byte-identical.
+  const correct = "## 逐字锚点\n- 命令: `echo alpha`, `echo beta`, `echo gamma` (seq 0)\n";
+  assert.equal(attributeAnchorPointers(correct, session, [0, 1]), correct);
+});
+
+test("a pointer whose anchor is nowhere in the span is dropped, the text kept", () => {
+  // Only the provenance is disproven: the line may still be real text, so it stays.
+  const session = sessionOf(["span 里没有这条命令", "也没有别的"]);
+  const summary = ["## 逐字锚点", "rm -rf /tmp/never_written (seq 1)", "", "## 目标与约束", "- 写报告"].join("\n");
+  const lines = attributeAnchorPointers(summary, session, [0, 1]).split("\n");
+  assert.equal(lines[1], "rm -rf /tmp/never_written", "a provably wrong pointer goes; the text does not");
+  assert.equal(lines[4], "- 写报告");
+});
+
+test("a capped anchor section says how many it kept, and the note is not an anchor", () => {
+  // The measured run: 300 in-span anchors, 120 kept, 180 dropped, nothing said.
+  const probes = Array.from({ length: 300 }, (_, index) => `probe_${String(index).padStart(3, "0")}`);
+  const session = sessionOf(["span head", ...probes]);
+  const summary = ["## 逐字锚点", ...probes.map((probe) => `- ${probe}`), "", "## 目标与约束", "- 把结论写进报告"].join("\n");
+  const lines = attributeAnchorPointers(summary, session, session.events.map((event) => event.seq)).split("\n");
+  const section = lines.slice(1, lines.indexOf(""));
+  assert.equal(section.length, 120, "the note consumes no anchor slot");
+  const note = lines.find((line) => /保留 120 \/ 300/.test(line));
+  assert.ok(note !== undefined, "the cut is stated, not silent");
+  assert.ok(!section.includes(note), "and the note is not counted as an anchor");
+  const noteAt = lines.indexOf(note);
+  assert.ok(noteAt > lines.indexOf("") && noteAt < lines.indexOf("## 目标与约束"), "it closes the section, before the next heading");
+  assert.match(note, /lcm_search/u, "and it names where the dropped strings still live");
+});
+
+test("a section that drops nothing carries no note", () => {
+  const out = attributeAnchorPointers(SUMMARY, sessionOf(SPAN), [0, 1, 2]);
+  assert.ok(!/保留 \d+ \/ \d+/u.test(out), "no cut, no claim of one");
+});
+
+test("the deterministic rung says it was cut only when it cut something", async () => {
+  // Measured: a 6-node span that fit completely (397 tokens, 6/6 seqs present) still
+  // told the reader the tail had been cut deterministically.
+  const fits = await compileDeterministic(6, 397);
+  assert.match(fits, /DETERMINISTIC fallback/, "fixture check: this is the deterministic rung");
+  assert.match(fits, /line 5 with some words here/, "all six seqs are present");
+  assert.ok(!/truncat/iu.test(fits), "a body that fit must not claim a cut");
+
+  const cut = await compileDeterministic(40, 100);
+  assert.match(cut, /truncat/iu, "a body that WAS cut still says so");
+  assert.match(cut, /lcm_search|lcm_expand/u, "and still names the recovery path");
+});
+
+/**
+ * Compile a span through the deterministic rung: the model answers with reasoning
+ * only, so compile() falls through to the no-model body.
+ * @param nodes - how many span events.
+ * @param shadowedTokens - the shrink bound the body is measured against.
+ * @returns the committed checkpoint entry text.
+ */
+async function compileDeterministic(nodes, shadowedTokens) {
+  const texts = Array.from({ length: nodes }, (_, index) => `line ${index} with some words here`);
+  const session = sessionOf(texts);
+  async function* reasoningOnly() {
+    yield { type: "block-start", index: 0, blockType: "reasoning" };
+    yield { type: "reasoning-delta", index: 0, text: "thinking" };
+    yield { type: "finish", reason: { kind: "stop" }, replayState: undefined };
+  }
+  const engine = Object.create(LcmCompactionEngine.prototype);
+  engine.config = resolveConfig({ summaryRatio: 0.12, summaryFloorTokens: 512, checkpointCap: 16384 });
+  engine.ctx = { llm: { stream: () => reasoningOnly() } };
+  const prepared = {
+    session,
+    start: 0,
+    end: nodes - 1,
+    shadowedSeqs: texts.map((_, index) => index),
+    shadowedTokenCount: shadowedTokens
+  };
+  const out = await engine.compile(prepared, { session, options: {} }, undefined);
+  return out.entries.map((entry) => entry.text).join("\n");
+}
 
 /** Minimal chunk stream: one text block then a normal finish. */
 async function* stubStream(text) {

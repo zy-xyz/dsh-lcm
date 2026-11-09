@@ -91,9 +91,19 @@
       name: dsh-lcm/gate
 
 # ── host plane ────────────────────────────────────────────────────────────
+# `disabled: true`, NOT `config: {auto: false}`.
+#
+# `auto: false` only turns off basic's automatic listeners; the row still
+# activates and still registers the `compaction` service, so our engine fails to
+# take the seam with "service \"compaction\" has been registered at
+# <BasicCompactionEngine>". Measured on a fresh `headless` profile with this
+# bundle installed: that error, "1 entry did not activate", and the profile left
+# with NO compaction engine at all (basic stood down by the same config, ours
+# rejected) — while `--dump-config` showed every row and looked correct. The web
+# profile only worked because @deepseek-ai/dsh-web-app happens to set
+# `disabled: true` on this same row; a profile without that bundle had nothing.
 - id: compaction-basic
-  config:
-    auto: false
+  disabled: true
 
 # ── preset plane ──────────────────────────────────────────────────────────
 # One key each: the inject list is the whole patch. Entry inject lists are

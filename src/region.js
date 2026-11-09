@@ -456,7 +456,18 @@ async function compileCompaction(dependencies, prepared, agent, compactionId, so
       if (signal?.aborted === true) throw error;
       assertStable(dependencies, current.session, current);
       const recovered = dependencies.recover === undefined ? false : dependencies.recover(error, agent, current.shadowedSeqs, signal);
-      if (!recovered) throw error;
+      // `!== true`, not `!`. Measured: with an ASYNC listener on
+      // `compaction/summary-error` this loop treats its Promise as "recovered",
+      // re-derives the same selection, and calls the summarizer again — 10845
+      // model calls in 4 seconds, a 500 ms timer that never fired once (the
+      // microtask queue starved the event loop), and a durable
+      // `compaction/start` left stranded after SIGKILL. The contract says a
+      // listener returns `true` only after synchronously recording durable
+      // progress; a Promise is not that, and the host's `waterfall` is
+      // synchronous so it cannot await one. Today's only listener
+      // (`dsh-compaction-image-offload`) happens to be sync, which is why this
+      // never fired in production.
+      if (recovered !== true) throw error;
       current = prepareCompaction(dependencies, current.session, validateSurfaceRegion(current.session, current.start, current.end));
     }
   }
@@ -502,7 +513,7 @@ async function compileCompaction(dependencies, prepared, agent, compactionId, so
     summary,
     provider: compiled.provider,
     model: compiled.model,
-    targetTokens: compiled.targetTokens,
+    maxTokens: compiled.maxTokens,
     usage: compiled.usage,
     rawOutput: compiled.rawOutput,
     checkpointMessage,
@@ -546,10 +557,36 @@ export function assertSelectedSpanStable(dependencies, session, prepared) {
   if (!isDeepStrictEqual(dependencies.meter.measure(session).nodes.slice(current.startIdx, current.endIdx + 1), prepared.selectedNodes)) throw new SurfaceChangedError("compaction: the selected span was rewritten during compilation");
 }
 
+/**
+ * Drop every `undefined`-valued member from one event payload.
+ *
+ * `Session.append` validates `snapshotJsonValue(data)` and rejects a payload that
+ * carries ANY `undefined` value — verified directly:
+ * `snapshotJsonValue({ provider: undefined, model: "m" })` returns `undefined`, so
+ * the append throws `session event "compaction/summary" carries
+ * non-JSON-serializable data`. By then `compaction/start` has landed, so the whole
+ * transaction dies as `ManualCompactionError("commit")` and the surface never
+ * shrinks: the ladder's guaranteed-convergence rung was the one rung that could
+ * not finish.
+ *
+ * Omitting the member instead of throwing is deliberate. Convergence is what that
+ * rung exists for, and a missing optional member in the durable record is
+ * recoverable where a stranded compaction lock is not. The REQUIRED identity is
+ * filled at its source (`./index.js` compile() names the resolved summarization
+ * target), so nothing is dropped on any path that exists today; this is the guard
+ * that keeps a future rung from reintroducing the unappendable payload.
+ * @param payload - one freshly built event payload.
+ * @returns the same object without `undefined`-valued members.
+ */
+function withoutUndefined(payload) {
+  for (const key of Object.keys(payload)) if (payload[key] === undefined) delete payload[key];
+  return payload;
+}
+
 /** Append one completed checkpoint record and replacement body without yielding. */
 function commitCompactionBody(session, startEvent, compiled) {
-  const { start, end, shadowedSeqs, shadowedTokenCount, shadowedRouteTokenCount, summary, provider, model, checkpointMessage, targetTokens, usage, rawOutput } = compiled;
-  const summaryEvent = session.append("compaction/summary", {
+  const { start, end, shadowedSeqs, shadowedTokenCount, shadowedRouteTokenCount, summary, provider, model, checkpointMessage, maxTokens, usage, rawOutput } = compiled;
+  const summaryEvent = session.append("compaction/summary", withoutUndefined({
     compactionId: startEvent.data.compactionId,
     ...startEvent.data.sourceCommandId === undefined ? {} : { sourceCommandId: startEvent.data.sourceCommandId },
     summary,
@@ -561,15 +598,18 @@ function commitCompactionBody(session, startEvent, compiled) {
     shadowedTokenCount,
     provider,
     model,
-    // The contract field is `maxTokens` (dsh-compaction/types, and the released
-    // v0/v1 payload validator rejects anything else as an unexpected member).
-    // The value is the summary TARGET this backend asked the model to aim for —
-    // no request cap was sent (see summarize.js) — so the field name is the
-    // contract's, while the semantic stays "the number the instruction named".
-    ...targetTokens === undefined ? {} : { maxTokens: targetTokens },
+    // `maxTokens` is the contract field for "the generation cap the summarize call
+    // sent" (dsh-compaction/types), and that is exactly what it now carries: the
+    // request sends `max(4096, 2 x target)` (see summarize.js), which is NOT the
+    // target this backend used to write here. The old comment claimed no cap was
+    // sent at all, which stopped being true when the ceiling was introduced — the
+    // record then under-reported the cap by 2x or more, so the one thing an
+    // operator reads it for ("could the response have been cut off?") was wrong.
+    // Absent when no call produced the body (the deterministic rung).
+    ...maxTokens === undefined ? {} : { maxTokens },
     ...usage === undefined ? {} : { usage },
     ...rawOutput === undefined ? {} : { rawOutput, llmStreamCall: true }
-  });
+  }));
   session.append("user/message", checkpointMessage, {
     // The positional replacement contract is EXACTLY {op, startSeq, endSeq} —
     // three own keys, both seqs non-negative safe integers. Anything else is

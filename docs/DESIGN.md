@@ -330,6 +330,36 @@ accepting one it would ignore: it is answered inline at a prompt, and a ~20 s
 stall is a thing a human feels, while the tool is where a wording mismatch
 actually needs help.
 
+### How a configuration change reaches the running engine
+
+Every one of the 28 keys is ordinary — none is declared `.volatile()`, and the
+engine snapshots its resolved config into a frozen `this.config` in the
+constructor, so there is nothing to update in place anyway. What happens on an
+edit is therefore decided entirely by the host, and the answer differs by path:
+
+- **Settings UI / `configEditor.edit`** — live, no process restart. The editor
+  validates the candidate, writes the profile patch atomically, and reconciles
+  through the normal Loader path; the loader then disposes that one row and
+  re-runs the plugin with the new config
+  (`cordis-plugin-loader/lib/index.js:498-521` → `_patchContext` →
+  `fiber.update(config, true)` → `restart()` in `cordis/lib/index.js:752-775`).
+- **Hand-editing the profile's `cordis.patch.yml`** — the same re-run *if* the
+  `hmr` row is mounted (`dsh-base` mounts it by default and it chokidar-watches
+  exactly `profile.patchPath`, `dsh-hmr/lib/index.js:850-872`). Without `hmr`
+  nothing watches that file anywhere in this host — there is no `fs.watch`,
+  `watchFile` or SIGHUP path in the compaction or profile-boot code — so the
+  process must be restarted.
+- **A bad value** fails at activation, and the row is left inactive rather than
+  silently misconfigured: the schema rejects what it can at composition time, and
+  `resolveConfig` throws for the rest. A failed hot update leaves
+  `entry.options.config` holding the rejected value while the old instance keeps
+  serving, so the next boot retries the same failure — the error is logged and the
+  boot continues, which is why the value must be fixed rather than ignored.
+
+One consequence worth stating: because the engine reads all 28 keys once at
+construction, `/lcm-status` and the debug log reflect the config of the *running*
+instance, not the file on disk.
+
 `/lcm-search` and `/lcm-status` are commands, so a human types them and a model
 cannot (`src/command.js:84`, `src/command.js:156`). I made `/lcm-status` a command
 rather than a tool on purpose: it answers an operator's question, and a tool would

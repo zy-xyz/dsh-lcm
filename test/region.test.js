@@ -16,10 +16,13 @@ import test from "node:test";
 import { compactSurfaceRegion, selectCompactableRange, assertNoActiveCompaction } from "../src/region.js";
 
 let foldSurface;
+let snapshotJsonValue;
 try {
   ({ foldSurface } = await import("@deepseek-ai/dsh-session/surface"));
+  ({ snapshotJsonValue } = await import("@deepseek-ai/dsh-util-values"));
 } catch {
   foldSurface = null;
+  snapshotJsonValue = undefined;
 }
 
 const skip = foldSurface === null;
@@ -56,6 +59,13 @@ function makeSession(events) {
     deriveEventMessage: (event) => event.message ?? event.data?.message ?? null,
     requestHeader: () => ({ config: { provider: "p", model: "m" }, tools: [] }),
     append(type, data, metadata) {
+      // The payload rule the real `Session.append` enforces, and the one that made
+      // the deterministic rung uncommittable: `snapshotJsonValue` returns `undefined`
+      // for any object holding an `undefined` value, and the harness then throws
+      // 'session event "<type>" carries non-JSON-serializable data'. Reproducing it
+      // here is what turns the fixture from "shape-plausible" into "accepts exactly
+      // what the log accepts".
+      if (snapshotJsonValue(data) === undefined) throw new Error(`session event "${type}" carries non-JSON-serializable data`);
       const event = withMarker({ type, seq: list.length, time: 1_790_000_000_000 + list.length, data, ...(metadata ?? {}) });
       // Replay the whole log through the canonical fold on every append: this is
       // the assertion that would have caught the wrong surfaceOp shape.
@@ -102,7 +112,7 @@ function makeDeps(overrides = {}) {
     capped: false,
     provider: "p",
     model: "m",
-    targetTokens: 1024
+    maxTokens: 4096
   }));
   return {
     meter: {
@@ -270,7 +280,7 @@ test("compactNow compacts an idle session and returns a durable result", { skip 
     entries: [{ seq: prepared.shadowedSeqs[0], text: "## 目标与约束\n- manual", kind: "checkpoint" }],
     stats: { nodes: prepared.shadowedSeqs.length, entries: 1, toolCalls: 0, toolResults: 0, images: 0, documents: 0,
              reasoningElided: 0, noiseElided: 0, checkpoints: 1, tokens: 8, elidedToolRows: 0, elidedRows: 0 },
-    capped: false, provider: "p", model: "m", targetTokens: 512
+    capped: false, provider: "p", model: "m", maxTokens: 4096
   });
 
   const agent = {
@@ -286,4 +296,116 @@ test("compactNow compacts an idle session and returns a durable result", { skip 
   assert.ok(session.surface.nodes.length < before, "the surface must shrink");
   assert.equal(result.shadowedSeqs.length > 0, true);
   assert.equal(session.events.filter((e) => e.type === "compaction/end").length, 1);
+});
+
+// ── R8: a payload field that is `undefined` cannot strand the commit ──────────
+
+test("an undefined payload field is omitted instead of stranding the transaction", { skip }, async () => {
+  // The measured defect: the deterministic rung returned no provider/model, the
+  // payload carried `provider: undefined`, `snapshotJsonValue` rejected the whole
+  // payload, and the append threw AFTER `compaction/start` had landed - so the
+  // transaction died as ManualCompactionError("commit") and the surface never
+  // shrank. The rung whose documented property is "guaranteed convergence" was
+  // the one rung that could not finish.
+  //
+  // The guard now omits undefined members, because convergence is what that rung
+  // is for and a missing optional member is recoverable where a stranded lock is
+  // not. This stub compile reproduces the shape with no fix at the source.
+  const session = makeSession(plainEvents(3));
+  const nodes = session.surface.nodes;
+  const deps = makeDeps({
+    compile: async (prepared) => ({
+      entries: [{ seq: prepared.shadowedSeqs[0], text: "## 目标与约束\n- summarized", kind: "checkpoint" }],
+      stats: { nodes: prepared.shadowedSeqs.length, entries: 1, toolCalls: 0, toolResults: 0, images: 0,
+               documents: 0, reasoningElided: 0, noiseElided: 0, checkpoints: 1, tokens: 8,
+               elidedToolRows: 0, elidedRows: 0 },
+      capped: false,
+      provider: undefined,
+      model: "m",
+      maxTokens: undefined
+    })
+  });
+
+  const result = await compactSurfaceRegion(deps, session, nodes[1], nodes[nodes.length - 2], { session }, { owner: null, stability: "selected-span" });
+
+  assert.ok(session.events.some((event) => event.type === "compaction/summary"), "the summary record must land");
+  assert.ok(session.events.some((event) => event.type === "compaction/end" && event.data.error === undefined), "and the transaction must close cleanly");
+  assert.ok(session.surface.nodes.length < nodes.length, "the surface must actually shrink");
+  const summary = session.events.find((event) => event.type === "compaction/summary");
+  assert.equal("provider" in summary.data, false, "the undefined member is omitted, not committed");
+  assert.equal("maxTokens" in summary.data, false, "and so is an undefined cap");
+  assert.equal(summary.data.model, "m", "every defined member survives untouched");
+  assert.equal(result.summarySeq, summary.seq);
+});
+
+// ── R9: the leaf cap bounds PRESSURE leaves, never overflow recovery ─────────
+
+/** A priced measurement over the fixture's real folded surface. */
+function measurementOf(session, each) {
+  const nodes = session.surface.nodes.map((seq) => ({ seq, tokens: each, heuristicTokens: each }));
+  return { nodes, totalTokens: nodes.length * each };
+}
+
+/** The surface span one selected range covers, priced at `each` per node. */
+function spanTokens(session, range, each) {
+  const nodes = session.surface.nodes;
+  return (nodes.indexOf(range.end) - nodes.indexOf(range.start) + 1) * each;
+}
+
+test("overflow recovery is not capped by leafSpanTokens; pressure still is", { skip }, async () => {
+  // Measured on a 60 725-token / 81-node session: dsh-compaction-basic selected
+  // 59 961 tokens (79 nodes) and landed the request under the window in one pass,
+  // while this engine's leaf cap (24 000) held it to 24 288 tokens (32 nodes). With
+  // the default maxOverflowRetries of 1, that recovery can hand the provider a
+  // request that is STILL over the window where the reference backend would fit.
+  // The cap exists so a PRESSURE compaction produces bounded leaves that condense
+  // into a DAG; an overflow recovery is not that case, it must remove whatever the
+  // measurement needs.
+  const { default: Engine } = await import("../src/index.js");
+  const { resolveConfig } = await import("../src/config.js");
+  const EACH = 4_000;
+  const session = makeSession(plainEvents(20)); // 41 surface nodes, 164 000 tokens
+  const measurement = measurementOf(session, EACH);
+  const config = resolveConfig({});
+  const unlimited = selectCompactableRange(session, measurement, 0, config.summaryFloorTokens, 0, config.condensationFanin);
+  const capped = selectCompactableRange(session, measurement, 0, config.summaryFloorTokens, config.leafSpanTokens, config.condensationFanin);
+  assert.ok(unlimited !== null && capped !== null);
+  assert.ok(spanTokens(session, capped, EACH) <= config.leafSpanTokens + EACH, "the ceiling really binds this fixture");
+  assert.ok(spanTokens(session, unlimited, EACH) > config.leafSpanTokens * 2, "and the uncapped span is far larger, so the two are distinguishable");
+
+  /** One prototype-only engine whose compaction is captured, not performed. */
+  function captureEngine(overrides = {}) {
+    const engine = Object.create(Engine.prototype);
+    engine.config = config;
+    engine.stallBySession = new Map();
+    engine.pressureConfigFaults = new Map();
+    engine.compactRegion = async (start, end) => {
+      throw Object.assign(new Error("CAPTURED"), { range: { start, end } });
+    };
+    engine.ctx = {
+      tokenMeter: { measure: () => measurement, estimateMessage: () => 10 },
+      get: () => undefined,
+      ...overrides
+    };
+    return engine;
+  }
+
+  const agent = { session, options: {} };
+
+  // Overflow: the whole compactable prefix, exactly the selector's uncapped result.
+  const overflow = captureEngine();
+  await assert.rejects(overflow.compactIfNeeded(agent, "context-overflow", undefined), (error) => {
+    assert.deepEqual(error.range, unlimited, "overflow must select without the pressure leaf cap");
+    assert.ok(spanTokens(session, error.range, EACH) > config.leafSpanTokens, "so it can remove more than one leaf's worth");
+    return true;
+  });
+
+  // Pressure: unchanged. Same window, same retain policy, and the leaf cap binds.
+  const pressure = captureEngine({
+    llm: { async resolveModelInfo() { return { context: { contextWindow: 200_000 }, defaultMaxTokens: 4096 }; } }
+  });
+  await assert.rejects(pressure.compactPressure(agent, agent.session.requestHeader(), undefined, false), (error) => {
+    assert.deepEqual(error.range, capped, "the pressure path keeps the leaf cap it has today");
+    return true;
+  });
 });

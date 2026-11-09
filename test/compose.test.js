@@ -48,14 +48,20 @@ test("the bundle patch leaves exactly one active compaction engine", async (t) =
   const engines = composed.filter(
     (e) => /compaction|lcm/.test(String(e.name ?? "") + " " + String(e.id ?? "")) && !/command|tool|gate/.test(e.id)
   );
-  // A row stood down with `auto: false` stays registered but never compacts.
-  const active = engines.filter((e) => !e.disabled && e.config?.auto !== false);
+  const active = engines.filter((e) => !e.disabled);
 
   assert.equal(active.length, 1, "exactly one compaction engine may be active");
   assert.equal(active[0].name, "dsh-lcm", "and it is this backend");
+  // `disabled: true`, not `config: {auto: false}`. Measured on a fresh headless
+  // profile: `auto: false` only skips the automatic listeners — the row still
+  // activates and still registers the `compaction` service, so this engine fails
+  // to take the seam with "service \"compaction\" has been registered at
+  // <BasicCompactionEngine>" and the profile is left with NO compaction engine at
+  // all while `--dump-config` shows every row. The web profile only worked
+  // because @deepseek-ai/dsh-web-app happens to disable the same row.
   assert.ok(
-    engines.some((e) => e.id === "compaction-basic" && e.config?.auto === false),
-    "the built-in summarizer is stood down"
+    engines.some((e) => e.id === "compaction-basic" && e.disabled === true),
+    "the built-in summarizer is stood down for real, not merely muted"
   );
   assert.ok(
     composed.some((e) => e.id === "command-compact" && !e.disabled),

@@ -55,6 +55,63 @@ function reservedCompletionTokens(header, defaultMaxTokens) {
   return header?.config?.maxTokens ?? defaultMaxTokens ?? 0;
 }
 
+/**
+ * The completion ceiling `summarizeLeaf` sends for one summary target.
+ *
+ * Not the target itself. A summary-sized cap was measured spending the whole
+ * completion budget on hidden reasoning (`max-tokens` finish, ZERO text), and no
+ * cap at all was measured substituting the provider's own smaller default (a run
+ * cut mid-word at 7 734 characters with only the anchor section written, against
+ * 8 817 characters and all six sections at an explicit 32 768). Twice the target,
+ * floored at 4 096, is what the summarizer sends — so it is also the only honest
+ * value for the record's `maxTokens`, which `dsh-compaction/types` documents as
+ * "the generation cap the summarize call sent" and which `dsh-compaction-basic`
+ * records straight off its own `options.maxTokens`.
+ *
+ * `./summarize.js` holds the formula because it builds the request. This copy
+ * exists only so the durable record can state the number that was actually sent;
+ * `test/contract-fields.test.js` pins the recorded value against the options the
+ * stub transport received, so the two cannot drift apart silently.
+ * @param targetTokens - the summary target named in the instruction.
+ * @returns the completion ceiling that accompanies it.
+ */
+function requestCeilingTokens(targetTokens) {
+  return Math.max(4096, targetTokens * 2);
+}
+
+/**
+ * The exact provider/model `summarizeLeaf` routes one leaf summary through.
+ *
+ * Needed by the deterministic rung: the engine, not a model, writes that body,
+ * but `compaction/summary` requires non-empty `provider`/`model` strings and a
+ * payload carrying `undefined` cannot be appended at all (see `./region.js`).
+ * The resolved target is the honest answer there — it is the route that WAS
+ * tried, its empty responses are what forced the fallback, and the entry header
+ * already says in so many words that the body is not a model summary.
+ *
+ * Resolution mirrors `./summarize.js` (`configured ?? routed ?? agent options`,
+ * with the exact-route `modelPolicies` row merged first), because reading
+ * `summarizationProvider` off the top-level config once ignored an override.
+ * A test pins this copy against the route the transport actually received.
+ * @param config - resolved engine configuration.
+ * @param agent - supplies the durable routed header and the fallback route.
+ * @returns the resolved route; `undefined` when no route was ever resolved.
+ */
+function resolveSummarizationTarget(config, agent) {
+  const routed = agent?.session === undefined ? undefined : routedTarget(agent.session);
+  const options = agent?.options ?? {};
+  const agentTarget =
+    typeof options.provider === "string" && options.provider.length > 0 &&
+    typeof options.model === "string" && options.model.length > 0
+      ? { provider: options.provider, model: options.model }
+      : undefined;
+  const conversation = routed ?? agentTarget;
+  const policy = conversation === undefined ? config : resolveTargetPolicy(config, conversation);
+  return policy.summarizationProvider.length > 0
+    ? { provider: policy.summarizationProvider, model: policy.summarizationModel }
+    : conversation;
+}
+
 // ── shrink-retry wording ───────────────────────────────────────────────────
 
 /**
@@ -83,7 +140,14 @@ function truncateToBudget(text, limit) {
   // one, and if even that does not fit, return the plain cut.
   const note = estimateEntryTokens(full) * 4 <= limit ? full : estimateEntryTokens(terse) * 4 <= limit ? terse : "";
   const available = Math.max(1, limit - estimateEntryTokens(note));
-  if (estimateEntryTokens(text) <= available) return text + note;
+  // Nothing was cut, so nothing may be said. This rung is reached both by bodies
+  // that overrun and by a deterministic body built to fit (see compile), and the
+  // unconditional `text + note` labelled the second kind as truncated: measured on
+  // a 6-node span that fit completely (397 tokens, 6/6 seqs present) the checkpoint
+  // still told the reader the tail had been cut deterministically. A warning that
+  // fires when nothing happened is worse than no warning — it teaches the reader to
+  // ignore it on the run where it is true.
+  if (estimateEntryTokens(text) <= available) return text;
   const lines = text.split("\n");
   const kept = [];
   let used = 0;
@@ -292,7 +356,13 @@ export class LcmCompactionEngine extends CompactionEngine {
   /** Settings namespace for user-owned LCM compaction preferences. */
   /** Resolved and validated compaction configuration. */
   config;
-  warnedPressureConfigTargets = new Set();
+  /**
+   * Consecutive `TargetPressureConfigError` suppressions per route, so a
+   * permanently misconfigured target warns on a doubling schedule instead of once
+   * and never again (see the pre-step listener). Cleared the moment the same
+   * route resolves a pressure spec again.
+   */
+  pressureConfigFaults = new Map();
   overflowRetries = new WeakMap();
   overflowAgents = new WeakMap();
   constructor(ctx, config = {}) {
@@ -338,8 +408,32 @@ export class LcmCompactionEngine extends CompactionEngine {
         if (result !== null) logResult(result, "step pressure");
       } catch (error) {
         if (error instanceof TargetPressureConfigError) {
-          if (this.warnedPressureConfigTargets.has(error.targetKey)) return next();
-          this.warnedPressureConfigTargets.add(error.targetKey);
+          // A configuration this engine cannot price is not a transient failure:
+          // `resolveCompactSpec` throws BEFORE the pressure gate, so on the
+          // pre-step path it raises on EVERY step of every turn, and compaction
+          // never runs again for that route until the configuration changes
+          // (`retainTokens >= threshold`, or headroom/maxTokens larger than the
+          // window — both are reachable from a settings form).
+          //
+          // The old code returned silently after the FIRST one, so a real
+          // misconfiguration switched compaction off permanently behind a single
+          // line that was easy to miss, and nothing ever said "switched off".
+          // Silence was the defect; a line per step is the noise that produced it.
+          // So every occurrence goes to the debug log, and the warning itself
+          // repeats on a doubling schedule (1st, 2nd, 4th, 8th, ...) with the
+          // suppressed count in it: six lines describe the first sixty steps, and
+          // a session that has been unable to compact for thousands of steps keeps
+          // saying so instead of falling silent forever.
+          const message = describeError(error);
+          const suppressed = (this.pressureConfigFaults.get(error.targetKey) ?? 0) + 1;
+          this.pressureConfigFaults.set(error.targetKey, suppressed);
+          engineDebug(this.config, `step compaction suppressed (${suppressed}x) for ${error.targetKey}: ${message}`);
+          if ((suppressed & (suppressed - 1)) === 0) {
+            ctx.logger.warn(
+              `compaction is switched off by configuration for ${error.targetKey} (${suppressed} suppressed attempt${suppressed === 1 ? "" : "s"}): ${message}. Nothing will be compacted on this route until the configuration is fixed.`
+            );
+          }
+          return next();
         }
         const message = describeError(error);
         ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`);
@@ -485,8 +579,15 @@ export class LcmCompactionEngine extends CompactionEngine {
     // the truncation rung, so a label that lives in the first lines can be cut. The
     // header always survives.
     let usedDeterministic = false;
+    // Who wrote the record and under what cap. `identity` stays undefined unless
+    // the deterministic rung has to answer for the body (no model did); the
+    // ceiling is the cap the producing call SENT, which is not the instruction
+    // target and is absent when no call produced the body at all.
+    let identity;
+    let sentCeiling;
     try {
       result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
+      sentCeiling = requestCeilingTokens(budget);
     } catch (error) {
       // Two codes are summariser OUTCOMES rather than transport failures: an empty
       // response and a response cut at the provider's cap. A rate limit, a timeout
@@ -506,6 +607,16 @@ export class LcmCompactionEngine extends CompactionEngine {
       // over-long model body: the shrink gate compares against the span, and a
       // small span makes the target larger than the bound.
       usedDeterministic = true;
+      // The record still has to name a route. Nothing model-authored is left to
+      // name, so the honest value is the target this rung resolved and tried:
+      // `compaction/summary.provider|model` are REQUIRED non-empty strings, and a
+      // payload with `undefined` in them cannot be appended at all — measured,
+      // `snapshotJsonValue({provider: undefined, model: "m"})` rejects the whole
+      // payload, so the commit threw after `compaction/start` had landed and the
+      // surface never shrank. The entry header already labels the body
+      // "DETERMINISTIC fallback, not a model summary", so naming the route does
+      // not claim authorship. No ceiling is recorded: no call produced this body.
+      identity = resolveSummarizationTarget(this.config, agent);
       const headroom = Math.max(32, limit - headerTokens(prepared, budget));
       const fallback = truncateToBudget(deterministicCheckpoint(prepared, budget), headroom);
       engineDebug(this.config, `summarize escalated to deterministic body after empty responses tokens=${estimateEntryTokens(fallback)} shadowed=${limit}`);
@@ -529,6 +640,7 @@ export class LcmCompactionEngine extends CompactionEngine {
       // the token budget").
       const aggressiveBudget = Math.max(128, Math.floor(budget / 2));
       result = await summarizeLeaf(this.ctx, this.config, prepared, agent, aggressiveBudget, signal, hardShrinkConstraint(tokens, limit));
+      sentCeiling = requestCeilingTokens(aggressiveBudget);
       signal?.throwIfAborted();
       text = summaryBodyOf(result);
       tokens = estimateEntryTokens(text);
@@ -578,9 +690,11 @@ export class LcmCompactionEngine extends CompactionEngine {
         elidedRows: 0
       },
       capped: false,
-      provider: result.provider,
-      model: result.model,
-      targetTokens: budget,
+      // `??` rather than a ternary on `usedDeterministic`: the identity is a
+      // property of the body that was actually kept, not of the branch taken.
+      provider: result.provider ?? identity?.provider,
+      model: result.model ?? identity?.model,
+      maxTokens: sentCeiling,
       usage: result.usage,
       rawOutput: result.rawOutput
     };
@@ -614,7 +728,22 @@ export class LcmCompactionEngine extends CompactionEngine {
         // "not worth a summary call" floor applies: a span the summary budget
         // could never undercut would burn one model call and then fail the shrink
         // guarantee, which is strictly worse than preserving the original error.
-        const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens, this.config.leafSpanTokens, this.config.condensationFanin);
+        // No leaf cap on this trigger: `0` is the selector's "no ceiling".
+        //
+        // The leaf cap exists so a PRESSURE compaction produces bounded leaves —
+        // many small summaries that condense into a DAG instead of one
+        // ever-deeper checkpoint. Overflow recovery is the opposite case: the
+        // provider has already refused the request, so the pass has to remove as
+        // much as the measurement needs, in one attempt. Measured on a 60 725-token
+        // / 81-node session, `dsh-compaction-basic` selected 59 961 tokens (79
+        // nodes) and landed the request back under the window in one pass, while
+        // the leaf cap (24 000) held this engine to 24 288 tokens (32 nodes) — with
+        // the default `maxOverflowRetries: 1` that can return still over the
+        // window where the reference backend would have fit. The span floor and the
+        // fanin stay as they are: the floor is what refuses a span no summary could
+        // undercut, and the fanin is what keeps an overflow pass from
+        // re-summarising its own checkpoint.
+        const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens, 0, this.config.condensationFanin);
         if (range === null) return null;
         return this.compactRegion(range.start, range.end, agent, signal);
       }
@@ -654,6 +783,10 @@ export class LcmCompactionEngine extends CompactionEngine {
     // be counted as available message space. It is read off the envelope being
     // priced, so a model switch reserves the NEW model's completion budget.
     const spec = resolveCompactSpec(policy, context.contextWindow, reservedCompletionTokens(header, info.defaultMaxTokens));
+    // The route priced successfully, so any previous config fault on it is over:
+    // the suppression counter is "consecutive failures", which is what makes the
+    // pre-step warning schedule restart from 1 after a fix.
+    this.pressureConfigFaults.delete(`${target.provider}/${target.model}`);
     // Observability for the one decision that silently does nothing: G6 asks for a
     // state surface, and "compaction never fired" was indistinguishable from
     // "compaction fired and failed" without this line.

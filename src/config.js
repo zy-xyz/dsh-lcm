@@ -418,6 +418,13 @@ function validatePolicy(config, name) {
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
   if (config.leafSpanTokens !== undefined) assertPositiveInteger(`${name}.leafSpanTokens`, config.leafSpanTokens);
   if (config.condensationFanin !== undefined) assertCondensationFanin(`${name}.condensationFanin`, config.condensationFanin);
+  // The stall hold's deadline was the ONE key of the 28 declared in the schema
+  // and never checked here, so `"60000"` or `1.5` reached the engine and
+  // `Date.now() + stallCooldownMs` produced `NaN`. Every `Date.now() < NaN`
+  // comparison is false, so the hold never armed - the stall protection was
+  // silently disabled by a value the composition schema already refuses
+  // (`min(1).step(1)`). Same rule as its peers: a positive integer.
+  if (config.stallCooldownMs !== undefined) assertPositiveInteger(`${name}.stallCooldownMs`, config.stallCooldownMs);
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);

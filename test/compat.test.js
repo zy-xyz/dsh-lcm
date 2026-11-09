@@ -11,6 +11,8 @@ import test from "node:test";
 
 import * as tool from "../src/tool.js";
 import * as command from "../src/command.js";
+import { HYBRID_RANK_MODES, RANK_MODES } from "../src/search.js";
+import { resolveVectorConfig } from "../src/vectors.js";
 
 /** Minimal ctx that records what got registered. */
 function recorder() {
@@ -74,3 +76,124 @@ test("a tool definition can be built under either name", () => {
   assert.equal(tool.defineSearchTool(resolved).name, "lcm_search");
   assert.equal(tool.defineSearchTool(resolved, "search").name, "search");
 });
+
+// ── the composition schema ─────────────────────────────────────────────────
+//
+// The Loader validates a row's `config` through `Config["~standard"].validate`
+// BEFORE it restarts the plugin (cordis `resolveConfig`, called from
+// `fiber.update`). Both rows used to export no `Config`, so that check was
+// skipped: a bad value only reached the plugin's own `resolveConfig` inside
+// `apply`, i.e. after the old instance was disposed and after
+// `ctx.tools.register` had already run. Measured with the real Loader on
+// `maxSearchHits: -3`: the registrations were undone, the fiber landed in
+// state 3 (failed), and the live tool list was empty. With a schema the same
+// edit throws before the restart, so the old instance keeps serving.
+//
+// The key lists below are written ONCE and the per-key assertions iterate the
+// schema, so a key that one layer knows and the other does not fails here.
+
+/** The keys both rows read. Declared once; every other list is derived from it. */
+const LEXICAL_KEYS = ["legacyNames", "maxRecallTokens", "maxSearchHits", "rank"];
+
+/**
+ * The `vector*` keys the tool row spreads from `resolveVectorConfig`, derived
+ * from that resolver's own output rather than from a second hand-written list:
+ * a new vector key fails this suite until the schema learns it, which is the
+ * point of the derivation.
+ */
+const VECTOR_KEYS = Object.keys(resolveVectorConfig({})).map((key) => "vector" + key[0].toUpperCase() + key.slice(1));
+
+/**
+ * Values the schema's own rules must reject, derived from the node itself:
+ * every numeric key here is an `integer >= 1`, every string key a non-empty
+ * string, and `rank` a closed union of modes.
+ */
+function badValuesFor(node) {
+  const floor = node.meta.min ?? 1;
+  switch (node.type) {
+    case "boolean": return [1, "true"];
+    case "number": return [floor - 1, floor + 0.5, "5"];
+    case "string": return [42, ""];
+    case "union": return ["nonsense"];
+    default: throw new Error("unhandled schema node type " + node.type);
+  }
+}
+
+/** A value the schema's own rules must accept, derived the same way. */
+function goodValueFor(node) {
+  const floor = node.meta.min ?? 1;
+  switch (node.type) {
+    case "boolean": return true;
+    case "number": return floor + 1;
+    case "string": return "compat-probe";
+    case "union": return node.list[0].value;
+    default: throw new Error("unhandled schema node type " + node.type);
+  }
+}
+
+test("both rows export a Config schema, which is what makes the Loader validate an edit", () => {
+  for (const [label, plugin] of [["tool", tool], ["command", command]]) {
+    assert.equal(typeof plugin.Config["~standard"].validate, "function", label + " must expose a schemastery Config");
+  }
+});
+
+test("the tool row declares exactly the keys its resolveConfig consumes", () => {
+  assert.deepEqual(Object.keys(tool.Config.dict).sort(), [...LEXICAL_KEYS, ...VECTOR_KEYS].sort());
+});
+
+test("the command row declares the lexical keys and no vector key it would ignore", () => {
+  // /lcm-search reads none of the vector keys, so declaring them would advertise
+  // configuration that does nothing.
+  assert.deepEqual(Object.keys(command.Config.dict).sort(), [...LEXICAL_KEYS].sort());
+});
+
+test("rank's enum matches the modes each row accepts, vector ranks included only where they route", () => {
+  assert.deepEqual(tool.Config.dict.rank.list.map((node) => node.value), [...RANK_MODES, ...HYBRID_RANK_MODES]);
+  assert.deepEqual(command.Config.dict.rank.list.map((node) => node.value), [...RANK_MODES]);
+  // The schema half of "/lcm-search is lexical": the two values its resolveConfig
+  // refuses must die at composition, not inside apply.
+  assert.throws(() => command.Config({ rank: "hybrid" }), /hybrid/);
+  assert.throws(() => command.Config({ rank: "vector" }));
+  assert.doesNotThrow(() => tool.Config({ rank: "hybrid" }));
+  assert.doesNotThrow(() => tool.Config({ rank: "vector" }));
+});
+
+test("every tool-row value outside the schema's floor or type is rejected by BOTH layers", () => {
+  for (const [key, node] of Object.entries(tool.Config.dict)) {
+    for (const bad of badValuesFor(node)) {
+      const label = key + "=" + JSON.stringify(bad);
+      assert.throws(() => tool.Config({ [key]: bad }), undefined, "the composition schema must refuse " + label);
+      assert.throws(() => tool.resolveConfig({ [key]: bad }), undefined, "the runtime validator must refuse the same " + label);
+    }
+  }
+});
+
+test("every command-row value outside the schema's floor or type is rejected by BOTH layers", () => {
+  for (const [key, node] of Object.entries(command.Config.dict)) {
+    for (const bad of badValuesFor(node)) {
+      const label = key + "=" + JSON.stringify(bad);
+      assert.throws(() => command.Config({ [key]: bad }), undefined, "the composition schema must refuse " + label);
+      assert.throws(() => command.resolveConfig({ [key]: bad }), undefined, "the runtime validator must refuse the same " + label);
+    }
+  }
+});
+
+test("every declared key is accepted by both layers and survives the write-back", () => {
+  for (const [label, plugin] of [["tool", tool], ["command", command]]) {
+    const full = Object.fromEntries(Object.entries(plugin.Config.dict).map(([key, node]) => [key, goodValueFor(node)]));
+    assert.doesNotThrow(() => plugin.Config(full), label + " schema must accept its own valid values");
+    assert.doesNotThrow(() => plugin.resolveConfig(full), label + " resolveConfig must accept the same values");
+    // No `.default()` anywhere: a default makes simplify() omit a value equal to
+    // it, and simplify's output is what a fiber.update re-route writes back — the
+    // same trap src/index.js:276-286 documents for the engine row.
+    assert.deepEqual(plugin.Config.simplify(full), full, label + " must not lose a key on write-back");
+  }
+});
+
+test("an undeclared key is dropped on write-back instead of being persisted forever", () => {
+  // The second half of the defect: with no schema, simplify never ran, so a
+  // mistyped key survived every settings change and was read by nobody.
+  assert.deepEqual(tool.Config.simplify({ legacyNames: false, bogusKey: 42 }), { legacyNames: false });
+  assert.deepEqual(command.Config.simplify({ rank: "density", bogusKey: 42 }), { rank: "density" });
+});
+

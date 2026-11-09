@@ -12,6 +12,7 @@
  *
  * @module dsh-lcm/command
  */
+import z from "@deepseek-ai/schemastery";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { estimateEntryTokens } from "./compiler.js";
 import { sessionEvents } from "./events.js";
@@ -19,12 +20,26 @@ import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, searchSession } from "./search.js";
 
-export const name = "command-lcm-search";
-export const inject = ["commands"];
-export const USAGE = "Usage: /lcm-search <keyword|regex>";
+const name = "command-lcm-search";
+const inject = ["commands"];
+const USAGE = "Usage: /lcm-search <keyword|regex>";
+
+/**
+ * Why /lcm-search has no per-call budget argument — decided, not overlooked.
+ *
+ * `lcm_expand` grew a `maxTokens` argument because the model cannot retype: it
+ * commits one call, the harness spends it, and a truncated answer with no knob
+ * is a dead end inside that turn. A human at a prompt has the opposite shape —
+ * they read the truncated hits and retype with a narrower pattern for free. There
+ * is also no syntax slot for it: `rawInput` is the pattern itself, so a second
+ * number in the same box would be ambiguous with a numeric search of the log.
+ * The rendering budget for one command is already the configured
+ * `maxRecallTokens` (src/search.js); an operator who wants more of every hit
+ * raises that, which is a config question rather than a per-invocation one.
+ */
 
 /** Validate and default the command plugin configuration. */
-export function resolveConfig(config = {}) {
+function resolveConfig(config = {}) {
   const maxRecallTokens = config.maxRecallTokens ?? DEFAULT_MAX_RECALL_TOKENS;
   const maxSearchHits = config.maxSearchHits ?? DEFAULT_MAX_SEARCH_HITS;
   const legacyNames = config.legacyNames ?? true;
@@ -43,6 +58,34 @@ export function resolveConfig(config = {}) {
   }
   return { maxRecallTokens, maxSearchHits, legacyNames, rank };
 }
+
+/**
+ * Composition-time schema for this row — same contract as the tool row's, and
+ * the same reason: without it the Loader skips validation, `apply` runs, and a
+ * bad value is only caught by {@link resolveConfig} after the old instance is
+ * already disposed. With it the value is refused before the restart.
+ *
+ * The `rank` enum is the SCHEMA HALF of the lexical-only decision
+ * {@link resolveConfig} states: `RANK_MODES` only, so `vector` / `hybrid` are
+ * rejected here as well as there. Declaring the full rank set and relying on the
+ * runtime check would put the two layers in disagreement — the schema accepting
+ * what `apply` refuses — which is the defect class this schema removes.
+ *
+ * The vector keys are deliberately absent: this row reads none of them, so
+ * declaring them would advertise configuration that does nothing. schemastery
+ * cannot reject an unknown KEY (an object resolver re-merges undeclared keys
+ * into its output), so an operator's stray `vectorEnabled` is ignored here
+ * instead of failing — the rank enum is the part that must fail.
+ *
+ * No `.default()` calls: see the tool row's schema for why (schemastery's
+ * `simplify` would omit an explicitly-set value that equals the default).
+ */
+const Config = z.object({
+  rank: z.union([...RANK_MODES]),
+  maxSearchHits: z.number().step(1).min(1),
+  maxRecallTokens: z.number().step(1).min(1),
+  legacyNames: z.boolean()
+});
 
 /** Execute one grep-based recall request against the calling agent's session. */
 async function executeRecall(invocation, resolved) {
@@ -94,7 +137,7 @@ async function executeRecall(invocation, resolved) {
  * @param resolved - validated `{ maxRecallTokens, maxSearchHits }`.
  * @returns a registry-ready CommandDefinition.
  */
-export function defineRecallCommand(resolved, commandName = "lcm-search") {
+function defineRecallCommand(resolved, commandName = "lcm-search") {
   return {
     name: commandName,
     description: "Search earlier conversation history by keyword or regex",
@@ -107,7 +150,7 @@ export function defineRecallCommand(resolved, commandName = "lcm-search") {
  * @param ctx - context carrying the command registry.
  * @param config - `{ maxRecallTokens?, maxSearchHits? }`.
  */
-export function apply(ctx, config) {
+function apply(ctx, config) {
   const resolved = resolveConfig(config);
   ctx.effect(() => {
     const disposers = [
@@ -157,7 +200,7 @@ function keptTokensOf(summary) {
  * @param session - the calling agent's session.
  * @returns a human-readable status block, or a note when nothing is compacted.
  */
-export function buildStatus(session) {
+function buildStatus(session) {
   const dag = deriveDag(session);
   const events = sessionEvents(session);
   const summaries = events.filter((event) => event.type === "compaction/summary");
@@ -188,10 +231,12 @@ export function buildStatus(session) {
  * Build the `lcm-status` command definition (for tests and introspection).
  * @returns a registry-ready CommandDefinition.
  */
-export function defineStatusCommand(commandName = "lcm-status") {
+function defineStatusCommand(commandName = "lcm-status") {
   return {
     name: commandName,
     description: "Show what this session has compacted: checkpoints, depth, tokens saved",
     handler: (invocation) => ({ kind: "success", text: buildStatus(invocation.agent.session) })
   };
 }
+
+export { Config, USAGE, apply, buildStatus, defineRecallCommand, defineStatusCommand, inject, name, resolveConfig };

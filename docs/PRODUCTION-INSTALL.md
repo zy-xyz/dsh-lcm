@@ -4,38 +4,47 @@ Everything below is prepared here; **the restart itself is yours to run** — it
 interrupts the live GUI session, and that is not a change to make on someone's
 behalf.
 
-## What the profile patch has to contain
+## What the bundle patch contains
 
-`~/.dsh/profiles/web/cordis.patch.yml` gains exactly this (the rest of that file is
-yours and stays untouched):
+Nothing in `~/.dsh/profiles/web/cordis.patch.yml` needs to change. The rows below
+ship inside this package (`cordis.patch.yml`) and become a profile layer on
+install; `--dump-config` is where you read them.
 
 ```yaml
 - id: compaction-basic
-  disabled: true
+  disabled: true          # not "config: {auto: false}"
 
 - insert:
     - id: compaction-lcm
       name: dsh-lcm
-- id: tool-lcm-expand
-  name: dsh-lcm/tool
-- id: command-lcm-search
-  name: dsh-lcm/command
+    - id: tool-lcm-expand
+      name: dsh-lcm/tool
+    - id: command-lcm-search
+      name: dsh-lcm/command
+    - id: lcm-compaction-gate
+      name: dsh-lcm/gate
 ```
 
-`compaction-basic` must be disabled in the same layer that mounts this one: two
-engines on one context throw (`service "compaction" has been registered`), but
-`composeEntries` itself does **not** reject two active rows, so a half-applied patch
-fails at boot rather than at review.
+`disabled: true` is the load-bearing part, and `auto: false` is not a substitute.
+Two engines on one context throw (`service "compaction" has been registered`), and
+`auto: false` does not prevent that registration — it only skips the automatic
+listeners. Measured on a fresh headless profile: with `auto: false` the boot printed
+`1 entry did not activate` plus that error and left the profile with NO compaction
+engine at all (basic muted by the same config, this engine rejected), while
+`--dump-config` showed every row and looked correct. `composeEntries` does not
+reject two active rows either, so the failure is at boot, not at review. The web
+profile only worked because `@deepseek-ai/dsh-web-app` happens to disable the same
+row for its own reasons.
 
 ## Commands
 
 ```bash
-# 1. Install the package into the profile.
+# 1. Install. This is the WHOLE install: pnpm runs in the profile, then the
+#    plugin manager registers the package in dsh.profile.bundles because it
+#    declares dsh.bundle.patch, and the bundle patch becomes a profile layer.
 dsh plugin --profile web add /home/agent/workspaces/lcmx-study/dsh-lcm
 
-# 2. Add the patch entries above to cordis.patch.yml.
-
-# 3. Compose and read the result BEFORE restarting. This exits without booting.
+# 2. Compose and read the result BEFORE restarting. This exits without booting.
 dsh --profile web --dump-config 2>/dev/null \
   | grep -E 'id: compaction-basic|id: compaction-lcm|id: tool-lcm-expand|id: command-lcm-search' -A 1
 ```
@@ -43,6 +52,13 @@ dsh --profile web --dump-config 2>/dev/null \
 Expected: `compaction-basic` carries `disabled: true`, and the other three are
 present. If `compaction-basic` is not disabled, stop — booting would mount two
 engines.
+
+**Do not hand-write these rows into the profile patch.** An earlier version of this
+document told you to, and following it produces duplicate ids (`compaction-lcm`,
+`tool-lcm-expand`, `command-lcm-search` each appear twice in `--dump-config`);
+the loader is last-wins by id, so the hand row silently replaces the bundle row and
+drops its config — including the whole vector block. The bundle patch is the only
+place these rows belong.
 
 ### The peer-dependency warning is expected
 
@@ -146,9 +162,14 @@ cp package.json.bak.20261108_153535 package.json
 cd /tmp && dsh plugin --profile web remove dsh-lcm
 ```
 
-### The vector layer is off
+### The vector layer: enabled in the shipped patch
 
-`vectorEnabled` defaults to false. It is a key of the **search tool row**
+The bundle ships the layer ON, on the **search tool row** (`tool-lcm-expand`):
+`rank: hybrid`, `vectorEnabled: true`, the measured endpoint/model/dimension, and
+the two cost bounds. The engine's default is still off, which is why the keys must
+sit on the tool row — see below.
+
+`vectorEnabled` is a key of the **search tool row**
 (`tool-lcm-expand`, name `dsh-lcm/tool`), not of the engine: the engine declares and
 resolves the `vector*` keys but the compaction path never reads one, so putting
 `vectorEnabled: true` on `compaction-lcm` shows as enabled in `--dump-config` while

@@ -17,7 +17,8 @@ import test from "node:test";
 import zlib from "node:zlib";
 
 import { resolveEventAt } from "../src/events.js";
-import { recallSession } from "../src/recall.js";
+import { MAX_RECALL_TOKENS, recallSession } from "../src/recall.js";
+import { defineRecallTool, resolveConfig } from "../src/tool.js";
 
 // ── the indexing bug ───────────────────────────────────────────────────────
 
@@ -159,4 +160,87 @@ test("deriveDag reads a header-shifted log correctly", async () => {
   assert.equal(dag.checkpoints, 1, "the checkpoint node must be found despite the header shift");
   assert.equal(dag.maxDepth, 1);
   assert.deepEqual(dag.nodeBySeq.get(2).children, [0]);
+});
+
+// ── the per-call budget channel ────────────────────────────────────────────
+//
+// Measured defect: across 21 compacted sessions, 2 of 10630 shadowed seqs
+// exceeded the 16000-token default and were truncated on every call — the
+// largest a 23251-token tool result that came back at 69.3% of its bytes. The
+// data was never missing (raising the budget by hand returned it whole); the
+// channel was too narrow and there was no argument to widen it. These tests pin
+// the argument: omitted = today's bytes, raised = the whole event, above the
+// ceiling = clamped and said so, nonsense = rejected.
+
+/** A session holding one projected user message: the shape recall reads. */
+function oneTextSession(text) {
+  return {
+    events: [
+      { type: "session", id: "s" },
+      { seq: 0, type: "user/message", time: 1, data: { content: [{ type: "text", text }] } }
+    ],
+    deriveEventMessage: (event) => (typeof event.seq === "number" ? { role: "user", content: event.data.content } : null)
+  };
+}
+
+/** A body of `count` distinct single-word tokens. */
+function wordsOf(count) {
+  return Array.from({ length: count }, (_, index) => "w" + index).join(" ");
+}
+
+const RECALL_TOOL = defineRecallTool(resolveConfig({}));
+const callExpand = (session, args) => RECALL_TOOL.execute(args, { agent: { session } });
+
+test("an omitted maxTokens returns exactly the bytes it returns today", async () => {
+  const body = "note: nothing unusual here";
+  const result = await callExpand(oneTextSession(body), { type: "seq", id: "0" });
+  // Pinned literal: the pre-change output for this event, join separator included.
+  assert.equal(result.text, "[seq 0: user]\n" + body);
+  assert.equal(result.truncated, false);
+  assert.equal(result.recalled, 1);
+  assert.equal(result.missing, 0);
+});
+
+test("the default budget still cuts an oversized event, and now says what the cut costs", async () => {
+  const text = wordsOf(12000);
+  const result = await callExpand(oneTextSession(text), { type: "seq", id: "0" });
+  assert.equal(result.truncated, true, "the default budget must not return this whole event");
+  assert.ok(result.text.length < text.length, "the cut must be a cut");
+  // The old marker, kept: the provenance of the cut.
+  assert.match(result.text, /\.\.\.\(truncated from recall budget\)/);
+  // The new tail: how much of how much, and the argument that returns the rest.
+  assert.match(result.text, /\[recall budget 16000 tokens: returned ~\d+ of ~\d+ tokens \(\d+ of \d+ chars\)/);
+  assert.match(result.text, /raise maxTokens \(up to 32768\) to restore the rest/);
+});
+
+test("a raised maxTokens returns the oversized event complete", async () => {
+  const text = wordsOf(12000);
+  const session = oneTextSession(text);
+  const omitted = await callExpand(session, { type: "seq", id: "0" });
+  assert.equal(omitted.truncated, true);
+
+  const raised = await callExpand(session, { type: "seq", id: "0", maxTokens: MAX_RECALL_TOKENS });
+  assert.equal(raised.truncated, false, "the ceiling must be enough for every event this log holds");
+  assert.equal(raised.text, "[seq 0: user]\n" + text, "the whole event, byte for byte");
+});
+
+test("an over-ceiling request is clamped, and the marker says where the ceiling is", async () => {
+  // Bigger than the ceiling, so the clamp is observable as a still-truncated result.
+  const text = wordsOf(20000);
+  const session = oneTextSession(text);
+  const clamped = await callExpand(session, { type: "seq", id: "0", maxTokens: 1_000_000 });
+  const atCeiling = await callExpand(session, { type: "seq", id: "0", maxTokens: MAX_RECALL_TOKENS });
+
+  assert.equal(clamped.truncated, true);
+  assert.equal(clamped.text, atCeiling.text, "1_000_000 must land exactly on the ceiling");
+  assert.match(clamped.text, new RegExp("recall budget " + MAX_RECALL_TOKENS + " tokens"));
+  assert.match(clamped.text, /32768 is the ceiling for maxTokens/);
+  assert.ok(clamped.tokens <= MAX_RECALL_TOKENS + 200, "a clamped call must not exceed its ceiling");
+});
+
+test("a nonsense maxTokens is rejected with a readable message, not silently ignored", async () => {
+  const session = oneTextSession("small");
+  await assert.rejects(() => callExpand(session, { type: "seq", id: "0", maxTokens: 0 }), /maxTokens must be a positive integer \(got 0\)/);
+  await assert.rejects(() => callExpand(session, { type: "seq", id: "0", maxTokens: -5 }), /maxTokens must be a positive integer \(got -5\)/);
+  await assert.rejects(() => callExpand(session, { type: "seq", id: "0", maxTokens: 1.5 }), /must be an integer/);
 });
