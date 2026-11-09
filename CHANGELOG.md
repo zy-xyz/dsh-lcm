@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.12.0 — 2026-11-10 — a search gets one deadline, and the window is a price
+
+The first live search after switching to `mistral-proxy/codestral-embed` degraded
+with `timed out after 20000ms; fell back to lexical`, and every retry died the
+same way. Two defects, one design and one code, plus a coverage gap.
+
+### Design — a per-request timeout is not a bound on a search
+
+The cost of one search is *the number of embedding POSTs it makes* times the
+ceiling, and both factors grew without limit: a 60-event window at 32 texts per
+POST is two batches, a transient 5xx doubles it, and a refused batch is bisected
+into `2*log2(n)+1` more requests (11 at n=32). On the shipped endpoint the tail
+is real (2.6/5.1/3.0/65.6/2.6 s over eight batches, one HTTP 500), so two
+batches at a 20 s ceiling is 40 s per search and a five-batch window is 100 s.
+Nothing in the code bounded the SEARCH; only the POST.
+
+Now one search runs its whole embedding phase under ONE absolute deadline
+(`DEFAULT_VECTOR_SEARCH_BUDGET_MS = 30 000`, effective
+`max(30 000, vectorTimeoutMs)` so a raised per-request ceiling is never silently
+shortened). Every POST is capped at `min(vectorTimeoutMs, deadline - now)`, and
+that deadline is threaded through the bisection descent and the cleaned-variant
+retry, so a refusal cannot buy extra wall clock. A request whose budget is gone
+fails with `budget: true` — never retried, never mistaken for a poison verdict.
+
+Measured with a stub that answers every batch after 400 ms, 100 candidates and a
+900 ms budget: 913 ms total, 3 requests, 8 ranked, 37 uncovered,
+`budgetExhausted: true` — and 64 vectors left on disk.
+
+### Bug — a partially successful search persisted nothing
+
+`rankByVector` wrote the cache only AFTER the single `embedTextsTolerant` call
+returned, so a timeout discarded every vector already produced: on a flaky
+endpoint a cold cache could NEVER warm, and every search re-paid for the same
+texts and died at the same batch. The unit of progress (the batch) was not the
+unit of persistence — the same shape as the backfill bug fixed in 0.11.1.
+
+Work now proceeds one `MAX_EMBED_BATCH` group at a time, query first then
+candidates newest-first (a budget that runs out has bought the likelier half),
+and each group is written the moment it returns. Measured on the same stub: a
+second search issues 2 requests instead of 3, resuming from what the first left
+behind. A search that has the query plus some groups answers with a partial
+ranking; only a dead route (no query vector) still throws and degrades.
+
+### Fixed — the result header claimed coverage it did not have
+
+The header rendered "N newest compacted event(s)" with N = the WINDOW, so a
+budget-truncated call claimed more coverage than it reached. It now renders
+"N of M newest compacted event(s) ranked, embedding budget exhausted (K
+uncovered)" from `ranked.skipped`. A window is a price, not a promise.
+
+### Added — `/lcm-embed status` reports the candidate window
+
+The cache totals could not answer "is the semantic route warm for THIS session".
+It now prints `candidates` (the priced window from the calling session, via the
+same `collectVectorItems`), `cached`, `pending` (what one `--apply` would embed
+now) and the search budget. Read-only: cache lookups only, zero provider
+requests, zeros instead of guesses when the layer is off or nothing is compacted.
+Measured on the live session: `candidates 76 / cached 76 / pending 0`.
+
+### Changed — the two rows now price the same window
+
+`command-lcm-embed` dropped from `vectorCandidateTokens: 100000` to `30000` to
+match the search row: status prices from the embed row, so a different number
+there would report a pending count the search never asks for, and a backfill
+would warm texts no search reads.
+
+### Coverage — the vector layer now has a matrix, not anecdotes
+
+Five new files, 37 tests, every one a named assertion against a local stub:
+cache (corrupt widths, concurrent writers, per-model isolation, prune on a
+populated and a missing root), backend (5xx once vs twice, 429 not retried,
+non-JSON, wrong dimension, wrong count, empty input, a 400 bisecting to 12
+requests instead of 32, the cleaned variant exactly once), auth (three sources
+and the no-header default), search route (layer off byte-identical to lexical,
+candidate window excludes the visible tail and log plumbing, token budget edges),
+/lcm-embed (dry-run zero requests, second `--apply` a pure hit, `--limit`, ten
+malformed arguments) and degradation (six backend failure modes plus a dead port,
+each returning lexical + one notice and never throwing; abort honoured and not
+retried).
+
+Tests: 247 → 284.
 ## 0.11.1 — 2026-11-09 — the remote endpoint is slow, so the layer is tuned for it
 
 First live search after switching to `mistral-proxy/codestral-embed` degraded to

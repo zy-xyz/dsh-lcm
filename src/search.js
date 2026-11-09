@@ -353,9 +353,19 @@ export async function searchSessionHybrid(session, patternSource, config, signal
   const tokens = tokensOf(hits);
   // What the window actually covered, stated as measured: the compacted region
   // when the session exposes a surface, plain candidates when it cannot.
-  const scope = hidden === null
+  //
+  // The WINDOW is a price, not a promise. When the embedding deadline cut the
+  // window short, "N newest compacted event(s)" would claim coverage this call
+  // never had: the ranked set is smaller than the window by construction.
+  // `ranked.skipped` counts the texts that never got a vector, so the header
+  // reports the window AND what of it was actually reached.
+  const uncovered = ranked.skipped ?? 0;
+  const window = hidden === null
     ? items.length + " candidate event(s)"
     : items.length + " newest compacted event(s) of " + hidden;
+  const scope = uncovered > 0
+    ? (items.length - uncovered) + " of " + window + " ranked, embedding budget exhausted (" + uncovered + " uncovered)"
+    : window;
   if (rankMode === "vector") {
     const lines = [
       '[vector "' + pattern.source + '": ' + hits.length + " event(s) by cosine similarity (top " + vectorConfig.topK + " of " + scope + ", " + candidateTokens + " tokens, seq >= " + (items[0]?.seq ?? "-") + ")]",

@@ -66,10 +66,57 @@ export const DEFAULT_VECTOR_CANDIDATE_LIMIT = 500;
  * events older than that budget are still unreachable by similarity, and only a
  * lexical pattern finds them. `rank: "hybrid"` keeps those lexical hits in the
  * answer; `rank: "vector"` alone does not.
+ *
+ * A window is a price, not a promise: how much of it one search actually reaches
+ * is decided by {@link DEFAULT_VECTOR_SEARCH_BUDGET_MS}, so a window wider than
+ * the budget covers is filled by repeated searches (each one resumes from the
+ * cache the previous one warmed) or by `/lcm-embed backfill`.
  */
 export const DEFAULT_VECTOR_CANDIDATE_TOKENS = 100000;
 /** Per-request ceiling, so a hung backend cannot hold a search open. */
 export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
+
+/**
+ * Wall-clock ceiling one SEARCH may spend embedding, across every request.
+ *
+ * A per-request timeout is not a bound on a search: it multiplies by the number
+ * of batches the candidate window needs. Measured on the shipped endpoint
+ * (mistral-proxy/codestral-embed, 2026-11-09), a 32-text batch costs 2.6-5.1 s
+ * with one 65.6 s tail, so a 60-event window is two POSTs and a stalled one
+ * costs the full per-request timeout:
+ *
+ *   2 batches x 20 000 ms = 40 s, doubled by the transient retry, and 2*log2(32)
+ *   + 1 = 11 more probe requests when a batch is refused and the caller bisects;
+ *
+ * i.e. the search's worst case was the *number of batches* x the ceiling, which
+ * is how a live search sat 40+ s and then degraded. One deadline makes the whole
+ * embedding phase cost at most this, whatever the window and whatever the
+ * refusal pattern: every request's timeout becomes
+ * `min(vectorTimeoutMs, deadline - now)`, bisection included.
+ *
+ * The effective budget is `max(this, vectorTimeoutMs)` — see
+ * {@link vectorSearchBudgetMs} — so a configured per-request ceiling is never
+ * silently shortened. A constant, not a configuration key, for the same reason
+ * `MAX_EMBED_BATCH` is: it is a safety bound against a stalled endpoint, not a
+ * performance setting. Raising it only lengthens a stall.
+ */
+export const DEFAULT_VECTOR_SEARCH_BUDGET_MS = 30000;
+
+/**
+ * The embedding budget one search actually gets, in milliseconds.
+ *
+ * `max(ceiling, default budget)`: a caller that raised `vectorTimeoutMs` for a
+ * slow endpoint still gets one full-length request, while the budget still
+ * refuses the second one once that time is gone. Never shorter than the
+ * per-request ceiling, so the configured knob is honoured exactly once.
+ *
+ * @param cfg - vector settings (raw or resolved).
+ * @returns the budget in milliseconds, a positive integer.
+ */
+export function vectorSearchBudgetMs(cfg) {
+  const resolved = resolveVectorConfig(cfg);
+  return Math.max(DEFAULT_VECTOR_SEARCH_BUDGET_MS, resolved.timeoutMs);
+}
 /** Relative cache directory, resolved against the process cwd by the caller. */
 export const DEFAULT_VECTOR_CACHE_DIR = ".lcm-vectors";
 
@@ -217,21 +264,27 @@ export async function embedTexts(cfg, texts, signal) {
  * @param cfg - vector settings (raw or resolved).
  * @param texts - input strings.
  * @param signal - optional caller abort signal.
+ * @param options - optional `{ deadline }`, an absolute epoch-ms instant the
+ *   whole call must fit in. Every request's timeout becomes
+ *   `min(vectorTimeoutMs, deadline - now)`, bisection included, so a refused
+ *   batch cannot spend more wall clock than a clean one. Absent means the plain
+ *   per-request ceiling.
  * @returns `{ vectors, failures }` where `vectors[i]` is a Float32Array or
  *   undefined, and `failures` is `[{ index, text, reason }]`.
  * @throws VectorBackendError when the layer is disabled or the backend itself
- *   is unusable (transport failure, timeout, 5xx, malformed payload) — a dead
- *   backend is never mistaken for a poisoned string.
+ *   is unusable (transport failure, timeout, budget exhaustion, 5xx, malformed
+ *   payload) — a dead backend is never mistaken for a poisoned string.
  */
-export async function embedTextsTolerant(cfg, texts, signal) {
+export async function embedTextsTolerant(cfg, texts, signal, options = {}) {
   const resolved = resolveVectorConfig(cfg);
   if (!resolved.enabled) throw new VectorBackendError("vector layer is disabled (vectorEnabled: false)");
   const list = Array.from(texts ?? [], (text) => String(text ?? ""));
+  const deadline = options?.deadline;
   const vectors = new Array(list.length);
   const failures = [];
   for (let start = 0; start < list.length; start += MAX_EMBED_BATCH) {
     const batch = list.slice(start, start + MAX_EMBED_BATCH);
-    const slots = await embedBatchTolerant(resolved, batch, signal);
+    const slots = await embedBatchTolerant(resolved, batch, signal, deadline);
     slots.forEach((slot, offset) => {
       if (slot.vector !== undefined) vectors[start + offset] = slot.vector;
       else failures.push({ index: start + offset, text: batch[offset], reason: slot.reason });
@@ -272,15 +325,16 @@ function bisectBudgetOf(batchSize) {
  * @param cfg - resolved vector settings.
  * @param batch - the texts of this batch.
  * @param signal - optional caller abort signal.
+ * @param deadline - optional absolute epoch-ms budget for the whole batch.
  * @returns one `{ vector }` or `{ reason }` slot per input, in order.
  * @throws VectorBackendError when the failure is not about the input text, or
  *   when the backend refused every text of the batch.
  */
-async function embedBatchTolerant(cfg, batch, signal) {
+async function embedBatchTolerant(cfg, batch, signal, deadline) {
   const slots = new Array(batch.length);
   if (batch.length === 0) return slots;
   const budget = { left: bisectBudgetOf(batch.length) };
-  await fillRange(cfg, batch, 0, batch.length, budget, signal, slots);
+  await fillRange(cfg, batch, 0, batch.length, budget, signal, slots, deadline);
   if (slots.every((slot) => slot.vector === undefined)) {
     // Not one string survived, including its cleaned variant: the endpoint is
     // refusing this payload as a whole, so the route is dead, not partial.
@@ -299,16 +353,17 @@ async function embedBatchTolerant(cfg, batch, signal) {
  * @param budget - shared request budget, decremented in place.
  * @param signal - optional caller abort signal.
  * @param slots - output slots, mutated in place.
+ * @param deadline - optional absolute epoch-ms budget, shared by every probe.
  * @throws VectorBackendError when the failure is not about the input text.
  */
-async function fillRange(cfg, batch, start, end, budget, signal, slots) {
+async function fillRange(cfg, batch, start, end, budget, signal, slots, deadline) {
   if (budget.left < 1) {
     skipRange(slots, start, end, "embedding request budget exhausted");
     return;
   }
   budget.left -= 1;
   try {
-    const vectors = await requestBatch(cfg, batch.slice(start, end), signal);
+    const vectors = await requestBatch(cfg, batch.slice(start, end), signal, deadline);
     vectors.forEach((vector, offset) => {
       slots[start + offset] = { vector };
     });
@@ -322,7 +377,7 @@ async function fillRange(cfg, batch, start, end, budget, signal, slots) {
         return;
       }
       budget.left -= 1;
-      slots[start] = await retryWithPrefix(cfg, batch[start], reason, signal);
+      slots[start] = await retryWithPrefix(cfg, batch[start], reason, signal, deadline);
       return;
     }
     if (budget.left < 2) {
@@ -330,8 +385,8 @@ async function fillRange(cfg, batch, start, end, budget, signal, slots) {
       return;
     }
     const mid = start + Math.floor((end - start) / 2);
-    await fillRange(cfg, batch, start, mid, budget, signal, slots);
-    await fillRange(cfg, batch, mid, end, budget, signal, slots);
+    await fillRange(cfg, batch, start, mid, budget, signal, slots, deadline);
+    await fillRange(cfg, batch, mid, end, budget, signal, slots, deadline);
   }
 }
 
@@ -358,11 +413,12 @@ function skipRange(slots, start, end, reason) {
  * @param text - the refused text.
  * @param reason - why the original form was refused.
  * @param signal - optional caller abort signal.
+ * @param deadline - optional absolute epoch-ms budget, shared with the descent.
  * @returns `{ vector }` on success, `{ reason }` when both forms fail.
  */
-async function retryWithPrefix(cfg, text, reason, signal) {
+async function retryWithPrefix(cfg, text, reason, signal, deadline) {
   try {
-    const [vector] = await requestBatch(cfg, [" " + text], signal);
+    const [vector] = await requestBatch(cfg, [" " + text], signal, deadline);
     return { vector };
   } catch (retryError) {
     // The variant failed too, so the text is poison in both forms. Anything that
@@ -538,6 +594,7 @@ const TRANSIENT_RETRY_MS = 250;
 function isTransientBackendFailure(error) {
   if (!(error instanceof VectorBackendError)) return false;
   if (error.poison === true) return false;
+  if (error.budget === true) return false;
   if (/timed out|aborted/u.test(error.message)) return false;
   if (typeof error.status === "number") return error.status >= 500;
   return true;
@@ -549,13 +606,14 @@ function isTransientBackendFailure(error) {
  * @param cfg - vector settings.
  * @param batch - input strings.
  * @param signal - optional caller abort signal.
+ * @param deadline - optional absolute epoch-ms budget, re-read per attempt.
  * @returns one Float32Array per input.
  */
-async function requestBatch(cfg, batch, signal) {
+async function requestBatch(cfg, batch, signal, deadline) {
   let last;
   for (let attempt = 1; attempt <= TRANSIENT_ATTEMPTS; attempt += 1) {
     try {
-      return await requestBatchOnce(cfg, batch, signal);
+      return await requestBatchOnce(cfg, batch, signal, deadline);
     } catch (error) {
       if (signal?.aborted === true || !isTransientBackendFailure(error)) throw error;
       last = error;
@@ -565,15 +623,41 @@ async function requestBatch(cfg, batch, signal) {
   throw last;
 }
 
+/**
+ * The wall clock one request may use: the ceiling, or what is left of the budget.
+ *
+ * Both bounds are real: the ceiling is what an operator configured, the budget is
+ * what this search may still spend. Without the second one a five-batch window
+ * spends five ceilings, which is the shape that made a live search sit for 40+ s.
+ * A budget that is already gone refuses the request instead of sending a doomed
+ * one — a distinct `budget` error, never a poison verdict and never retried.
+ *
+ * @param cfg - resolved vector settings.
+ * @param deadline - absolute epoch-ms budget, or undefined for the plain ceiling.
+ * @returns the timeout to arm, a positive integer.
+ * @throws VectorBackendError with `budget: true` when the budget is spent.
+ */
+function budgetedTimeout(cfg, deadline) {
+  if (deadline === undefined) return cfg.timeoutMs;
+  const remaining = deadline - Date.now();
+  if (remaining < 1) {
+    const error = new VectorBackendError("embedding time budget exhausted");
+    error.budget = true;
+    throw error;
+  }
+  return Math.min(cfg.timeoutMs, remaining);
+}
+
 /** POST one batch and decode its vectors, with a bounded wall clock. */
-async function requestBatchOnce(cfg, batch, signal) {
+async function requestBatchOnce(cfg, batch, signal, deadline) {
   const url = cfg.baseUrl + "/embeddings";
+  const timeoutMs = budgetedTimeout(cfg, deadline);
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, cfg.timeoutMs);
+  }, timeoutMs);
   const forwardAbort = () => controller.abort(signal?.reason);
   if (signal !== undefined && signal !== null) {
     if (signal.aborted) forwardAbort();
@@ -590,7 +674,7 @@ async function requestBatchOnce(cfg, batch, signal) {
         signal: controller.signal
       });
     } catch (error) {
-      if (timedOut) throw new VectorBackendError(`embedding endpoint ${url} timed out after ${cfg.timeoutMs}ms`, { cause: error });
+      if (timedOut) throw new VectorBackendError(`embedding endpoint ${url} timed out after ${timeoutMs}ms`, { cause: error });
       if (signal?.aborted === true) throw new VectorBackendError(`embedding request aborted: ${describe(signal.reason)}`, { cause: error });
       throw new VectorBackendError(`embedding endpoint ${url} unreachable: ${networkReason(error)}`, { cause: error });
     }
@@ -607,7 +691,7 @@ async function requestBatchOnce(cfg, batch, signal) {
     try {
       payload = await response.json();
     } catch (error) {
-      if (timedOut) throw new VectorBackendError(`embedding endpoint ${url} timed out after ${cfg.timeoutMs}ms`, { cause: error });
+      if (timedOut) throw new VectorBackendError(`embedding endpoint ${url} timed out after ${timeoutMs}ms`, { cause: error });
       throw new VectorBackendError(`embedding endpoint ${url} returned a non-JSON body`, { cause: error });
     }
     return decodeEmbeddings(payload, cfg, url, batch.length);
@@ -823,19 +907,39 @@ async function directoryBytes(dir) {
  * route. The result carries `skipped` and `failedSeqs` so a caller can see that
  * coverage was partial.
  *
+ * The embedding phase is bounded in WALL CLOCK, not in requests submitted:
+ * {@link vectorSearchBudgetMs} is one deadline for every POST this call makes,
+ * and each POST's timeout is `min(vectorTimeoutMs, deadline - now)`, bisection
+ * included. Work is done one {@link MAX_EMBED_BATCH} group at a time, newest
+ * candidate first, and each group is written to the cache the moment it returns.
+ * Two consequences that matter more than the tuning:
+ *
+ *   - a stall costs the budget, not the budget times the number of batches, so a
+ *     search cannot sit for minutes on a slow endpoint;
+ *   - a search that times out half-way still ANSWERS with the vectors it has and
+ *     still leaves them on disk, so the next search resumes instead of paying for
+ *     the same texts again. Before this, the whole embedding pass was written
+ *     after the single tolerant call returned, and a throw discarded every vector
+ *     the endpoint had already produced — a cold cache on a flaky endpoint could
+ *     never warm.
+ *
  * @param cfg - vector settings (raw or resolved).
  * @param items - `[{ seq, text }]` candidates (the whole session log).
  * @param queryText - the question, in natural language.
  * @param signal - optional caller abort signal.
  * @param limit - candidates to return; `0` keeps all. Defaults to `vectorTopK`.
+ * @param options - optional `{ budgetMs }` override for the embedding deadline
+ *   (tests and callers that measure a different tolerance). Defaults to
+ *   {@link vectorSearchBudgetMs}.
  * @returns `[{ seq, score }]` by descending cosine, then descending seq, plus
- *   `skipped` (how many candidates had no usable vector) and `failedSeqs`
- *   (their seqs).
+ *   `skipped` (how many candidates had no usable vector), `failedSeqs` (their
+ *   seqs) and `budgetExhausted` (true when the deadline, not the text, is what
+ *   stopped the embedding: the ranking is partial by construction).
  * @throws VectorBackendError when the backend itself fails, when the question
  *   cannot be embedded, or when every candidate was skipped — those are the
  *   cases where there is no vector ranking to return at all.
  */
-export async function rankByVector(cfg, items, queryText, signal, limit) {
+export async function rankByVector(cfg, items, queryText, signal, limit, options = {}) {
   const resolved = resolveVectorConfig(cfg);
   if (!resolved.enabled) return rankedResult([], 0, []);
   const query = embedInputOf(queryText);
@@ -851,28 +955,56 @@ export async function rankByVector(cfg, items, queryText, signal, limit) {
 
   const cache = vectorCache(resolved);
   const vectors = await cache.getMany([query, ...candidates.map((candidate) => candidate.text)]);
-  const needed = new Map();
-  if (!vectors.has(query)) needed.set(query, true);
-  for (const candidate of candidates) if (!vectors.has(candidate.text)) needed.set(candidate.text, true);
+  const budgetMs = Number.isSafeInteger(options?.budgetMs) && options.budgetMs > 0
+    ? options.budgetMs
+    : vectorSearchBudgetMs(resolved);
+  const deadline = Date.now() + budgetMs;
   const failures = [];
-  if (needed.size > 0) {
-    const texts = [...needed.keys()];
-    const embedded = await embedTextsTolerant(resolved, texts, signal);
+  // The query first, then the NEWEST candidate: the recent-but-compacted event is
+  // the likelier answer, so a budget that runs out has spent itself on the half of
+  // the window worth having. The window arrives oldest-first (log order).
+  const pending = missingTextsOf(vectors, query, candidates);
+  let budgetExhausted = false;
+  for (let start = 0; start < pending.length; start += MAX_EMBED_BATCH) {
+    if (Date.now() >= deadline) {
+      budgetExhausted = true;
+      break;
+    }
+    const batch = pending.slice(start, start + MAX_EMBED_BATCH);
+    let embedded;
+    try {
+      embedded = await embedTextsTolerant(resolved, batch, signal, { deadline });
+    } catch (error) {
+      // A caller abort is the caller's decision, not a budget: pass it through.
+      if (signal?.aborted === true) throw error;
+      // Without the query there is no ranking at all, so a dead route stays dead
+      // (the caller degrades to lexical, as before). After the query has landed,
+      // what this search already paid for is worth keeping: stop asking and answer
+      // with the groups that did return.
+      if (!vectors.has(query)) throw error;
+      budgetExhausted = true;
+      failures.push({ index: start, text: batch[0], reason: reasonOf(error) });
+      break;
+    }
     embedded.vectors.forEach((vector, index) => {
-      if (vector !== undefined) vectors.set(texts[index], vector);
+      if (vector !== undefined) vectors.set(batch[index], vector);
     });
     for (const failure of embedded.failures) failures.push(failure);
-    // A cache that cannot be written must not fail the search.
+    // Persist THIS group before asking for the next one. A cache that cannot be
+    // written must not fail the search.
     await cache.setMany(
-      texts.filter((text) => vectors.has(text)).map((text) => ({ text, vector: vectors.get(text) }))
+      batch.filter((text) => vectors.has(text)).map((text) => ({ text, vector: vectors.get(text) }))
     ).catch(() => {});
   }
 
   const queryVector = vectors.get(query);
   if (queryVector === undefined) {
-    // The question itself was refused, so there is no ranking to produce. That
-    // is a dead route, not a partial one: the caller must degrade.
-    const why = failures.find((failure) => failure.text === query)?.reason ?? "no vector for the query";
+    // The question itself was never embedded, so there is no ranking to produce.
+    // That is a dead route, not a partial one: the caller must degrade.
+    const why = failures.find((failure) => failure.text === query)?.reason ??
+      (budgetExhausted
+        ? `embedding time budget exhausted (${budgetMs}ms) before the query was embedded`
+        : "no vector for the query");
     throw new VectorBackendError(why);
   }
   const queryNorm = vectorNorm(queryVector);
@@ -895,7 +1027,36 @@ export async function rankByVector(cfg, items, queryText, signal, limit) {
   }));
   scored.sort((left, right) => right.score - left.score || right.seq - left.seq);
   const cap = limit ?? resolved.topK;
-  return rankedResult(cap > 0 ? scored.slice(0, cap) : scored, failedSeqs.length, failedSeqs);
+  return rankedResult(cap > 0 ? scored.slice(0, cap) : scored, failedSeqs.length, failedSeqs, budgetExhausted);
+}
+
+/**
+ * The texts one search still has to embed, in the order it will embed them.
+ *
+ * The query leads, because without it there is no ranking at all; the candidates
+ * follow NEWEST first, because the window is a recency window and a budget that
+ * runs out should have bought the likelier half. De-duplicated by text, which is
+ * also the cache key, so two events with identical bodies cost one vector.
+ *
+ * @param vectors - the warmed cache entries, keyed by text.
+ * @param query - the embedded query text.
+ * @param candidates - `[{ seq, text }]` in log order.
+ * @returns the texts to embed, query first, candidates newest-first.
+ */
+function missingTextsOf(vectors, query, candidates) {
+  const texts = [];
+  const seen = new Set();
+  if (!vectors.has(query)) {
+    texts.push(query);
+    seen.add(query);
+  }
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const text = candidates[index].text;
+    if (vectors.has(text) || seen.has(text)) continue;
+    seen.add(text);
+    texts.push(text);
+  }
+  return texts;
 }
 
 /**
@@ -908,12 +1069,15 @@ export async function rankByVector(cfg, items, queryText, signal, limit) {
  * @param entries - ordered `{ seq, score }`.
  * @param skipped - candidates with no usable vector.
  * @param failedSeqs - their seqs, in candidate order.
+ * @param budgetExhausted - true when the embedding deadline, not the text, is
+ *   what left candidates without a vector. Defaults to false.
  * @returns the ranking array with diagnostics attached.
  */
-function rankedResult(entries, skipped, failedSeqs) {
+function rankedResult(entries, skipped, failedSeqs, budgetExhausted = false) {
   const ranked = entries.slice();
   ranked.skipped = skipped;
   ranked.failedSeqs = failedSeqs.slice();
+  ranked.budgetExhausted = budgetExhausted === true;
   return ranked;
 }
 

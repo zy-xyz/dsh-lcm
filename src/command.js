@@ -26,7 +26,7 @@ import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, collectVectorItems, searchSession } from "./search.js";
-import { MAX_EMBED_BATCH, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats } from "./vectors.js";
+import { MAX_EMBED_BATCH, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats, vectorSearchBudgetMs } from "./vectors.js";
 
 const name = "command-lcm-search";
 const inject = ["commands"];
@@ -40,6 +40,21 @@ const EMBED_USAGE = "Usage: /lcm-embed status | /lcm-embed backfill [--apply] [-
  * of events before the operator sees a single line of output.
  */
 const DEFAULT_BACKFILL_LIMIT = 200;
+
+/**
+ * Consecutive failed batches a backfill pass tolerates before it stops.
+ *
+ * A search has one deadline ({@link vectorSearchBudgetMs}); a backfill does not,
+ * and must not: its row deliberately carries a long per-batch ceiling (240 s on
+ * the shipped embed row) so an offline pass can ride out the endpoint's tail, and
+ * shortening that with a pass deadline would throw away the tolerance the row was
+ * configured for. What must not happen is a DEAD endpoint walking the whole
+ * window at that ceiling — five batches of 240 s is twenty minutes of a blocked
+ * command. Two consecutive batches that embed nothing is the lcm-x circuit
+ * breaker's threshold, and the pass stops there: what was embedded is already on
+ * disk, and the next run resumes from the cache.
+ */
+const BACKFILL_FAILURE_LIMIT = 2;
 
 /**
  * Which command set one Loader row mounts.
@@ -384,15 +399,26 @@ function parseEmbedArgs(rawInput) {
  * where a backfill would write. `rank` is stated as not applicable instead of
  * invented — filling a cache never ranks anything, and the surface that does
  * rank is the `lcm_search` tool.
+ * The cache totals alone cannot answer "is the semantic route warm for THIS
+ * session": a cache with 900 files says nothing about whether the events this
+ * session hides are among them. The window lines answer it from the calling
+ * session, priced with the same collector the search route and the backfill use,
+ * so `pending` is exactly what the next search must embed and what a `--apply`
+ * would send. Read-only by construction: counting goes through the cache lookup
+ * only, so a status call issues no provider request.
+ *
  * @param cfg - resolved settings (raw config is accepted too).
+ * @param session - optional calling session; absent (or a fixture without one)
+ *   reports the window as zeros rather than guessing.
  * @returns the human-readable status block.
  */
-async function buildEmbedStatus(cfg) {
+async function buildEmbedStatus(cfg, session) {
   const stats = await vectorCacheStats(cfg);
   // Which source answers the bearer token is the ONE line that separates "the
   // layer is off" from "the layer is on and the gateway is refusing us" — the
   // difference between a 401 and an unset flag is otherwise invisible from here.
   const auth = await resolveVectorAuth(cfg);
+  const window = await cacheWindowOf(cfg, session);
   return [
     "lcm-embed status",
     "  model: " + stats.model,
@@ -400,12 +426,44 @@ async function buildEmbedStatus(cfg) {
     "  cache: " + stats.dir,
     "  files: " + stats.files,
     "  bytes: " + stats.bytes,
+    "  candidates: " + window.candidates + " hidden text(s)",
+    "  cached: " + window.cached,
+    "  pending: " + window.pending + " (what one --apply would embed now)",
+    "  search budget: " + vectorSearchBudgetMs(cfg) + " ms per search — the window is embedded newest-first until that deadline, then the search answers with what it has",
     "  rank: n/a — /lcm-embed only fills the cache; the lcm_search tool ranks",
     "  auth: " + describeAuth(auth.source, cfg.apiKeyEnv),
     cfg.enabled
       ? "  layer: enabled"
       : "  layer: disabled — vectorEnabled is false, so a backfill would embed nothing"
   ].join("\n");
+}
+
+/**
+ * How warm the cache is for one session's candidate window.
+ *
+ * The window is the search route's own: `collectVectorItems` with this row's
+ * `candidateLimit` / `candidateTokens`, which are the keys the search row reads
+ * too. The time budget does not shrink that window — it decides how much of it
+ * ONE search manages to embed — so the count answers "what would a search ask
+ * for", and the `search budget` line says how much of it fits per call.
+ *
+ * `cached` counts window texts already on disk; `pending` is the rest, which is
+ * what a `--apply` would send. Both are per candidate, like the backfill's own
+ * counters, so a duplicate body counts twice here exactly as it does there.
+ *
+ * @param cfg - resolved settings (candidate bounds included).
+ * @param session - optional calling session.
+ * @returns `{ candidates, cached, pending }`, zeros without a session.
+ */
+async function cacheWindowOf(cfg, session) {
+  if (session === undefined || session === null) return { candidates: 0, cached: 0, pending: 0 };
+  const { items } = collectVectorItems(session, { events: cfg.candidateLimit, tokens: cfg.candidateTokens });
+  const cache = vectorCache(cfg);
+  let cached = 0;
+  for (const item of items) {
+    if (await cache.get(String(item.text ?? "").slice(0, VECTOR_TEXT_LIMIT)) !== null) cached += 1;
+  }
+  return { candidates: items.length, cached, pending: items.length - cached };
 }
 
 /**
@@ -455,6 +513,8 @@ async function embedBackfill(session, cfg, options = {}) {
   }
   let embedded = 0;
   let failed = 0;
+  let consecutiveFailures = 0;
+  let stopped = "";
   if (apply && pending.length > 0) {
     // One batch at a time, writing as each returns.
     //
@@ -469,10 +529,19 @@ async function embedBackfill(session, cfg, options = {}) {
       let result;
       try {
         result = await embedTextsTolerant(cfg, batch);
+        consecutiveFailures = 0;
       } catch (error) {
         // The endpoint refused the whole batch (auth, routing, a dead server).
-        // Those texts stay uncached and are counted, not silently dropped.
+        // Those texts stay uncached and are counted, not silently dropped. The
+        // pass stops at the breaker rather than walking the window at this row's
+        // long ceiling: nothing here is lost, because every earlier batch is
+        // already on disk and a re-run resumes from the cache.
         failed += batch.length;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= BACKFILL_FAILURE_LIMIT) {
+          stopped = "failures";
+          break;
+        }
         continue;
       }
       for (let index = 0; index < batch.length; index += 1) {
@@ -489,11 +558,11 @@ async function embedBackfill(session, cfg, options = {}) {
     }
   }
   const report = { scanned: selected.length, alreadyCached, embedded, failed, limit, applied: apply };
-  return { report, text: renderEmbedBackfill(cfg, candidates.length, pending.length, report, cache.dir) };
+  return { report, text: renderEmbedBackfill(cfg, candidates.length, pending.length, report, cache.dir, stopped) };
 }
 
 /** Render one backfill report. */
-function renderEmbedBackfill(cfg, windowSize, pending, report, dir) {
+function renderEmbedBackfill(cfg, windowSize, pending, report, dir, stopped = "") {
   const lines = [
     "lcm-embed backfill (" + (report.applied ? "apply" : "dry-run") + ")",
     "  model: " + cfg.model,
@@ -508,6 +577,12 @@ function renderEmbedBackfill(cfg, windowSize, pending, report, dir) {
     lines.push("  would embed: " + pending, "  note: preview only; no provider call was made");
   }
   lines.push("  limit: " + report.limit, "  applied: " + (report.applied ? "yes" : "no"));
+  if (stopped === "failures") {
+    lines.push(
+      "  stopped: " + BACKFILL_FAILURE_LIMIT + " consecutive failed batch(es) — the endpoint is refusing these calls",
+      "  resumed: nothing was lost; the embedded text(s) are cached, so re-running --apply continues from there"
+    );
+  }
   if (!report.applied && pending > 0) lines.push("  next: /lcm-embed backfill --apply  (embeds the " + pending + " pending text(s))");
   return lines.join("\n");
 }
@@ -525,7 +600,10 @@ function defineEmbedCommand(resolved, commandName = EMBED_NAME) {
       const parsed = parseEmbedArgs(invocation.rawInput);
       if (parsed.error !== undefined) return { kind: "error", text: parsed.error };
       try {
-        if (parsed.action === "status") return { kind: "success", text: await buildEmbedStatus(resolved) };
+        if (parsed.action === "status") return {
+          kind: "success",
+          text: await buildEmbedStatus(resolved, invocation.agent.session)
+        };
         if (parsed.apply && !resolved.enabled) return {
           kind: "error",
           text: "lcm-embed: the vector layer is disabled (vectorEnabled: false) — enable it on the command-lcm-embed row, then retry --apply."

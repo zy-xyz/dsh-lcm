@@ -127,7 +127,12 @@
         vectorModel: mistral-proxy/codestral-embed
         vectorDim: 1536
         vectorApiKeyEnv: OMNIROUTE_API_KEY
-        vectorCandidateTokens: 100000
+        # The SAME window as the search row above, and that is deliberate:
+        # /lcm-embed status prices its candidates from THIS row's config, so a
+        # different number here would report a pending count the search never
+        # asks for — and a backfill would warm texts no search reads. Both rows
+        # currently agree; keep them that way.
+        vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
         # A backfill pass is offline work, so it tolerates the endpoint's tail.
         # Measured 2026-11-09 on mistral-proxy/codestral-embed: eight consecutive

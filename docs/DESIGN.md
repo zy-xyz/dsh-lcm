@@ -358,7 +358,11 @@ rather than in events, because cost tracks text length: on the measured endpoint
 about 18 ms per text plus 0.23 ms per estimated token, and neither batching
 (87–92 ms/text across batch sizes 8–128) nor concurrency (8 parallel POSTs:
 205 ms/text, worse than serial) changes it. 100 000 tokens is ~200 compacted
-events and ~19 s on a cold cache, then free per text. The residual limitation is
+events and ~19 s on a cold cache, then free per text. The shipped search row
+carries 30 000, not the default: on a remote endpoint 2.6–5.1 s per 32-text
+batch with a 65.6 s tail, a 200-event window was seven batches and the first live
+search timed out. The window is a price, not a promise — how much of it one
+search actually reaches is decided by the time budget below. The residual limitation is
 stated in the result header on every call: older compacted events cannot be
 reached by similarity at all, only by a lexical pattern, which is why
 `rank: "hybrid"` is the setting that keeps them in the answer. A session that has
@@ -369,6 +373,96 @@ accepting one it would ignore: it is answered inline at a prompt, and a ~20 s
 stall is a thing a human feels, while the tool is where a wording mismatch
 actually needs help.
 
+### What bounds one search's embedding cost
+
+A per-request timeout is not a bound on a search, and treating it as one was the
+defect. The cost of one search is *the number of embedding POSTs it makes* times
+the ceiling, and both factors grew without limit: a 60-event window at 32 texts
+per POST is two batches, each of which may take `vectorTimeoutMs`; a transient
+5xx is retried once, doubling it; a refused batch is bisected, which is
+`2*log2(n) + 1` more requests (`n = 32` gives 11). On the shipped endpoint
+(mistral-proxy/codestral-embed, 2026-11-09) eight consecutive 32-text batches
+measured 2.6/5.1/3.0/65.6/2.6 s with one HTTP 500 mid-run, so the tail is real
+and the arithmetic is not hypothetical: 2 batches x 20 000 ms = 40 s per search
+before any retry or bisection, and a five-batch window is 100 s. That is the
+mechanism behind the observed `timed out after 20000ms; fell back to lexical`,
+and why a second search on the same session died the same way.
+
+Three numbers bound one search now, and only the last one is a wall clock:
+
+| bound | value | what it decides |
+|---|---|---|
+| the window | `vectorCandidateTokens` (30 000 shipped) | which texts a search may ask about at all |
+| the per-request ceiling | `vectorTimeoutMs` (30 000 shipped) | how long one POST may take |
+| the search budget | `DEFAULT_VECTOR_SEARCH_BUDGET_MS` (30 000), effective `max(30 000, vectorTimeoutMs)` | how long the whole embedding phase may take |
+
+The budget is ONE absolute deadline for the call, created before the first
+request. Every POST's timeout is `min(vectorTimeoutMs, deadline - now)`, and the
+same deadline is threaded through the bisection descent and the cleaned-variant
+retry, so a refusal cannot buy extra wall clock: `bisectionBudgetOf` still caps
+the number of probes, and the deadline caps their cost. The budget is
+`max(30 000, vectorTimeoutMs)` and not a new configuration key, for two reasons:
+a raised per-request ceiling must never be silently shortened (that knob was set
+by an operator for a reason), and the number is a safety bound against a stalled
+endpoint rather than a performance setting — like `MAX_EMBED_BATCH`, raising it
+only makes a stall longer.
+
+Four behaviours follow, and each one is a case the old shape got wrong:
+
+- **Work is one group at a time, newest candidate first.** The query leads
+  (without it there is no ranking), then candidates from the newest end of the
+  window, because recent-but-compacted is the likelier answer. A budget that runs
+  out has then bought the half worth having instead of the oldest half.
+- **Each group is written to the cache the moment it returns.** Before this, the
+  whole embedding pass was written after the single tolerant call returned, and a
+  throw discarded every vector the endpoint had already produced — so on a flaky
+  endpoint a cold cache could never warm, and every search paid for the same
+  texts and died at the same batch. Now a search that stalls half-way leaves its
+  progress on disk and the next search resumes from there.
+- **A stall costs the budget, once.** The first POST is capped at what is left;
+  when the deadline passes, no further POST is sent. Measured with a
+  never-answering endpoint, a 5 000 ms ceiling and a 1 200 ms budget: one request,
+  1 217 ms total, instead of one request per batch at the ceiling.
+- **Where the budget lands is visible, and why it stopped.** `rankByVector`
+  reports `budgetExhausted` alongside `skipped`/`failedSeqs`, and a search that
+  has the query plus some groups answers with a partial ranking rather than
+  throwing. The dead-route cases still throw and still degrade to lexical: no
+  query vector, or no candidate vector at all. `rank: "hybrid"` is the setting
+  where a partial vector list is safe, because RRF keeps the lexical hits in the
+  answer.
+
+  `skipped` is a COUNT with two causes and `budgetExhausted` is the flag that
+  separates them: a text the endpoint refused (the production HTTP 400 on exact
+  bytes) leaves the same gap in the ranking as a deadline that cut the window
+  short, and only one of the two is the budget. Measured counter-example: three
+  candidates, one refused, healthy endpoint, no deadline spent, and the header
+  that keys off `skipped` alone prints "embedding budget exhausted (1
+  uncovered)". Anything rendering that gap reads `budgetExhausted` for the
+  cause and `skipped` only for the size.
+  The result HEADER says so too: a truncated call renders "N of M newest
+  compacted event(s) ranked, embedding budget exhausted (K uncovered)" instead of
+  claiming the whole window, because a window is a price, not a promise.
+
+The backfill route is deliberately different, and does not share this budget.
+Its row carries a long per-request ceiling (240 s shipped) so an offline pass can
+ride out the endpoint's tail; a search deadline would throw that tolerance away.
+Its bounds are instead `--limit` (how many texts one pass may consider), the
+per-batch write (a stalled batch loses only that batch), and a circuit breaker:
+two consecutive failed batches stop the pass, because a dead endpoint walking a
+200-text window at a 240 s ceiling is twenty minutes of a blocked command.
+Nothing is lost when it stops: what was embedded is on disk and the next
+`--apply` resumes from the cache.
+
+`/lcm-embed status` answers the question the cache totals cannot: is the semantic
+route warm for THIS session. It prints `candidates` (the priced window from the
+calling session, via the same `collectVectorItems` the search and the backfill
+use), `cached` (how many of those already have a vector on disk) and `pending`
+(the rest, i.e. what a `--apply` would send now), plus the search budget so the
+operator can see that one search reaches only the part of the window that fits.
+It counts through the cache lookup only and issues no provider request, and it
+reports zeros rather than guessing when the layer is off or the session exposes
+no compacted events.
+
 ### Switching embedding models, and filling the cache
 
 Three things make the model swappable rather than merely configurable:
@@ -378,6 +472,9 @@ Three things make the model swappable rather than merely configurable:
 | a stale vector must never be read | the on-disk directory is `<cacheDir>/<12 hex of sha256(model)>-<dim>/`, and the per-text key is `sha256(model + "\n" + text)`; two models share neither a directory nor a key, and a wrong-width file is a miss (`bytes.byteLength !== dim * 4`) |
 | the stale model must be deletable as one unit | `pruneForeignVectorCaches(cfg)` removes every sibling directory under the root except the current model/width one, and reports `{removed, bytes}`; `vectorCacheStats(cfg)` reports `{dir, model, dim, files, bytes}` for the live one |
 | a fresh model must not cost a cold search | `/lcm-embed backfill` walks the same candidate set the search route embeds (`collectVectorItems`, exported from `src/search.js` for exactly this caller) and writes the same cache keys, so a warmed cache is the cache the next search reads; dry-run by default, `--apply` spends the calls, `--limit` keeps the newest N |
+| one search's cost must be bounded | `rankByVector` runs the whole embedding phase under one deadline (`DEFAULT_VECTOR_SEARCH_BUDGET_MS`, effective `max(30 000, vectorTimeoutMs)`), and every POST — bisection probes and the cleaned-variant retry included — is capped at `min(vectorTimeoutMs, deadline - now)`; a stalled search cannot become `batches x ceiling`, and the arithmetic is in the section above |
+| a search that has to stop must leave progress behind | groups of `MAX_EMBED_BATCH` are embedded and written to the cache one at a time, newest candidate first, so a stall costs the batch in flight and not the ones already paid for: the next search resumes instead of re-embedding, and a `--apply` after a stalled backfill continues from the cache |
+| a dead endpoint must not block the operator | the backfill stops after two consecutive failed batches (`BACKFILL_FAILURE_LIMIT`, the lcm-x breaker threshold) and says so, rather than walking a 200-text window at the row's 240 s ceiling |
 
 Why one implementation of the candidate rule and not two: which texts get
 embedded is decided by four interacting rules — message-producing types only,
