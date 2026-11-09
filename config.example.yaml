@@ -81,9 +81,25 @@ checkpointCap: 16384
 # 一次压缩最多吃掉多少 token。默认 24000（借自 lcm-x 的 leaf_chunk_tokens）。
 # 为什么要有这个上限：整段一次压完时，单次响应常被 provider 的上限截断，
 # 实测 147k 跨度一次压完 → 5/15 题只剩一节；切成 7 个 20-23k 的叶 → 7/7 六节齐全、finish=stop。
-# 上限不是越小越好：叶越多，固定前缀（system + tools 定义）每叶重发一次，
-# 成本按叶数线性涨。0 关闭上限（回到整段一次压完）。
+# 叶请求**不重放宿主 system prompt**（lcm-x 也不重放），所以叶再多也不会每叶重发一遍系统提示。
+# 0 关闭上限（回到整段一次压完）。
 leafSpanTokens: 24000
+
+# 越过阈值后是否连续压多个叶，直到「保留尾部之外的可压内容压完」为止。默认 true（同 lcm-x 的
+# threshold_full_sweep_enabled）。设 false 回到「一次越阈值只放出一个叶」的旧行为。
+# 为什么默认开：实测 1M 窗口、807187 tok（80.7%）时，一个 24000 的叶落地到 783136（78.3%），
+# 已经在阈值下方，于是停下；下一次越阈值又只放一个叶。会话就一直焊在阈值附近，
+# 每次付一整次模型调用只换来 2.4% 的窗口。开了之后一次越阈值就把积压压掉。
+thresholdFullSweep: true
+
+# 一次 sweep 最多放几个叶。默认 12（同 lcm-x 的 _THRESHOLD_FULL_SWEEP_MAX_PASSES）。
+# 12 × 24000 = 288000，即 1M 窗口的 28.8%，够把会话从阈值上推开而不会把单步变成无界开销。
+fullSweepMaxPasses: 12
+
+# 一次 sweep 的墙钟预算（秒）。默认 120（同 lcm-x 的 _THRESHOLD_FULL_SWEEP_MAX_SECONDS）。
+# pass 数不是花费闸门：一个叶 30 秒时 12 个叶是 6 分钟，整步都堵在这里。
+# 超时按「部分完成」返回，下一轮继续，不报错。
+fullSweepMaxSeconds: 120
 
 # 同深度 checkpoint 凑够几个就合并成上一层的一个节点。默认 4（同 lcm-x 的 condensation_fanin）。
 # **下限是 2，不是 1**：`fanin > 1` 是唯一会「跳过已在表面上的 checkpoint」的分支，

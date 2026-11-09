@@ -222,9 +222,9 @@ function maxTokensTruncation() {
 /**
  * Run one leaf summarization through `ctx.llm.stream()`.
  *
- * The conversation prefix (system head + the shadowed messages) is replayed
- * verbatim so the provider's warm prefix cache is reused, matching
- * `dsh-compaction-basic`. Only the final instruction message is new.
+ * Only the shadowed messages and the instruction are sent. See the long comment
+ * in the body for why the host's system prompt is deliberately NOT replayed:
+ * basic pays it once, a leaf backend would pay it once per leaf.
  *
  * @param ctx - context providing the LLM service.
  * @param config - resolved engine configuration.
@@ -251,14 +251,31 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   if (regionMessages.length === 0) throw new Error("lcm: selected span produced no model-visible messages");
 
   const header = session.requestHeader();
-  const headSeq = session.surface.nodes[0];
-  const headEvent = headSeq === undefined ? undefined : session.eventAt(headSeq);
-  // Only a `system/message` is the conversation head. When surface node 0 is any
-  // other message (a session whose first node is a user turn), prepending it as
-  // the "system" prefix ALSO leaves it inside `regionMessages`, so that message
-  // reached the summarizer twice. `dsh-compaction-basic` gates on the event type
-  // for the same reason; this is its rule, verbatim.
-  const system = headEvent === undefined || headEvent.type !== "system/message" ? null : session.deriveEventMessage(headEvent);
+  // The conversation's own system prompt is NOT replayed here.
+  //
+  // `dsh-compaction-basic` replays it, and that is correct FOR BASIC: it compacts
+  // the whole prefix in ONE call, so the system prompt is paid once and the
+  // provider's warm prefix cache can absorb it. This backend compacts in leaves,
+  // so the same decision is paid once PER LEAF. Measured on a real 1M-window
+  // session whose system prompt is 411 154 characters (~101 120 tokens): one
+  // 24 000-token leaf call billed 137 304 input tokens of which 136 064 were the
+  // replayed system prompt (99%), and the call took 90.4 s. The identical leaf
+  // with the system prompt omitted billed 36 184 input tokens and took 32.0 s —
+  // 2.8x faster and 3.8x cheaper for the same six-section output (7 376 vs 7 158
+  // characters, both complete).
+  //
+  // The system prompt bought nothing even when it hit the cache: cacheRead was
+  // 136 064 of 137 304 (99% cached) and the call was still 90 s, because a cached
+  // prefill is cheap in dollars and not in wall time.
+  //
+  // lcm-x never sends the host system prompt. Its leaf request is its own short
+  // contract (a system message it writes) plus the transcript as user data, and
+  // its fallback path is a bare `[{role:"user", content: prompt}]`. This follows
+  // that: the instruction below already states the contract, so the span and the
+  // instruction are the whole request.
+  //
+  // A twelve-leaf sweep at 90 s/leaf is 18 minutes; at 32 s/leaf it is 6.4, which
+  // is what makes a sweep usable at all.
 
   const latest = header?.config;
   const agentTarget =
@@ -312,7 +329,7 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
       }
     ]
   });
-  const messages = system === null ? [...regionMessages, instruction] : [system, ...regionMessages, instruction];
+  const messages = [...regionMessages, instruction];
 
   // A ceiling, and why it is twice the target.
   //

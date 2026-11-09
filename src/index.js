@@ -277,6 +277,7 @@ const maxTokensSchema = z.number().step(1).min(1);
 // holds one checkpoint forever at a growing depth. 1 is therefore not a small value
 // of this key, it is the bug this key exists to prevent.
 const condensationFaninSchema = z.number().step(1).min(2);
+const fullSweepMaxPassesSchema = z.number().step(1).min(1);
 const compactionRetriesSchema = z.number().step(1).min(0);
 const maxOverflowRetriesSchema = z.number().step(1).min(0);
 
@@ -321,6 +322,9 @@ export class LcmCompactionEngine extends CompactionEngine {
     summaryFloorTokens: maxTokensSchema,
     leafSpanTokens: maxTokensSchema,
     condensationFanin: condensationFaninSchema,
+    thresholdFullSweep: z.boolean(),
+    fullSweepMaxPasses: fullSweepMaxPassesSchema,
+    fullSweepMaxSeconds: fullSweepMaxPassesSchema,
     stallCooldownMs: maxTokensSchema,
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
@@ -821,8 +825,38 @@ export class LcmCompactionEngine extends CompactionEngine {
       if (!grew && Date.now() < stall.until) return null;
       this.stallBySession.delete(agent.session.id);
     }
+    // ── lcm-x's threshold full sweep ──────────────────────────────────────
+    // A crossing is a SWEEP, not a single leaf. Measured on a real 1M-window
+    // session (807 187 tok = 80.7%): one leaf of 24 000 landed at 783 136
+    // (78.3%), the very next cross released another, and the session stayed
+    // welded to the threshold paying one full model call per 2.4% of window.
+    //
+    // The reference backend (`threshold_full_sweep_enabled`, default True) raises
+    // its leaf-pass budget to 12 on a crossing and runs until the raw backlog
+    // outside the fresh tail is drained — not until the threshold is merely
+    // re-cleared. The total work to move a 650k span is the same either way; the
+    // difference is that a sweep pays it once instead of spreading it over 27
+    // crossings, each of which leaves the session sitting at ~80% and therefore
+    // paying an 800k-token prompt on EVERY request in between.
+    //
+    // A manual request keeps the retry budget: `requireBelowThreshold` is a model
+    // switch that must report why it cannot admit the new model, and "the sweep
+    // stopped after its pass budget" is not that answer.
+    const sweep = this.config.thresholdFullSweep && !requireBelowThreshold;
+    const passBudget = sweep ? this.config.fullSweepMaxPasses : spec.compactionRetries + 1;
+    // Passes are not a spend guard on their own when a pass is slow: twelve
+    // 30-second leaves is six minutes inside one step, and the session is blocked
+    // for all of it. lcm-x bounds the same sweep by wall clock and records a
+    // partial stop so the next turn continues; so does this.
+    const sweepDeadline = sweep ? Date.now() + this.config.fullSweepMaxSeconds * 1000 : Number.POSITIVE_INFINITY;
     let result = null;
-    for (let attempt = 0; attempt <= spec.compactionRetries; attempt += 1) {
+    let passes = 0;
+    let sweepStop = "";
+    for (; passes < passBudget; passes += 1) {
+      if (passes > 0 && Date.now() >= sweepDeadline) {
+        sweepStop = "time_budget_exhausted";
+        break;
+      }
       // The span floor is what stops the "span=1 seqs=24-24 shadowedTokens=428
       // budget=512" attempt: at 428 tokens the resolved budget is clamped to
       // summaryFloorTokens (512), so the checkpoint could never be smaller and
@@ -861,7 +895,10 @@ export class LcmCompactionEngine extends CompactionEngine {
       // surface, so the session is no longer stalled.
       this.stallBySession.delete(agent.session.id);
       measurement = meter.measure(agent.session, header);
-      if (measurement.totalTokens < spec.thresholdTokens) return result;
+      // A SWEEP does not stop on re-clearing the threshold — that is exactly the
+      // tick this key exists to remove. It stops when the raw prefix is drained
+      // (the next selection returns null) or when its pass budget is spent.
+      if (!sweep && measurement.totalTokens < spec.thresholdTokens) return result;
     }
     // Still above threshold after the allowed attempts. Before calling that a
     // failure, ask whether any further compaction is even possible: when the
@@ -877,6 +914,17 @@ export class LcmCompactionEngine extends CompactionEngine {
       engineDebug(
         this.config,
         `pressure exhausted: ${measurement.totalTokens} >= ${spec.thresholdTokens} but nothing is compactable (baseline is above the threshold; lower it or accept this size)`
+      );
+      return result;
+    }
+    // A sweep that ran out of budget is a PARTIAL progress report, not a failure:
+    // lcm-x records the same stop reasons and lets the next turn continue. It is
+    // only a failure when nothing was written at all, which the loop above already
+    // turned into a return/throw.
+    if (sweep && result !== null) {
+      engineDebug(
+        this.config,
+        `sweep stopped (${sweepStop.length > 0 ? sweepStop : "pass_budget_exhausted"}) after ${passes} leaf pass(es) at ${measurement.totalTokens} >= ${spec.thresholdTokens}; the next turn continues`
       );
       return result;
     }

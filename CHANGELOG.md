@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.9.0 — 2026-11-09 — a threshold crossing now sweeps, and a leaf no longer pays for the system prompt
+
+Two defects found on a real 1M-window production session (`session-65bd8898`,
+"用 agent 团队在 FNOS 上构建 macOS kShim 双系统"). Both are the kind that look like
+"compaction ran and did nothing".
+
+### Fixed — a crossing released ONE leaf and stopped
+
+Measured: crossing at 807 187 tokens (80.7%) released a single 24 000-token leaf,
+landed at 783 136 (78.3%) — below the 800 000 threshold — and returned. The next
+crossing released another single leaf. The session stayed welded to the threshold,
+paying one full model call per 2.4% of window, and the UI kept reading 78%.
+
+That is not lcm-x's design. lcm-x has `threshold_full_sweep_enabled` (default
+True): a crossing raises the leaf-pass budget to 12 and runs until the raw backlog
+outside the fresh tail is drained (`compaction.py:2313`, `2623-2626`), bounded by
+`_THRESHOLD_FULL_SWEEP_MAX_PASSES = 12` and
+`_THRESHOLD_FULL_SWEEP_MAX_SECONDS = 120`.
+
+Three new keys, all matching lcm-x's constants:
+
+| key | default | meaning |
+|---|---|---|
+| `thresholdFullSweep` | `true` | a crossing sweeps; `false` restores the tick |
+| `fullSweepMaxPasses` | `12` | leaves one sweep may release |
+| `fullSweepMaxSeconds` | `120` | wall-clock budget for one sweep |
+
+Exhausting either budget is a partial stop that returns the last checkpoint and
+lets the next turn continue — lcm-x's `pass_budget_exhausted` /
+`time_budget_exhausted` — not an error. The manual path keeps the old retry
+budget: a model switch that cannot reach the threshold must say so.
+
+### Fixed — every leaf replayed the conversation's 411 154-character system prompt
+
+`summarizeLeaf` prepended the conversation's own system prompt to every leaf
+request, copying `dsh-compaction-basic` (which replays it because basic compacts
+the whole prefix in ONE call, so it is paid once). In a leaf backend the same
+decision is paid once per leaf, and on this session it was 99% of the request:
+
+| leaf request | input tokens | cacheRead | wall clock | output |
+|---|---:|---:|---:|---|
+| with the system prompt (before) | 137 304 | 136 064 | 90.4 s | 7 376 chars, 6 sections |
+| without it (after) | 36 184 | 0 | 32.0 s | 7 158 chars, 6 sections |
+
+3.8x cheaper and 2.8x faster for the same output. The cache did not save the wall
+clock: `cacheRead` was 136 064 of 137 304 and the call still took 90 s, because a
+cached prefill is cheap in dollars and not in time. Twelve leaves at 90 s is 18
+minutes; at 32 s it is 6.4, which is what makes a sweep usable.
+
+lcm-x never sends the host system prompt: its leaf request is its own short
+contract plus the transcript as user data, with a bare `[{role:"user", ...}]` as
+the fallback path. The instruction already carries the contract, so the span and
+the instruction are now the whole request.
+
+Tests: 228 → 235. `test/threshold-sweep.test.js` pins the sweep, its two budgets,
+the partial stop, the disabled fallback, and the manual path;
+`test/summarizer-parity.test.js` now asserts the system prompt is absent rather
+than present.
+
 ## 0.8.0 — 2026-11-09 — five defects found by auditing against the LCM paper
 
 An audit of the deployed engine against the paper's invariants and against real

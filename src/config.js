@@ -62,6 +62,44 @@ const DEFAULT_SUMMARY_FLOOR_TOKENS = 512;
  */
 const DEFAULT_LEAF_SPAN_TOKENS = 24000;
 /**
+ * Whether one threshold crossing condenses until the raw prefix is drained,
+ * instead of releasing a single leaf.
+ *
+ * This is lcm-x's `threshold_full_sweep_enabled` (default True there too), and it
+ * exists because the one-leaf-per-crossing behaviour measured on a real 1M-window
+ * session is not compaction but a tick: crossing at 807 187 tokens (80.7%)
+ * released one 24 000-token leaf and landed at 783 136 (78.3%), then crossed
+ * again immediately. Each crossing paid a full model call to buy 2.4% of the
+ * window, so the session sat welded to the threshold forever.
+ *
+ * The reference backend's semantics are "crossing = sweep": `max_leaf_passes`
+ * is raised to 12 and the loop runs until the raw backlog outside the fresh tail
+ * is drained, not until the threshold is merely re-cleared. One crossing then
+ * buys a real drop.
+ */
+const DEFAULT_THRESHOLD_FULL_SWEEP = true;
+/**
+ * Leaves one full sweep may release (lcm-x's `_THRESHOLD_FULL_SWEEP_MAX_PASSES`).
+ *
+ * The bound is a spend guard, not a target: a sweep that drains first stops
+ * early. 12 leaves of 24 000 is 288 000 tokens, i.e. 28.8% of a 1M window, which
+ * is enough to move a session off the threshold in one crossing without turning
+ * a single step into an unbounded spend.
+ */
+const DEFAULT_FULL_SWEEP_MAX_PASSES = 12;
+/**
+ * Wall-clock budget for one full sweep, in seconds (lcm-x's
+ * `_THRESHOLD_FULL_SWEEP_MAX_SECONDS`).
+ *
+ * The pass budget alone is not a spend guard when one pass is slow: 12 leaves at
+ * 30 s each is 6 minutes inside a single step, and the session stays blocked for
+ * all of it. lcm-x bounds the same sweep at 120 s and records
+ * `time_budget_exhausted` as a partial stop, letting the next turn continue.
+ * Measured leaf latency on this backend after removing the replayed system
+ * prompt is ~30 s, so 120 s is roughly four leaves per sweep.
+ */
+const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
+/**
  * How many same-depth checkpoints trigger a condensation into one higher node.
  *
  * lcm-x's `condensation_fanin` default is 4. Without a fanin the surface keeps a
@@ -139,6 +177,9 @@ const LCM_KEYS = [
   "checkpointCap",
   "leafSpanTokens",
   "condensationFanin",
+  "thresholdFullSweep",
+  "fullSweepMaxPasses",
+  "fullSweepMaxSeconds",
   "stallCooldownMs",
   "anchorPointers",
   "emptySummaryRetries",
@@ -242,6 +283,9 @@ export function resolveConfig(config = {}) {
     checkpointCap: config.checkpointCap ?? DEFAULT_CHECKPOINT_CAP,
     leafSpanTokens: config.leafSpanTokens ?? DEFAULT_LEAF_SPAN_TOKENS,
     condensationFanin: config.condensationFanin ?? DEFAULT_CONDENSATION_FANIN,
+    thresholdFullSweep: config.thresholdFullSweep ?? DEFAULT_THRESHOLD_FULL_SWEEP,
+    fullSweepMaxPasses: config.fullSweepMaxPasses ?? DEFAULT_FULL_SWEEP_MAX_PASSES,
+    fullSweepMaxSeconds: config.fullSweepMaxSeconds ?? DEFAULT_FULL_SWEEP_MAX_SECONDS,
     stallCooldownMs: config.stallCooldownMs ?? DEFAULT_STALL_COOLDOWN_MS,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
@@ -418,6 +462,9 @@ function validatePolicy(config, name) {
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
   if (config.leafSpanTokens !== undefined) assertPositiveInteger(`${name}.leafSpanTokens`, config.leafSpanTokens);
   if (config.condensationFanin !== undefined) assertCondensationFanin(`${name}.condensationFanin`, config.condensationFanin);
+  if (config.thresholdFullSweep !== undefined && typeof config.thresholdFullSweep !== "boolean") throw new Error(`${name}.thresholdFullSweep must be a boolean`);
+  if (config.fullSweepMaxPasses !== undefined) assertPositiveInteger(`${name}.fullSweepMaxPasses`, config.fullSweepMaxPasses);
+  if (config.fullSweepMaxSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepMaxSeconds`, config.fullSweepMaxSeconds);
   // The stall hold's deadline was the ONE key of the 28 declared in the schema
   // and never checked here, so `"60000"` or `1.5` reached the engine and
   // `Date.now() + stallCooldownMs` produced `NaN`. Every `Date.now() < NaN`

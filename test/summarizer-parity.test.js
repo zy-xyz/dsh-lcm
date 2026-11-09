@@ -112,15 +112,22 @@ test("a non-system surface head is not prepended as a second copy", async () => 
   assert.equal(stub.calls[0].messages.length, 2, "one span message plus the instruction");
 });
 
-test("a real system head is still prepended exactly once", async () => {
+test("the conversation's own system prompt is never replayed", async () => {
+  // Basic replays it because basic is ONE call: paid once, then cached. A leaf
+  // backend would pay it once per leaf, and it is by far the largest thing in
+  // the request. Measured on a real 1M-window session (411 154 chars of system
+  // prompt, ~101 120 tokens): one 24 000-token leaf billed 137 304 input tokens
+  // of which 99% were the replayed system prompt, at 90.4 s. The same leaf with
+  // it omitted billed 36 184 tokens at 32.0 s and produced the same six
+  // sections. lcm-x never sends the host system prompt either.
   const session = sessionOf(SYSTEM_HEADED);
   const stub = stubLlm();
   await summarizeLeaf({ llm: stub.llm }, resolveConfig({}), { session, start: 1, end: 1, shadowedSeqs: [1], shadowedTokenCount: 400 }, { session, options: {} }, 512, undefined);
 
   const messages = stub.calls[0].messages;
-  assert.equal(messages[0].role, "system", "the conversation's own system prompt leads the replayed prefix");
-  assert.equal(countMentions(messages, "SYSTEM_HEAD_TEXT"), 1);
-  assert.equal(countMentions(messages, "user body"), 1);
+  assert.equal(countMentions(messages, "SYSTEM_HEAD_TEXT"), 0, "the host system prompt must not be replayed on a leaf");
+  assert.ok(messages.every((m) => m.role !== "system"), "a leaf request carries no system message at all");
+  assert.equal(countMentions(messages, "user body"), 1, "the span still reaches the model exactly once");
 });
 
 // ── 3: per-route summarization target overrides the default ────────────────

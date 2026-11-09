@@ -85,6 +85,45 @@ The cost is honest: a 147k span becomes 7 calls, and the production-scale 436k s
 would become about 19, run serially, so wall clock grows with the span even though
 each call is smaller (`bench/REPORT.md` section 32).
 
+**A leaf call sends the span and the instruction, and nothing else.** It does not
+replay the conversation's own system prompt. `dsh-compaction-basic` replays it,
+and that is right for basic, which compacts the whole prefix in ONE call: paid
+once, then absorbed by the provider's prefix cache. In a leaf backend the same
+decision is paid once per leaf, and on a real 1M-window session the system prompt
+is 411 154 characters: one 24 000-token leaf billed 137 304 input tokens of which
+136 064 were that replay (99%) and took 90.4 s, while the identical leaf without it
+billed 36 184 tokens in 32.0 s for the same six sections. It bought nothing even
+when it hit the cache — `cacheRead` was 136 064 of 137 304 and the call still took
+90 s, because a cached prefill is cheap in dollars and not in wall time. lcm-x
+never sends the host system prompt either: its leaf is its own short contract plus
+the transcript, with a bare user message as the fallback path.
+
+## 2b. A threshold crossing is a sweep, not a tick
+
+A crossing condenses until the raw prefix outside the retained tail is drained, not
+until the threshold is merely re-cleared. This is lcm-x's
+`threshold_full_sweep_enabled` (default True there) and it exists because of a
+measured defect: on a real 1M-window session, crossing at 807 187 tokens (80.7%)
+released one 24 000-token leaf and landed at 783 136 (78.3%), which is below the
+800 000 threshold, so the loop returned. The next crossing released another single
+leaf. The session sat welded to the threshold, paying one full model call per 2.4%
+of window and never gaining real headroom.
+
+Three bounds replace the threshold test:
+
+| bound | default | why |
+|---|---|---|
+| `thresholdFullSweep` | `true` | the sweep itself; `false` restores one-leaf-per-crossing |
+| `fullSweepMaxPasses` | `12` | lcm-x's constant; 12 × 24 000 is 28.8% of a 1M window |
+| `fullSweepMaxSeconds` | `120` | passes are not a spend guard when a pass is slow: twelve 30-second leaves is six minutes inside one step |
+
+Exhausting either budget is a **partial** stop, not a failure: the last checkpoint
+is returned and the next turn continues. That matches lcm-x, which records
+`pass_budget_exhausted` / `time_budget_exhausted` and lets the session carry on.
+The manual path (`requireBelowThreshold`, a model switch) keeps the old retry
+budget, because "the sweep ran out of passes" is not an answer to "why can this
+model not be admitted".
+
 ## 3. Condensation at fanin 4
 
 `deriveDag` (`src/summarize.js:620`) recovers the summary DAG from the log alone. A
