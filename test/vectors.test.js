@@ -501,3 +501,106 @@ test("bisection bounds the requests: one poisoned text is not a linear scan", as
   }
 });
 
+/**
+ * A session whose newest non-visible events are all log plumbing.
+ *
+ * Plumbing (step/start, tool/ptc-dispatch, plugin:translator/request) never
+ * joins the surface, so "not visible" is the wrong test for "compacted content":
+ * a newest-first window over that set spends the whole embedding budget on
+ * records the model never read. The only compacted *content* event here is the
+ * tool/result at seq 0, and it carries the semantic answer.
+ * @param plumbingCount - how many newer plumbing records to stack on top.
+ * @returns session-shaped value plus the fake server's text table.
+ */
+function plumbingOverCompactedResult(plumbingCount) {
+  const answer = "the animal fact lives in the compacted tool result";
+  const events = [{ type: "session", id: "s" }];
+  const table = { zebra: [1, 0, 0], [answer]: [1, 0, 0] };
+  events.push({ type: "tool/result", seq: 0, time: 1, data: { message: { role: "tool", content: [{ type: "text", text: answer }] } } });
+  const plumbing = ["step/start", "tool/ptc-dispatch", "plugin:translator/request"];
+  for (let index = 0; index < plumbingCount; index += 1) {
+    const type = plumbing[index % plumbing.length];
+    const data = { note: "dispatch noise " + index };
+    // Keyed by the body the reader actually renders: a plumbing event derives no
+    // message, so it falls back to the labelled JSON dump.
+    table["[" + type + "]\n" + JSON.stringify(data)] = [0, 1, 0];
+    events.push({ type, seq: index + 1, time: 1, data });
+  }
+  return {
+    events,
+    table,
+    answer,
+    surface: { nodes: [] },
+    eventAt: (seq) => events.find((event) => event.seq === seq),
+    deriveEventMessage: (event) => event.data?.message ?? (event.data?.content === undefined ? null : { role: "user", content: event.data.content })
+  };
+}
+
+test("the semantic route embeds compacted content, never log plumbing", async () => {
+  const cache = await scratch();
+  const session = plumbingOverCompactedResult(30);
+  const server = await embeddingServer(session.table);
+  try {
+    const config = { ...CONFIG, rank: "vector", ...vectorConfig(server, cache.dir, { vectorCandidateLimit: 10 }) };
+    const result = await searchSessionHybrid(session, "zebra", config);
+    assert.equal(result.hits[0]?.seq, 0, "the compacted tool/result is the answer, saw " + result.hits.map((hit) => hit.seq).join(","));
+    const embedded = server.state.inputs.filter((text) => text !== "zebra");
+    assert.deepEqual(embedded, [session.answer], "only surface-eligible content is embedded, saw " + JSON.stringify(embedded));
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+/**
+ * A session where plumbing outnumbers compacted content, so the two possible
+ * readings of "of N compacted event(s)" differ by an order of magnitude.
+ * @returns session-shaped value plus the fake server's text table.
+ */
+function plumbingDominatedSession() {
+  const events = [{ type: "session", id: "s" }];
+  const table = { zebra: [1, 0, 0] };
+  // seq 0: the only compacted CONTENT event.
+  const compacted = "the animal fact zero";
+  table[compacted] = [1, 0, 0];
+  events.push({ type: "user/message", seq: 0, time: 1, data: { content: [{ type: "text", text: compacted }] } });
+  // seq 1..20: plumbing, never on the surface.
+  for (let index = 0; index < 20; index += 1) {
+    const data = { note: "step noise " + index };
+    table["[step/start]\n" + JSON.stringify(data)] = [0, 1, 0];
+    events.push({ type: "step/start", seq: index + 1, time: 1, data });
+  }
+  // seq 21..23: content the surface still shows.
+  for (let seq = 21; seq <= 23; seq += 1) {
+    const text = "visible content " + seq;
+    table[text] = [0, 1, 0];
+    events.push({ type: "user/message", seq, time: 1, data: { content: [{ type: "text", text }] } });
+  }
+  return {
+    events,
+    table,
+    surface: { nodes: [21, 22, 23] },
+    eventAt: (seq) => events.find((event) => event.seq === seq),
+    deriveEventMessage: (event) => event.data?.message ?? (event.data?.content === undefined ? null : { role: "user", content: event.data.content })
+  };
+}
+
+test("the header's compacted count counts content, not log plumbing", async () => {
+  const cache = await scratch();
+  const session = plumbingDominatedSession();
+  const server = await embeddingServer(session.table);
+  try {
+    const config = { ...CONFIG, rank: "vector", ...vectorConfig(server, cache.dir) };
+    const result = await searchSessionHybrid(session, "zebra", config);
+    assert.match(
+      result.text,
+      /newest compacted event\(s\) of 1,/,
+      "one compacted content event, not 21 hidden log records, saw: " + result.text.split("\n")[0]
+    );
+    assert.equal(result.hits[0]?.seq, 0);
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+

@@ -19,6 +19,7 @@
  *
  * @module dsh-lcm/search
  */
+import { isSurfaceEligibleType } from "@deepseek-ai/dsh-session/surface";
 import { estimateEntryTokens, renderEventBody, sanitize, truncateTokens } from "./compiler.js";
 import { resolveEventAt, sessionEvents } from "./events.js";
 import { RRF_K, VECTOR_TEXT_LIMIT, hybridRank, rankByVector, resolveVectorConfig } from "./vectors.js";
@@ -403,8 +404,8 @@ export async function searchSessionHybrid(session, patternSource, config, signal
 }
 
 /**
- * The events the model cannot read without a tool call: everything the session
- * surface does not show.
+ * The events the model cannot read without a tool call: surface-eligible content
+ * the session surface no longer shows.
  *
  * That set, not recency, is what the semantic route is for. Events still on the
  * surface are in the context verbatim, so embedding them costs time to rank text
@@ -412,6 +413,15 @@ export async function searchSessionHybrid(session, patternSource, config, signal
  * still visible and only 4213 were compacted, so a newest-first window over the
  * whole log spent its entire budget on the visible half and left the compacted
  * half 1.6% covered.
+ *
+ * "Not visible" alone is not the set: most of the log never was visible. Only
+ * the five message-producing types can join the surface (the harness's own fold,
+ * {@link isSurfaceEligibleType}), and everything else — step/start, tool/call,
+ * tool/ptc-dispatch, plugin:translator/request, job/*, turn/start — is plumbing.
+ * Measured on the live 26265-event session: 25831 events sat outside the ~471
+ * surface nodes but only 4207 of them were message-like; the newest 380
+ * candidates were 100% plumbing, so the route embedded noise and its top hit was
+ * a PTC dispatch record (cosine 0.718) above any real content.
  *
  * Within that set the order stays newest-first (recent-but-compacted is the more
  * likely answer), and the window is priced in estimated tokens rather than in
@@ -439,6 +449,9 @@ function collectVectorItems(session, bounds) {
     if (items.length >= maxEvents || tokens >= maxTokens) break;
     const event = events[index];
     if (!Number.isSafeInteger(event?.seq)) continue;
+    // Never on the surface in the first place, so never compacted content:
+    // embedding log plumbing ranks records the model never read.
+    if (!isSurfaceEligibleType(event.type)) continue;
     // Already in the model's context: ranking it would buy nothing.
     if (visible !== null && visible.has(event.seq)) continue;
     const { body } = eventBody(session, event);
@@ -454,11 +467,16 @@ function collectVectorItems(session, bounds) {
   return { items, tokens, hidden: visible === null ? null : hiddenCount(events, visible) };
 }
 
-/** How many seq-bearing events sit outside the surface (the compacted region). */
+/**
+ * How many surface-eligible events sit outside the surface (the compacted
+ * region). Counted over the same set {@link collectVectorItems} draws from, so
+ * the header's "of N" cannot claim plumbing as compacted content.
+ */
 function hiddenCount(events, visible) {
   let hidden = 0;
   for (const event of events) {
-    if (Number.isSafeInteger(event?.seq) && !visible.has(event.seq)) hidden += 1;
+    if (!Number.isSafeInteger(event?.seq) || !isSurfaceEligibleType(event.type)) continue;
+    if (!visible.has(event.seq)) hidden += 1;
   }
   return hidden;
 }
