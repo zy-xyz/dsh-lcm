@@ -355,7 +355,12 @@ export class LcmCompactionEngine extends CompactionEngine {
     vectorDim: maxTokensSchema,
     vectorTopK: maxTokensSchema,
     vectorTimeoutMs: maxTokensSchema,
-    vectorCacheDir: z.string()
+    vectorCacheDir: z.string(),
+    // The NAME of the environment variable holding the bearer token, not the
+    // token. A literal secret in the composition would be a secret in a
+    // repository; "" (the default) sends no Authorization header at all, which
+    // is what a keyless local backend expects.
+    vectorApiKeyEnv: z.string()
   });
   /** Settings namespace for user-owned LCM compaction preferences. */
   /** Resolved and validated compaction configuration. */

@@ -88,7 +88,11 @@ const Config = z.object({
   vectorCandidateTokens: z.number().step(1).min(1),
   vectorCandidateLimit: z.number().step(1).min(1),
   vectorTimeoutMs: z.number().step(1).min(1),
-  vectorCacheDir: z.string().min(1)
+  vectorCacheDir: z.string().min(1),
+  // A variable NAME, so the empty string is legal here (it means "send no
+  // Authorization header", the keyless-backend default). Same rule as
+  // src/config.js: only a non-string is refused.
+  vectorApiKeyEnv: z.string()
 });
 
 const RECALL_DESCRIPTION = "Restore the exact original content of earlier events in THIS conversation by a typed reference. type=\"seq\" with a seq selection id (\"3-7,15\", \"seq 12\", \"seqs 3-7\" — the checkpoint marker forms) restores those events; type=\"result\" with the \"result N\" pointer from a tool-call one-liner (\"result 3\" or \"3\") restores that tool result; type=\"checkpoint\" with an ordinal (\"1\" = oldest, as in a \"[checkpoint N]\" elision line) or a \"seq N\" pointer restores that full checkpoint. The durable log is append-only, so recalled content is always the original tokens. To find events by keyword or regex instead, use the search tool. One call is bounded by a token budget, and the budget is yours to set: when an event was cut, the text ends with a marker saying how much came back of how much, and passing a larger maxTokens returns the rest of it. There is no paging cursor — the log is indexed by seq, so a bigger budget on the same reference is the page.";

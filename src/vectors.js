@@ -146,6 +146,18 @@ export function resolveVectorConfig(config = {}) {
   assertPositiveInteger("LcmVectorConfig.vectorTimeoutMs", timeoutMs);
   const cacheDir = config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR;
   assertNonEmptyString("LcmVectorConfig.vectorCacheDir", cacheDir);
+  // The NAME of an environment variable, never the key itself.
+  //
+  // A hosted gateway needs a bearer token; a local LM Studio does not, which is
+  // why this was absent while the only measured backend was keyless. Putting the
+  // literal key in the bundle patch would ship a secret in a repository, so the
+  // configuration carries the variable name and the value is read from the
+  // process environment when a request is built.
+  //
+  // Empty (the default) sends no Authorization header at all, so every keyless
+  // backend keeps working byte for byte.
+  const apiKeyEnv = config.vectorApiKeyEnv ?? "";
+  if (typeof apiKeyEnv !== "string") throw new Error("LcmVectorConfig.vectorApiKeyEnv must be a string");
   return Object.freeze({
     enabled,
     baseUrl: baseUrl.replace(/\/+$/, ""),
@@ -155,7 +167,8 @@ export function resolveVectorConfig(config = {}) {
     candidateLimit,
     candidateTokens,
     timeoutMs,
-    cacheDir
+    cacheDir,
+    apiKeyEnv
   });
 }
 
@@ -364,6 +377,26 @@ function reasonOf(error) {
   return error instanceof Error ? error.message : String(error ?? "unknown reason");
 }
 
+/**
+ * The Authorization header for one request, or nothing.
+ *
+ * Read at request time rather than resolved once, so an operator can rotate the
+ * secret in the environment of a long-running process without a rebuild. An
+ * empty or unset variable yields no header, which is what a keyless backend
+ * expects; a variable that is NAMED but empty is treated the same way, because a
+ * backend that needs a key answers 401 and that surfaces in the degradation
+ * notice rather than being silently swallowed here.
+ *
+ * @param cfg - resolved vector settings.
+ * @returns the header object to spread into the request, possibly empty.
+ */
+function authHeader(cfg) {
+  if (typeof cfg.apiKeyEnv !== "string" || cfg.apiKeyEnv.length === 0) return {};
+  const key = typeof process === "undefined" ? undefined : process.env?.[cfg.apiKeyEnv];
+  if (typeof key !== "string" || key.length === 0) return {};
+  return { authorization: `Bearer ${key}` };
+}
+
 /** POST one batch and decode its vectors, with a bounded wall clock. */
 async function requestBatch(cfg, batch, signal) {
   const url = cfg.baseUrl + "/embeddings";
@@ -383,7 +416,7 @@ async function requestBatch(cfg, batch, signal) {
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
+        headers: { "content-type": "application/json", accept: "application/json", ...authHeader(cfg) },
         body: JSON.stringify({ model: cfg.model, input: batch }),
         signal: controller.signal
       });
@@ -691,7 +724,8 @@ function isResolvedVectorConfig(value) {
     Number.isInteger(value.candidateLimit) &&
     Number.isInteger(value.candidateTokens) &&
     Number.isInteger(value.timeoutMs) &&
-    typeof value.cacheDir === "string";
+    typeof value.cacheDir === "string" &&
+    typeof value.apiKeyEnv === "string";
 }
 
 function assertNonEmptyString(name, value) {

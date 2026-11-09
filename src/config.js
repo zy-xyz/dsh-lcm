@@ -191,7 +191,8 @@ const LCM_KEYS = [
   "vectorDim",
   "vectorTopK",
   "vectorTimeoutMs",
-  "vectorCacheDir"
+  "vectorCacheDir",
+  "vectorApiKeyEnv"
 ];
 
 /**
@@ -298,7 +299,8 @@ export function resolveConfig(config = {}) {
     vectorDim: config.vectorDim ?? DEFAULT_VECTOR_DIM,
     vectorTopK: config.vectorTopK ?? DEFAULT_VECTOR_TOPK,
     vectorTimeoutMs: config.vectorTimeoutMs ?? DEFAULT_VECTOR_TIMEOUT_MS,
-    vectorCacheDir: config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR
+    vectorCacheDir: config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR,
+    vectorApiKeyEnv: config.vectorApiKeyEnv ?? ""
   });
 }
 
@@ -484,6 +486,9 @@ function validatePolicy(config, name) {
   if (config.vectorTopK !== undefined) assertPositiveInteger(`${name}.vectorTopK`, config.vectorTopK);
   if (config.vectorTimeoutMs !== undefined) assertPositiveInteger(`${name}.vectorTimeoutMs`, config.vectorTimeoutMs);
   if (config.vectorCacheDir !== undefined) assertNonEmptyString(`${name}.vectorCacheDir`, config.vectorCacheDir);
+  // Deliberately allows the empty string: "" is the documented "send no
+  // Authorization header" value, and it is the default for keyless backends.
+  if (config.vectorApiKeyEnv !== undefined && typeof config.vectorApiKeyEnv !== "string") throw new Error(`${name}.vectorApiKeyEnv must be a string`);
 }
 
 /** Require one scope to omit, clear, or replace the summarization target as a pair. */

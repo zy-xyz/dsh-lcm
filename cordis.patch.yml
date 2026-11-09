@@ -70,9 +70,17 @@
       config:
         rank: hybrid
         vectorEnabled: true
-        vectorBaseUrl: http://10.126.126.3:1234/v1
-        vectorModel: text-embedding-qwen3-vl-embedding-8b
-        vectorDim: 4096
+        # OmniRoute's codestral-embed. Measured 2026-11-09: 1536 dimensions,
+        # batch 32 accepted, CJK accepted, empty string refused with HTTP 400
+        # (which the per-item degradation already handles by skipping it).
+        # Five consecutive probes on the undated name: 5/5 HTTP 200, 1.1-10.5 s.
+        vectorBaseUrl: http://10.126.126.4:20128/v1
+        vectorModel: mistral-proxy/codestral-embed
+        vectorDim: 1536
+        # The NAME of the environment variable holding the bearer token. A
+        # hosted gateway needs one; a local LM Studio does not. The literal key
+        # never appears here, because this file is in the repository.
+        vectorApiKeyEnv: OMNIROUTE_API_KEY
         # The candidate window is what the model CANNOT read: events off the
         # session surface. The visible tail is already in context verbatim, so
         # embedding it would be pure waste - on the measured 24k-event session

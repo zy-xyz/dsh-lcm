@@ -58,9 +58,11 @@ function readJson(request) {
  * @returns the base URL, a request counter, and a closer.
  */
 async function embeddingServer(table, status = 200) {
-  const state = { requests: 0, batches: [], inputs: [] };
+  const state = { requests: 0, batches: [], inputs: [], authorizations: [] };
   const server = createServer(async (request, response) => {
     state.requests += 1;
+    // Recorded so the auth test can assert on the wire, not on our own intent.
+    state.authorizations.push(request.headers.authorization ?? null);
     const body = await readJson(request);
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
     state.batches.push(inputs.length);
@@ -182,6 +184,50 @@ test("rankByVector orders by cosine, not by dot product", async () => {
     assert.ok(Math.abs(ranked[2].score) < 1e-6, "orthogonal vectors score 0");
     assert.deepEqual(server.state.batches, [4], "one batched request for query plus items");
   } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("a gateway key comes from the environment, and a keyless backend gets no header", async () => {
+  // The only measured backend until now was a local LM Studio, which needs no
+  // auth, so this layer sent no Authorization header at all. A hosted gateway
+  // answers 401 without one. The key is addressed by environment-variable NAME
+  // and never written in the composition, because this configuration ships in
+  // the repository.
+  const cache = await scratch();
+  const query = "how do we store the target token column";
+  const server = await embeddingServer({ [query]: [1, 0, 0], alpha: [1, 0, 0] });
+  const NAME = "LCM_TEST_EMBED_KEY";
+  try {
+    const items = [{ seq: 1, text: "alpha" }];
+
+    // Named but unset: no header. A backend that needs one answers 401, and that
+    // surfaces in the degradation notice rather than being swallowed here.
+    delete process.env[NAME];
+    await rankByVector(vectorConfig(server, cache.dir, { vectorApiKeyEnv: NAME }), items, query);
+    assert.equal(server.state.authorizations.at(-1), null, "an unset variable must send no header");
+
+    // Named and set: a bearer token on the wire.
+    process.env[NAME] = "sk-test-value";
+    const cache2 = await scratch();
+    try {
+      await rankByVector(vectorConfig(server, cache2.dir, { vectorApiKeyEnv: NAME }), items, query);
+      assert.equal(server.state.authorizations.at(-1), "Bearer sk-test-value", "the environment value must reach the wire as a bearer token");
+    } finally {
+      await cache2.clean();
+    }
+
+    // Not configured at all: no header, unchanged from the keyless behaviour.
+    const cache3 = await scratch();
+    try {
+      await rankByVector(vectorConfig(server, cache3.dir), items, query);
+      assert.equal(server.state.authorizations.at(-1), null, "the default sends no header");
+    } finally {
+      await cache3.clean();
+    }
+  } finally {
+    delete process.env[NAME];
     await server.close();
     await cache.clean();
   }

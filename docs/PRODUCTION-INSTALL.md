@@ -129,7 +129,7 @@ Installed as a bundle, then restarted. What is verified, and what is not.
 | the load-time hook exists in this dsh | `@deepseek-ai/cordis-plugin-loader/lib/index.js:740` runs `ctx.on("internal/config", (fiber, next) => …)` |
 | the preset latch is satisfied | sessions are created and resumed normally (24 recovered, 0 failed); a preset that never receives `lcmCompactionPolicy` cannot compose a session at all |
 | the engine is on the wire post-restart | the system prompt written at 15:38 (after the restart) contains `lcm_expand` and `lcm_search` |
-| the embedding endpoint works | `POST http://10.126.126.3:1234/v1/embeddings` → 200 with a 4096-d vector |
+| the embedding endpoint works | `POST http://10.126.126.4:20128/v1/embeddings` with `mistral-proxy/codestral-embed` → 200 with a 1536-d vector, and `OMNIROUTE_API_KEY` is present in the process environment (without it the call is a clean 401 and the search degrades to lexical) |
 
 ### Not verified
 

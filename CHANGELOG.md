@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.10.0 — 2026-11-09 — the semantic route can authenticate, and points at OmniRoute's codestral-embed
+
+### Added — `vectorApiKeyEnv`
+
+The vector layer sent no `Authorization` header, which was correct for its only
+measured backend (a local LM Studio) and is a 401 against any hosted gateway.
+The new key carries the **name** of an environment variable; the value is read
+from the process environment when a request is built, so an operator can rotate
+the secret without a rebuild, and the composition — which ships in this
+repository — never contains it. `""` (the default) sends no header at all, so
+keyless backends are unchanged byte for byte.
+
+Measured on `http://10.126.126.4:20128/v1`: with `OMNIROUTE_API_KEY` set the
+embedding call returns 1536 floats (unit norm, no NaN) in ~1.2 s for three texts;
+named-but-unset returns `HTTP 401 {"error":{"code":"AUTH_002"...}}`, which the
+per-item degradation already turns into a lexical fallback with a notice.
+
+### Changed — the shipped default is OmniRoute's codestral-embed
+
+| key | before | after |
+|---|---|---|
+| `vectorBaseUrl` | `http://10.126.126.3:1234/v1` (LM Studio) | `http://10.126.126.4:20128/v1` (OmniRoute) |
+| `vectorModel` | `text-embedding-qwen3-vl-embedding-8b` | `mistral-proxy/codestral-embed` |
+| `vectorDim` | `4096` | `1536` |
+| `vectorApiKeyEnv` | — | `OMNIROUTE_API_KEY` |
+
+Probed before switching: 1536 dimensions, batch 32 accepted, CJK accepted, a 6k
+char text accepted, empty string refused with HTTP 400 (skipped per-item by the
+existing degradation), and five consecutive calls on the undated name answered
+200 in 1.1-10.5 s. The dimension change needs no cache migration: the on-disk key
+is `sha256(model + "\n" + text)`, so entries from the 4096-d model are never read.
+
+Tests: 235 → 236. `test/vectors.test.js` now records `authorization` on its stub
+server and asserts the three states (unset variable, set variable, not configured)
+on the wire; `test/compat.test.js` learned that `vectorApiKeyEnv`'s empty string
+is a documented legal value rather than a bad one.
+
 ## 0.9.0 — 2026-11-09 — a threshold crossing now sweeps, and a leaf no longer pays for the system prompt
 
 Two defects found on a real 1M-window production session (`session-65bd8898`,

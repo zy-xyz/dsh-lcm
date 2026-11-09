@@ -127,9 +127,13 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
   config:
     rank: hybrid               # both gates must open: this + vectorEnabled
     vectorEnabled: false       # off by default; with it false, rank hybrid IS the lexical result
-    vectorBaseUrl: "http://10.126.126.3:1234/v1"
-    vectorModel: "text-embedding-qwen3-vl-embedding-8b"
-    vectorDim: 4096
+    vectorBaseUrl: "http://10.126.126.4:20128/v1"
+    vectorModel: "mistral-proxy/codestral-embed"
+    vectorDim: 1536
+    # A hosted gateway needs a bearer token; a local LM Studio does not. This is
+    # the NAME of the environment variable, never the key: the composition ships
+    # in this repository. "" (the default) sends no Authorization header.
+    vectorApiKeyEnv: "OMNIROUTE_API_KEY"
     vectorTopK: 8
     vectorCandidateTokens: 100000  # first-search cost is per text; this bounds it
     vectorCandidateLimit: 500      # count ceiling, so tiny events cannot buy the same cost

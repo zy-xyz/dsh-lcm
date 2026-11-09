@@ -108,12 +108,22 @@ const VECTOR_KEYS = Object.keys(resolveVectorConfig({})).map((key) => "vector" +
  * every numeric key here is an `integer >= 1`, every string key a non-empty
  * string, and `rank` a closed union of modes.
  */
-function badValuesFor(node) {
+/**
+ * Keys whose empty string is a DOCUMENTED legal value, not a defect.
+ *
+ * `vectorApiKeyEnv` carries the NAME of an environment variable, and "" is its
+ * default meaning "send no Authorization header" — the shape every keyless
+ * backend (a local LM Studio) expects. Treating "" as a bad value here would
+ * assert the opposite of the contract. Every other string key still refuses it.
+ */
+const EMPTY_STRING_IS_VALID = new Set(["vectorApiKeyEnv"]);
+
+function badValuesFor(node, key) {
   const floor = node.meta.min ?? 1;
   switch (node.type) {
     case "boolean": return [1, "true"];
     case "number": return [floor - 1, floor + 0.5, "5"];
-    case "string": return [42, ""];
+    case "string": return EMPTY_STRING_IS_VALID.has(key) ? [42] : [42, ""];
     case "union": return ["nonsense"];
     default: throw new Error("unhandled schema node type " + node.type);
   }
@@ -160,7 +170,7 @@ test("rank's enum matches the modes each row accepts, vector ranks included only
 
 test("every tool-row value outside the schema's floor or type is rejected by BOTH layers", () => {
   for (const [key, node] of Object.entries(tool.Config.dict)) {
-    for (const bad of badValuesFor(node)) {
+    for (const bad of badValuesFor(node, key)) {
       const label = key + "=" + JSON.stringify(bad);
       assert.throws(() => tool.Config({ [key]: bad }), undefined, "the composition schema must refuse " + label);
       assert.throws(() => tool.resolveConfig({ [key]: bad }), undefined, "the runtime validator must refuse the same " + label);
@@ -170,7 +180,7 @@ test("every tool-row value outside the schema's floor or type is rejected by BOT
 
 test("every command-row value outside the schema's floor or type is rejected by BOTH layers", () => {
   for (const [key, node] of Object.entries(command.Config.dict)) {
-    for (const bad of badValuesFor(node)) {
+    for (const bad of badValuesFor(node, key)) {
       const label = key + "=" + JSON.stringify(bad);
       assert.throws(() => command.Config({ [key]: bad }), undefined, "the composition schema must refuse " + label);
       assert.throws(() => command.resolveConfig({ [key]: bad }), undefined, "the runtime validator must refuse the same " + label);

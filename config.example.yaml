@@ -141,10 +141,13 @@ debug: false
 # 语义检索（默认关；两个闸门都要开：vectorEnabled + rank=vector|hybrid）：
 # vectorEnabled: true
 # rank: hybrid              # vector 会「替换」命中集，字面串会失去位置；hybrid 用 RRF 融合
-# vectorBaseUrl: "http://127.0.0.1:1234/v1"
-# vectorModel: "text-embedding-qwen3-vl-embedding-8b"
-# vectorDim: 4096
+# vectorBaseUrl: "http://10.126.126.4:20128/v1"
+# vectorModel: "mistral-proxy/codestral-embed"
+# vectorDim: 1536
 # vectorTopK: 8
+# 托管网关需要 bearer token，本地 LM Studio 不需要。这里写的是**环境变量名**，不是密钥本身 ——
+# 密钥直写进配置就会随仓库发布出去。留空（默认）表示不发送 Authorization 头。
+# vectorApiKeyEnv: "OMNIROUTE_API_KEY"
 #
 # 候选窗口按 token 计价，因为成本跟着文本长度走、不跟事件数走：
 # 实测约 18 ms/条 + 0.23 ms/token，批量大小 8–128 都只有 87–92 ms/条，

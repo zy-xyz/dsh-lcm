@@ -241,7 +241,10 @@ const KEY_SAMPLES = {
   vectorDim: { config: { vectorDim: 1024 }, bad: { vectorDim: 0 } },
   vectorTopK: { config: { vectorTopK: 4 }, bad: { vectorTopK: 0 } },
   vectorTimeoutMs: { config: { vectorTimeoutMs: 15000 }, bad: { vectorTimeoutMs: 0 } },
-  vectorCacheDir: { config: { vectorCacheDir: "/tmp/lcm-vectors-surface" }, bad: { vectorCacheDir: false } }
+  vectorCacheDir: { config: { vectorCacheDir: "/tmp/lcm-vectors-surface" }, bad: { vectorCacheDir: false } },
+  // "" is a legal value by design: it is the "send no Authorization header"
+  // default for keyless backends, so only a non-string is refused.
+  vectorApiKeyEnv: { config: { vectorApiKeyEnv: "OMNIROUTE_API_KEY" }, bad: { vectorApiKeyEnv: 12 } }
 };
 
 test("every declared key is typed the same way in both layers", () => {
