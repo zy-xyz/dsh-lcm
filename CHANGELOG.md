@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.12.1 — 2026-11-10 — a third-party surface must not break the semantic route
+
+Found while filling the live cache, not by reading code: the backfill probe died
+on one session with
+
+```
+session event "user/message" sourceEventSeqs must densely contain non-negative safe integers
+```
+
+The event was not ours. `seq 2707` in `session-b7c19116` carries
+`source.kind: "dsh-rewind"` and `sourceEventSeqs: [[2684,2686],2690,2693]` —
+nested ranges where the harness fold requires dense non-negative integers — and
+the session had zero compactions. A lexical search on it answered normally; a
+HYBRID search threw, because `visibleSeqs` reads `session.surface` and the fold
+rejects that event. One plugin was breaking a route it never meant to touch, and
+the failure mode was a thrown exception rather than a degradation.
+
+`visibleSeqs` now treats an unreadable surface as UNKNOWN (returns null) instead
+of propagating. That is the conservative direction: every event then counts as
+unread, so the candidate window widens — more cost, no coverage lost — instead
+of throwing or silently narrowing to nothing. Verified on the same session:
+hybrid now answers with 20 hits and the ordinary backend-degradation notice.
+
+Pinned by `[degradation] a surface the harness fold refuses does not throw the
+semantic route`, whose fixture throws from `session.surface` exactly as the real
+fold does.
+
+### Live cache filled
+
+Every session under the workspaces root, priced with the shipped embed-row
+window: 25 sessions touched, 373 candidates scanned, 294 already cached, 79
+embedded, 0 failed. The live cache now holds 315 vectors / 2.8 MB, and
+`/lcm-embed status` on the main session reports `candidates 76 / cached 76 /
+pending 0`.
+
+Tests: 284 → 285.
 ## 0.12.0 — 2026-11-10 — a search gets one deadline, and the window is a price
 
 The first live search after switching to `mistral-proxy/codestral-embed` degraded

@@ -254,3 +254,28 @@ test("[degradation] an aborted search returns the lexical result with a notice i
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// ── a third-party plugin must not break the semantic route ───────────────────
+
+test("[degradation] a surface the harness fold refuses does not throw the semantic route", async () => {
+  // Measured on a real log: dsh-rewind wrote a replacement event with
+  // sourceEventSeqs [[2684,2686],2690,2693] — nested, not dense integers — and
+  // the harness fold throws on it. The lexical route never reads the surface, so
+  // it answered while the semantic route threw: one plugin breaking a session it
+  // never meant to touch. An unknown surface must widen the window (every event
+  // counts as unread), never throw and never silently narrow it.
+  const events = [
+    { type: "session", id: "s" },
+    { type: "user/message", seq: 0, time: 1, data: { content: [{ type: "text", text: "the target token lives here" }] } }
+  ];
+  const session = {
+    id: "broken-surface",
+    get events() { return events; },
+    get surface() { throw new Error('session event "user/message" sourceEventSeqs must densely contain non-negative safe integers'); },
+    eventAt: (seq) => events.find((event) => event.seq === seq),
+    deriveEventMessage: (event) => event?.data?.content === undefined ? null : { role: "user", content: event.data.content }
+  };
+  const out = await searchSessionHybrid(session, "target token", { maxSearchHits: 10, maxRecallTokens: 5000, rank: "hybrid", vectorEnabled: false });
+  assert.equal(out.hits.length > 0, true, "a broken surface must not cost the lexical answer");
+  assert.equal(out.notice, undefined, "the layer is off, so there is nothing to degrade from");
+});

@@ -506,7 +506,22 @@ function hiddenCount(events, visible) {
  * @returns the visible seq set, or null.
  */
 function visibleSeqs(session) {
-  const nodes = session?.surface?.nodes;
+  let nodes;
+  try {
+    nodes = session?.surface?.nodes;
+  } catch (error) {
+    // A third-party plugin can write a replacement event the harness fold
+    // refuses: measured on a real log, `dsh-rewind` wrote
+    // `sourceEventSeqs: [[2684,2686],2690,2693]` (nested, not dense integers),
+    // and `foldSurface` throws on it. The lexical route never touches the
+    // surface, so it answered fine while the semantic route threw — one plugin
+    // breaking a session it never meant to touch.
+    //
+    // Treating the surface as unknown is the conservative answer: every event
+    // counts as unread, which widens the candidate window (more cost, no
+    // coverage lost) instead of throwing or silently narrowing it.
+    return null;
+  }
   if (!Array.isArray(nodes)) return null;
   const visible = new Set();
   for (const node of nodes) {
