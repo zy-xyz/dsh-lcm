@@ -109,25 +109,45 @@ function makeDeps() {
   };
 }
 
+/**
+ * Append six whole turns and run one compaction, then report the resulting shape.
+ * @param session - folded session under test.
+ * @param deps - meter and deterministic compile.
+ * @param round - zero-based round number.
+ * @returns that round's surface size, on-surface depths and max depth.
+ */
+async function runRound(session, deps, round) {
+  // Whole turns, not bare messages: the balance cache the harness builds needs
+  // turn boundaries, and the start-boundary guard reads it.
+  for (let index = 0; index < 6; index += 1) {
+    const turn = round * 6 + index + 1;
+    session.append("turn/start", { turn });
+    session.appendLive("m" + round + "-" + index);
+    session.append("turn/end", { turn });
+  }
+  const measurement = deps.meter.measure(session);
+  const range = selectCompactableRange(session, measurement, 16_000, 512, 24_000, 4);
+  const committed = range !== null;
+  if (committed) {
+    await compactSurfaceRegion(deps, session, range.start, range.end, { session }, { owner: null, stability: "selected-span" });
+  }
+  const dag = deriveDag(session);
+  const onSurface = session.surface.nodes.filter((seq) => dag.nodeBySeq.has(seq));
+  return {
+    committed,
+    surface: session.surface.nodes.length,
+    depths: onSurface.map((seq) => dag.nodeBySeq.get(seq).depth),
+    maxDepth: dag.maxDepth
+  };
+}
+
 test("repeated compactions leave several checkpoints on the surface", { skip }, async () => {
   const session = makeSession();
   const deps = makeDeps();
   let commits = 0;
 
   for (let round = 0; round < 12; round += 1) {
-    // Whole turns, not bare messages: the balance cache the harness builds needs
-    // turn boundaries, and the start-boundary guard reads it.
-    for (let index = 0; index < 6; index += 1) {
-      const turn = round * 6 + index + 1;
-      session.append("turn/start", { turn });
-      session.appendLive("m" + round + "-" + index);
-      session.append("turn/end", { turn });
-    }
-    const measurement = deps.meter.measure(session);
-    const range = selectCompactableRange(session, measurement, 16_000, 512, 24_000, 4);
-    if (range === null) continue;
-    await compactSurfaceRegion(deps, session, range.start, range.end, { session }, { owner: null, stability: "selected-span" });
-    commits += 1;
+    if ((await runRound(session, deps, round)).committed) commits += 1;
   }
 
   assert.ok(commits >= 3, "the replay must actually compact, or the test proves nothing: " + commits);
@@ -139,8 +159,9 @@ test("repeated compactions leave several checkpoints on the surface", { skip }, 
     "the surface must hold more than one checkpoint: " + onSurface.length + " after " + commits + " commits (1 means every leaf re-absorbed its predecessor)"
   );
 
-  // Position is the assembly order: a condensation only merges the LEADING run, so a
-  // deeper node must appear no later than a shallower one.
+  // Position is the assembly order: a condensation lands at the first position of
+  // the run it merges and never past a shallower sibling, so a deeper node must
+  // appear no later than a shallower one.
   const depths = onSurface.map((seq) => dag.nodeBySeq.get(seq).depth);
   for (let index = 1; index < depths.length; index += 1) {
     assert.ok(
@@ -149,4 +170,47 @@ test("repeated compactions leave several checkpoints on the surface", { skip }, 
     );
   }
   assert.ok(Math.max(...depths) >= 2, "at least one condensation must have happened: " + JSON.stringify(depths));
+});
+
+test("forty rounds condense logarithmically instead of growing linearly", { skip }, async () => {
+  // The regression this pins: while condensation merged only the LEADING run it
+  // fired exactly once per session (round 7, depth [2]) and then never again,
+  // because the depth-2 node ahead of the depth-1 siblings kept them non-leading.
+  // Measured on this exact replay before the fix: round 40 read
+  // [2, 1 x 33] - 34 checkpoints on the surface, surface 49, maxDepth 2 - i.e. the
+  // assembled context grew with the round count, which is what fanin exists to
+  // prevent.
+  //
+  // After the fix the same replay peaks at 28 surface nodes and 7 checkpoints
+  // (round 40: 21 nodes, 6 checkpoints) and reaches depth 3 at round 23. Both
+  // ceilings below are the observed peaks, not estimates, and the shape is
+  // deterministic (no model call, fixed pricing), so they are stable.
+  const session = makeSession();
+  const deps = makeDeps();
+  const rounds = [];
+  for (let round = 0; round < 40; round += 1) rounds.push(await runRound(session, deps, round));
+
+  assert.ok(rounds.filter((row) => row.committed).length >= 30, "the replay must actually compact each round");
+
+  // (b) Ordering is the invariant the whole fix rests on: the merged node inherits
+  // the run's first position, so assembly order keeps reading deepest-first and the
+  // context needs no sorting code.
+  for (const row of rounds) {
+    for (let index = 1; index < row.depths.length; index += 1) {
+      assert.ok(
+        row.depths[index - 1] >= row.depths[index],
+        "positional depths must stay non-increasing at every round, broke at round " + (rounds.indexOf(row) + 1) + ": " + JSON.stringify(row.depths)
+      );
+    }
+  }
+
+  // (a) Condensation has to keep raising the level, not just once.
+  assert.ok(rounds.at(-1).maxDepth >= 3, "the summary DAG must reach depth 3: maxDepth " + rounds.at(-1).maxDepth);
+
+  // (c) Breadth stays bounded instead of tracking the round count. Before the fix
+  // these two peaked at 34 and 49.
+  const peakCheckpoints = Math.max(...rounds.map((row) => row.depths.length));
+  const peakSurface = Math.max(...rounds.map((row) => row.surface));
+  assert.ok(peakCheckpoints <= 7, "on-surface checkpoints must stay bounded, peaked at " + peakCheckpoints);
+  assert.ok(peakSurface <= 28, "the surface must stay bounded, peaked at " + peakSurface);
 });

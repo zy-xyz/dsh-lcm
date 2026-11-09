@@ -21,7 +21,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { searchSession, searchSessionHybrid } from "../src/search.js";
-import { rankByVector } from "../src/vectors.js";
+import { resolveConfig as resolveToolConfig } from "../src/tool.js";
+import { DEFAULT_VECTOR_CANDIDATE_LIMIT, rankByVector, resolveVectorConfig } from "../src/vectors.js";
 
 /** A session whose first event is a long dump and whose second is the answer. */
 function fixture() {
@@ -57,12 +58,13 @@ function readJson(request) {
  * @returns the base URL, a request counter, and a closer.
  */
 async function embeddingServer(table, status = 200) {
-  const state = { requests: 0, batches: [] };
+  const state = { requests: 0, batches: [], inputs: [] };
   const server = createServer(async (request, response) => {
     state.requests += 1;
     const body = await readJson(request);
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
     state.batches.push(inputs.length);
+    state.inputs.push(...inputs);
     if (status !== 200) {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: "synthetic failure" } }));
@@ -282,6 +284,189 @@ test("a backend that refuses everything still fails the call", async () => {
       server.state.requests <= 24,
       "a total refusal must not be bisected per text, saw " + server.state.requests
     );
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+/**
+ * A session of `count` one-line events. Events before `similarFrom` are the
+ * semantic answer (vector [1,0,0] against the query below), everything after it
+ * is noise ([0,1,0]). Neither group contains the query word literally, so the
+ * lexical route cannot rescue an event the semantic window excludes.
+ * @param count - event count.
+ * @param similarFrom - first seq that carries the answer direction.
+ * @param query - query text mapped to [1,0,0] too.
+ * @returns session-shaped value plus the fake server's text table.
+ */
+function longSession(count, similarFrom, query) {
+  const events = [{ type: "session", id: "s" }];
+  const table = { [query]: [1, 0, 0] };
+  for (let seq = 0; seq < count; seq += 1) {
+    const text = seq >= similarFrom ? "unrelated line " + seq : "the animal fact " + seq;
+    table[text] = seq >= similarFrom ? [0, 1, 0] : [1, 0, 0];
+    events.push({ type: "user/message", seq, time: 1, data: { content: [{ type: "text", text }] } });
+  }
+  return {
+    events,
+    table,
+    eventAt: (seq) => events.find((event) => event.seq === seq),
+    deriveEventMessage: (event) => event.data?.message ?? (event.data?.content === undefined ? null : { role: "user", content: event.data.content })
+  };
+}
+
+/**
+ * A session where the newest `surfaceFrom`..end events are still ON the surface
+ * (the model reads them verbatim) and the rest is compacted. Only the compacted
+ * region can be the semantic route's job.
+ */
+function sessionWithSurface(count, surfaceFrom, similarSeqs, query) {
+  const events = [{ type: "session", id: "s" }];
+  const table = { [query]: [1, 0, 0] };
+  for (let seq = 0; seq < count; seq += 1) {
+    const similar = similarSeqs.includes(seq);
+    const text = (similar ? "the animal fact " : "unrelated line ") + seq;
+    table[text] = similar ? [1, 0, 0] : [0, 1, 0];
+    events.push({ type: "user/message", seq, time: 1, data: { content: [{ type: "text", text }] } });
+  }
+  return {
+    events,
+    table,
+    surface: { nodes: Array.from({ length: count - surfaceFrom }, (_, index) => surfaceFrom + index) },
+    eventAt: (seq) => events.find((event) => event.seq === seq),
+    deriveEventMessage: (event) => event.data?.message ?? (event.data?.content === undefined ? null : { role: "user", content: event.data.content })
+  };
+}
+
+test("the window covers the compacted region, not the tail the model already reads", async () => {
+  const cache = await scratch();
+  // 80 events: 0..39 compacted, 40..79 still on the surface. The only semantic
+  // answer is seq 35, i.e. inside the compacted region's newest 10 - while a
+  // newest-first window over the WHOLE log would take 79..70 and miss it.
+  const session = sessionWithSurface(80, 40, [35], "zebra");
+  const server = await embeddingServer(session.table);
+  try {
+    const config = { ...CONFIG, rank: "vector", ...vectorConfig(server, cache.dir) };
+    const result = await searchSessionHybrid(session, "zebra", { ...config, vectorCandidateLimit: 10 });
+    assert.equal(result.hits[0]?.seq, 35, "the compacted answer must be the first hit");
+    assert.deepEqual(result.hits.map((hit) => hit.seq).slice(0, 3), [35, 39, 38]);
+    assert.ok(
+      result.hits.every((hit) => hit.seq < 40),
+      "no visible-surface event may be embedded or returned, saw " + result.hits.map((hit) => hit.seq).join(",")
+    );
+    const visibleSent = server.state.inputs.filter((text) => /unrelated line (4|5|6|7)\d/.test(text));
+    assert.deepEqual(visibleSent, [], "events the surface already shows must not be sent to the embedder");
+    assert.match(result.text, /10 newest compacted event\(s\) of 40/, "the header states which region the window covered");
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("the candidate budget is tokens, so a few huge events cannot buy a long first search", async () => {
+  const cache = await scratch();
+  // 40 compacted events of ~1000 chars each: a count cap would embed all of
+  // them, a token budget must stop early. Cost on the real endpoint is per
+  // character (measured: 27 ms at 40 chars, 230 ms at 4000), not per event.
+  const events = [{ type: "session", id: "s" }];
+  const table = { zebra: [1, 0, 0] };
+  for (let seq = 0; seq < 40; seq += 1) {
+    const text = ("the animal fact " + seq + " ").padEnd(1000, "x");
+    table[text] = [1, 0, 0];
+    events.push({ type: "user/message", seq, time: 1, data: { content: [{ type: "text", text }] } });
+  }
+  const session = {
+    events,
+    table,
+    surface: { nodes: [] },
+    eventAt: (seq) => events.find((event) => event.seq === seq),
+    deriveEventMessage: (event) => event.data?.message ?? (event.data?.content === undefined ? null : { role: "user", content: event.data.content })
+  };
+  const server = await embeddingServer(session.table);
+  try {
+    const config = { ...CONFIG, rank: "vector", ...vectorConfig(server, cache.dir) };
+    // ~450 tokens each at this size, so a 2000-token budget admits a handful.
+    const result = await searchSessionHybrid(session, "zebra", { ...config, vectorCandidateTokens: 2000, vectorCandidateLimit: 40 });
+    const candidates = server.state.inputs.length - 1;
+    assert.ok(candidates > 0 && candidates < 10, "the token budget must bind before the count cap, saw " + candidates);
+    assert.ok(result.hits.length > 0, "and the search still answers");
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("the candidate bound is a documented default and survives a resolved round trip", () => {
+  // The number that makes one first search affordable on the measured endpoint
+  // (~90 ms per text): 500 candidates, ~48 s cold, then cached per text.
+  assert.equal(DEFAULT_VECTOR_CANDIDATE_LIMIT, 500, "the default is the measured cost, not a guess");
+  assert.equal(resolveVectorConfig({}).candidateLimit, DEFAULT_VECTOR_CANDIDATE_LIMIT);
+  assert.equal(resolveVectorConfig({ vectorCandidateLimit: 40 }).candidateLimit, 40);
+  assert.equal(
+    resolveVectorConfig(resolveVectorConfig({ vectorCandidateLimit: 40 })).candidateLimit,
+    40,
+    "a resolved record must not be re-derived with defaults"
+  );
+  assert.throws(() => resolveVectorConfig({ vectorCandidateLimit: 0 }), /vectorCandidateLimit/);
+});
+
+test("the tool row's config is what turns the layer on, and it selects a vector rank", () => {
+  // The wiring defect this pins: the keys used to sit on the COMPACTION row,
+  // which never reads them, so this resolve returned enabled: false while
+  // --dump-config looked configured.
+  const off = resolveToolConfig({});
+  assert.equal(off.enabled, false, "an unconfigured tool row is inert");
+  assert.equal(off.rank, "density", "and lexical, so no request and no reordering");
+  const on = resolveToolConfig({
+    rank: "hybrid",
+    vectorEnabled: true,
+    vectorBaseUrl: "http://127.0.0.1:1/v1",
+    vectorModel: "m",
+    vectorDim: 3
+  });
+  assert.equal(on.enabled, true, "the tool row's keys reach the search handler");
+  assert.equal(on.rank, "hybrid");
+  assert.equal(on.candidateLimit, DEFAULT_VECTOR_CANDIDATE_LIMIT, "the bound rides along resolved");
+});
+
+test("the bound is respected: one search embeds the query plus at most N events", async () => {
+  const cache = await scratch();
+  // The answer direction sits on seqs 50..54, inside a 10-event window (50..59).
+  const session = longSession(60, 55, "zebra");
+  const server = await embeddingServer(session.table);
+  try {
+    const config = { ...CONFIG, rank: "vector", ...vectorConfig(server, cache.dir, { vectorTopK: 8 }) };
+    const result = await searchSessionHybrid(session, "zebra", { ...config, vectorCandidateLimit: 10 });
+    const sent = server.state.batches.reduce((total, size) => total + size, 0);
+    assert.ok(sent <= 11, "query + the 10 newest events, saw " + sent + " texts");
+    assert.deepEqual(result.hits.map((hit) => hit.seq).slice(0, 5), [54, 53, 52, 51, 50], "the answer is inside the window");
+    assert.equal(result.mode, "vector");
+    assert.match(result.text, /top 8 of 10 candidate event\(s\), \d+ tokens, seq >= 50/, "the result says what it covered");
+  } finally {
+    await server.close();
+    await cache.clean();
+  }
+});
+
+test("a session larger than the bound still returns hits, and what the bound gives up is not hidden", async () => {
+  const cache = await scratch();
+  // The answer is the OLDEST 50 events here. A 10-event window cannot see them,
+  // and the query word appears in no event, so no route can: this is exactly the
+  // recall the bound costs, pinned so nobody can claim the window is free.
+  const session = longSession(60, 50, "zebra");
+  const server = await embeddingServer(session.table);
+  try {
+    const config = { ...CONFIG, rank: "hybrid", ...vectorConfig(server, cache.dir, { vectorCandidateLimit: 10 }) };
+    const result = await searchSessionHybrid(session, "zebra", config);
+    assert.ok(result.hits.length > 0, "a 60-event session still returns hits under a 10-event window");
+    assert.equal(result.totalMatches, 0, "the lexical route matches nothing, so only the window could have found it");
+    assert.ok(
+      result.hits.every((hit) => hit.seq >= 50),
+      "and no hit comes from outside the window: the old answer is unreachable by meaning, saw " + result.hits.map((hit) => hit.seq).join(",")
+    );
+    const sent = server.state.batches.reduce((total, size) => total + size, 0);
+    assert.ok(sent <= 11, "the oversized session must not widen the request, saw " + sent + " texts");
   } finally {
     await server.close();
     await cache.clean();

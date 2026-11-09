@@ -148,5 +148,19 @@ cd /tmp && dsh plugin --profile web remove dsh-lcm
 
 ### The vector layer is off
 
-`vectorEnabled` defaults to false and the web profile sets no `vector*` key, so no embedding call happens at any compression count. That is the intended default; enabling it means setting `vectorEnabled: true`, `vectorBaseUrl`, `vectorModel` and `vectorDim` on the `compaction-lcm` row.
+`vectorEnabled` defaults to false. It is a key of the **search tool row**
+(`tool-lcm-expand`, name `dsh-lcm/tool`), not of the engine: the engine declares and
+resolves the `vector*` keys but the compaction path never reads one, so putting
+`vectorEnabled: true` on `compaction-lcm` shows as enabled in `--dump-config` while
+`lcm_search` quietly stays lexical. That mistake shipped in an earlier version of
+this document. Enabling the layer means, on the tool row:
+`rank: hybrid` (both gates must open), `vectorEnabled: true`, `vectorBaseUrl`,
+`vectorModel`, `vectorDim`, and — because the first search pays per text — the
+`vectorCandidateTokens` budget (default 100 000, ~19 s cold on the measured
+endpoint) plus the `vectorCandidateLimit` count ceiling (default 500).
+
+The candidates are the events the current surface does **not** show. Ranking the
+live tail would be pure waste: those messages are already in the model's context.
+A session that has never compacted therefore has no semantic candidates at all and
+the hybrid result is exactly the lexical one.
 

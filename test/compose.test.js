@@ -70,3 +70,38 @@ test("the bundle patch leaves exactly one active compaction engine", async (t) =
     "/lcm-search is mounted"
   );
 });
+
+test("the patch wires the vector keys onto the row that reads them", async (t) => {
+  let yaml;
+  try {
+    yaml = await import("yaml");
+  } catch {
+    t.skip("yaml is only resolvable inside a dsh profile");
+    return;
+  }
+  const tool = await import("../src/tool.js");
+  const { HYBRID_RANK_MODES } = await import("../src/search.js");
+  const rows = yaml.parse(fs.readFileSync(patchPath, "utf8"))[0].insert;
+  const engineRow = rows.find((row) => row.id === "compaction-lcm");
+  const toolRow = rows.find((row) => row.id === "tool-lcm-expand");
+
+  // The engine's schema declares vector* and its config resolves them, but the
+  // compaction path never reads one. A key there looks enabled in --dump-config
+  // while search stays lexical - the exact defect this asserts against.
+  const engineVectorKeys = Object.keys(engineRow.config ?? {}).filter((key) => key.startsWith("vector"));
+  assert.deepEqual(engineVectorKeys, [], "the engine row must not carry vector keys it cannot read");
+
+  const config = toolRow.config ?? {};
+  assert.equal(config.vectorEnabled, true, "the search tool row is where the layer is switched on");
+  assert.ok(HYBRID_RANK_MODES.includes(config.rank), "and rank must name a vector mode, or the layer is inert");
+  const resolved = tool.resolveConfig(config);
+  assert.equal(resolved.enabled, true, "the tool row resolves to an enabled layer");
+  assert.equal(resolved.rank, "hybrid", "hybrid keeps lexical hits the semantic window cannot see");
+  assert.equal(resolved.candidateLimit, config.vectorCandidateLimit);
+  assert.equal(resolved.candidateTokens, config.vectorCandidateTokens, "the token budget is the primary bound and must be explicit");
+  assert.ok(Number.isInteger(resolved.candidateTokens) && resolved.candidateTokens > 0, "the bound is explicit, not a default");
+
+  // /lcm-search is deliberately lexical (src/command.js): it must not carry a
+  // rank this bundle never gives it.
+  assert.equal(rows.find((row) => row.id === "command-lcm-search").config, undefined);
+});

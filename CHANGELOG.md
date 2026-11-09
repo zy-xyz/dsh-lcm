@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.8.0 — 2026-11-09 — five defects found by auditing against the LCM paper
+
+An audit of the deployed engine against the paper's invariants and against real
+production logs turned up five defects. Every one has a reproduction in the
+message that introduced it and a test that fails without the fix.
+
+### Fixed — condensation fired exactly once per session
+
+Selection merged only the LEADING same-depth run. Once one depth-2 node existed it
+WAS the leading run, so the depth-1 siblings behind it could never lead again and
+condensation became unreachable: measured on a 40-round replay, round 7 merged to
+`[2]` and rounds 8-40 appended one depth-1 leaf each until the surface read
+`[2, 1 x 33]` — max depth 2, 34 checkpoints on the surface, 49 surface nodes, and
+the assembled context growing linearly, which is the exact failure the fanin
+exists to prevent.
+
+Selection now takes the first MAXIMAL same-depth run anywhere in the compactable
+window. Two corrections matter and both are stated in `src/region.js`: the WHOLE
+run must be merged (stopping at `fanin` nodes would leave same-depth siblings to
+the right of a depth `d+1` node, an inversion the merge itself creates), and
+"maximal" must hold on the whole surface (a run cut by the retained tail cannot be
+merged without parking a rollup in front of a leaf it never absorbed). Same replay
+after the fix: max depth 3 reached at round 23, 6 checkpoints on the surface,
+21 surface nodes (peak 28), positional depths non-increasing at every round.
+
+### Fixed — `/compact` re-summarised its own last summary
+
+`compactNow` passed three arguments, so `fanin = 0` and the `fanin > 1` branch —
+which is the ONLY place that skips checkpoints already on the surface — never ran.
+Every manual compaction therefore started its leaf at the previous checkpoint:
+measured, the second `/compact` selected exactly `seqs 23-23` and the surface went
+from one depth-1 node to one depth-2 node; a repeat with nothing new threw
+`ManualCompactionError("summary")` on the shrink gate (`337 >= 337`), spending a
+model call to be told the summary could not be smaller than itself. The manual
+path now passes the configured fanin and nothing else — floor, leaf cap and
+retention stay off — and the repeat case returns `null` cleanly.
+
+### Fixed — `condensationFanin: 1` silently disabled condensation
+
+Both the schema and the runtime validator accepted 1, and 1 makes the guard
+`fanin > 1` false: the automatic path lost condensation and the checkpoint skip
+together. Floored at 2 in both layers, with an error that names the consequence.
+
+### Fixed — the semantic layer was enabled on a row that never reads it
+
+`vectorEnabled: true` and its siblings sat on the `compaction-lcm` row. The engine
+declares and resolves them but the compaction path never reads one, while the row
+that DOES read them (`tool-lcm-expand`) had no config at all:
+`resolveConfig({})` resolves to `{rank: "density", enabled: false}`, so the layer
+was off in production while `--dump-config` showed it on. Moved to the tool row
+with `rank: hybrid`, and `/lcm-search` now rejects a vector rank instead of
+accepting one it would ignore.
+
+### Fixed — the semantic candidate window pointed at the wrong half
+
+The first bound took the newest N events. Measured on a 24 013-event session that
+covered 100% of the live tail — the messages already in the model's context
+verbatim — and 1.6% of the compacted history, which is the only region a
+retrieval tool exists to reach. Candidates are now the events the current surface
+does not show, priced in tokens (`vectorCandidateTokens`, default 100 000) rather
+than in event count, because cost tracks text length: ~18 ms per text plus
+~0.23 ms per token on the measured endpoint, and neither batching (87-92 ms/text
+across batch sizes 8-128) nor concurrency (8 parallel POSTs: 205 ms/text, worse
+than serial) changes it. Every result header states the region actually covered.
+
+### Fixed — `/lcm-status` reported the target as if it were the result
+
+"kept" summed `maxTokens`, which is the summary TARGET the instruction asked for.
+On the production checkpoint that published `371 625 -> 16 384 kept (22.68:1)`
+where the produced body is 6 183 tokens (`60.10:1`). Now measured from the
+event's own summary blocks with the same estimator the engine states its budgets
+in.
+
+### Fixed — the 120-line anchor bound was prose, not code
+
+The instruction asks for at most 120 anchor lines; nothing counted them and the
+model wrote 262 (38% of the whole checkpoint), including lines holding nothing but
+a backtick and lines that copied the instruction's OWN headings into the word
+list — strings that, pasted into `lcm_search`, match the checkpoint that contains
+them. The post-hoc attribution pass now drops non-content anchors and enforces the
+bound deterministically: unverified lines go before verified ones, most-repeated
+before unique, later-listed before earlier. Replaying the production checkpoint
+through the fixed pass: 262 lines to 120, every kept line carrying a pointer, six
+sections intact.
+
 ## 0.7.0 — 2026-11-08 — compact in leaves, not in one ever-deeper checkpoint
 
 ### Changed — the compression unit

@@ -89,13 +89,36 @@ emptySummaryRetries: 2
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 
-# ── 工具/命令行（dsh-lcm/tool 与 /command）的键 ───────────────
+# ── 这些键属于搜索工具行（id: tool-lcm-expand，name: dsh-lcm/tool）──
+# 不是引擎行。引擎的 schema 声明并解析 vector*，但压缩路径一个都不读，
+# 所以把 vectorEnabled 写在 compaction-lcm 上只会让 --dump-config 看起来开着，
+# 而 lcm_search 实际仍走词面。这一条曾被本文档写错，已改。
+#
 # 保留原版 backend（dsh-compaction-instant）的工具与命令名：
 #   recall / search 工具，/recall 命令
 # 默认 true。改成 false 只注册 lcm_expand / lcm_search / /lcm-search。
 # legacyNames: true
-#   maxRecallTokens: 16000
-#   maxSearchHits: 50
+# maxRecallTokens: 16000
+# maxSearchHits: 50
+#
+# 语义检索（默认关；两个闸门都要开：vectorEnabled + rank=vector|hybrid）：
+# vectorEnabled: true
+# rank: hybrid              # vector 会「替换」命中集，字面串会失去位置；hybrid 用 RRF 融合
+# vectorBaseUrl: "http://127.0.0.1:1234/v1"
+# vectorModel: "text-embedding-qwen3-vl-embedding-8b"
+# vectorDim: 4096
+# vectorTopK: 8
+#
+# 候选窗口按 token 计价，因为成本跟着文本长度走、不跟事件数走：
+# 实测约 18 ms/条 + 0.23 ms/token，批量大小 8–128 都只有 87–92 ms/条，
+# 并发反而更慢（8 个并发 32 条 POST = 205 ms/条）。
+# vectorCandidateTokens: 100000   # ≈200 条已压缩事件，冷启约 19 s，之后按文本命中磁盘缓存
+# vectorCandidateLimit: 500       # 条数上限，防止大量极短事件用同样成本塞满窗口
+# vectorTimeoutMs: 20000
+# vectorCacheDir: ".lcm-vectors"
+#
+# 候选只取「当前表面看不到的」那些事件。给 live 尾部做排序是纯浪费
+# （那些消息本来就在模型上下文里）；从没压缩过的会话因此没有候选，hybrid 结果等同词面。
 
 # 调试日志落盘路径。默认 $DSH_HOME/compaction-debug.log。
 # debugLogPath: /tmp/compaction-debug.log

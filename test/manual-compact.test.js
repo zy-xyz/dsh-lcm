@@ -28,6 +28,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { findCheckpointSeqs, recallSession } from "../src/recall.js";
+import { deriveDag } from "../src/summarize.js";
 
 /**
  * Load the harness packages. They only resolve inside a dsh profile; outside one
@@ -300,4 +301,120 @@ test("compactNow returns null instead of throwing when there is no compactable r
   assert.equal(await pair.engine.compactNow(pair.agent, signal, "cmd-4"), null, "the trailing node is never compacted");
   assert.equal(pair.session.log.some((event) => event.type === "compaction/start"), false);
   assert.equal(pair.llmCalls.length, 0);
+});
+
+// ── the manual path and the shape knob it must keep ────────────────────────
+
+/**
+ * Append whole turns to a live session, the way the runtime does between two
+ * manual compactions. Nothing is re-seeded: the surface keeps whatever the
+ * previous compaction left on it, which is the state the defect lived in.
+ * @param session - live real Session to grow.
+ * @param fromTurn - first turn number to write.
+ * @param turns - how many complete turns to append.
+ */
+function appendTurns(session, fromTurn, turns) {
+  const { createUserMessage, createAssistantMessage } = harnessPackages;
+  for (let index = 0; index < turns; index += 1) {
+    const turn = fromTurn + index;
+    session.append("turn/start", { turn: turn });
+    session.append(
+      "user/message",
+      createUserMessage({ content: [{ type: "text", text: "more " + turn + " NEEDLE_" + turn + " " + QUESTION_FILLER }], source: { kind: "user" } }),
+      { surfaceOp: "append" }
+    );
+    session.append("step/start", { turn: turn, step: 1 });
+    session.append(
+      "assistant/message",
+      {
+        message: createAssistantMessage({ content: [{ type: "text", text: "more answer " + turn + " " + ANSWER_FILLER }], source: { kind: "model", provider: "probe-provider", model: "probe-model" } }),
+        turn: turn,
+        step: 1,
+        stream: []
+      },
+      { surfaceOp: "append" }
+    );
+    session.append("step/end", { turn: turn, step: 1 });
+    session.append("turn/end", { turn: turn });
+  }
+}
+
+/** Surface checkpoints with their DAG depth, in surface order. */
+function surfaceCheckpoints(session) {
+  const dag = deriveDag(session);
+  return session.surface.nodes
+    .filter((seq) => dag.nodeBySeq.has(seq))
+    .map((seq) => ({ seq: seq, depth: dag.nodeBySeq.get(seq).depth }));
+}
+
+/** Every surface-replacing checkpoint record, in log order. */
+function checkpointRecords(session) {
+  return session.log.filter(
+    (event) => event.type === "user/message" && event.surfaceOp !== undefined && event.surfaceOp !== "append" && event.surfaceOp.op === "replace"
+  );
+}
+
+test("a second manual /compact no longer absorbs the first checkpoint", { skip }, async () => {
+  // The manual path used to call the selector with a retain budget and nothing
+  // else, so fanin was 0 and the branch that skips the checkpoints already on the
+  // surface never ran: every /compact started its span at the oldest surface node,
+  // which is the previous checkpoint. Measured on the real classes before this
+  // fix -- 1st /compact seqs 3-15, 2nd /compact seqs 23-23 (the checkpoint itself),
+  // surface [head, cp, tail], one checkpoint at depth 2.
+  const { session, engine, agent } = world(3);
+  const signal = new AbortController().signal;
+
+  const first = await engine.compactNow(agent, signal, "cmd-5");
+  assert.ok(first !== null, "the first manual compaction must produce a result");
+  const afterFirst = surfaceCheckpoints(session);
+  assert.equal(afterFirst.length, 1, "one checkpoint after one manual run");
+  assert.deepEqual(afterFirst.map((entry) => entry.depth), [1], "a leaf over raw messages is depth 1");
+
+  // Fresh material arrives exactly as it does between two operator-issued /compact
+  // calls: whole turns, appended to the same live session.
+  appendTurns(session, 4, 3);
+
+  // Surface POSITION is what "already summarised" means; a checkpoint seq is newer
+  // than the messages it shadowed, so seq ordering says nothing here.
+  const surfaceBeforeSecond = [...session.surface.nodes];
+  const second = await engine.compactNow(agent, signal, "cmd-6");
+  assert.ok(second !== null, "the second manual compaction must produce a result");
+  assert.equal(
+    surfaceBeforeSecond.indexOf(second.shadowedRange.start),
+    surfaceBeforeSecond.indexOf(afterFirst[0].seq) + 1,
+    "the second span opens immediately AFTER the first checkpoint, not on it"
+  );
+
+  // The assertion the defect fails: two independent leaves, not one depth-2 node.
+  const afterSecond = surfaceCheckpoints(session);
+  assert.equal(afterSecond.length, 2, "the surface must hold two checkpoints, not one re-absorbed summary");
+  assert.deepEqual(afterSecond.map((entry) => entry.depth), [1, 1], "both are leaves over raw messages: no summary of the first summary");
+  assert.equal(afterSecond[0].seq, afterFirst[0].seq, "the first checkpoint is still there, byte for byte");
+  assert.deepEqual(
+    checkpointRecords(session).map((event) => event.seq),
+    afterSecond.map((entry) => entry.seq),
+    "each replacement record is still on the surface"
+  );
+});
+
+test("a repeat /compact with nothing new returns null instead of re-summarising", { skip }, async () => {
+  // The same defect had a second face. With fanin 0 the whole compactable prefix
+  // after the manual run is the checkpoint itself, so a repeat /compact either
+  // re-summarised its own summary (when the model happened to write something
+  // smaller) or failed the shrink guarantee and threw
+  // ManualCompactionError("summary") -- both are the operator asking for nothing
+  // and the engine spending a model call on it. It is a clean null now.
+  const { session, engine, agent, llmCalls, flushes } = world(3);
+  const signal = new AbortController().signal;
+
+  const first = await engine.compactNow(agent, signal, "cmd-7");
+  assert.ok(first !== null);
+  const surfaceAfterFirst = [...session.surface.nodes];
+  const callsAfterFirst = llmCalls.length;
+
+  assert.equal(await engine.compactNow(agent, signal, "cmd-8"), null, "nothing new to compact is not an error");
+  assert.deepEqual(session.surface.nodes, surfaceAfterFirst, "the surface is untouched, checkpoint included");
+  assert.equal(llmCalls.length, callsAfterFirst, "no model call is spent on a repeated /compact");
+  assert.equal(flushes.count, 1, "and no second durability checkpoint");
+  assert.deepEqual(surfaceCheckpoints(session).map((entry) => entry.depth), [1], "the checkpoint is not summarised again");
 });

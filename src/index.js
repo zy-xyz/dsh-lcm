@@ -206,6 +206,13 @@ const checkpointCapSchema = z.number().step(1).min(1);
 const summarizationProviderSchema = z.string();
 const summarizationModelSchema = z.string();
 const maxTokensSchema = z.number().step(1).min(1);
+// One key needs a floor of its own. `condensationFanin` is not a size: it is the
+// switch that turns on ./region.js's condensation branch AND its skip over the
+// checkpoints already on the surface. At 1 the guard `fanin > 1` is false, so the
+// automatic path loses both, every leaf re-absorbs its predecessor, and the surface
+// holds one checkpoint forever at a growing depth. 1 is therefore not a small value
+// of this key, it is the bug this key exists to prevent.
+const condensationFaninSchema = z.number().step(1).min(2);
 const compactionRetriesSchema = z.number().step(1).min(0);
 const maxOverflowRetriesSchema = z.number().step(1).min(0);
 
@@ -249,7 +256,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     summaryRatio: z.number(),
     summaryFloorTokens: maxTokensSchema,
     leafSpanTokens: maxTokensSchema,
-    condensationFanin: maxTokensSchema,
+    condensationFanin: condensationFaninSchema,
     stallCooldownMs: maxTokensSchema,
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
@@ -775,7 +782,18 @@ export class LcmCompactionEngine extends CompactionEngine {
           const measurement = this.ctx.tokenMeter.measure(agent.session);
           // Manual /compact follows basic: retain 0 tokens, i.e. compact the whole
           // history except the trailing node, independent of the pressure policy.
-          const range = selectCompactableRange(agent.session, measurement, 0);
+          //
+          // The fanin is the ONE shape knob manual compaction keeps, and passing it
+          // is not cosmetic: `fanin > 1` is the only branch in ./region.js that
+          // skips the checkpoints already on the surface. With fanin 0 every manual
+          // run started its leaf at the oldest surface node, which is the previous
+          // checkpoint, so each /compact re-summarised its own last summary -- the
+          // surface held exactly one checkpoint and depth grew 1,2,3,... per repeat.
+          // "Do not re-summarise my own summary" is not a guard an operator would
+          // ever waive, so the floor/min-span/leaf-cap stays off and this stays on:
+          // the manual path still compacts whatever the surface allows, minus the
+          // bytes it has already summarised.
+          const range = selectCompactableRange(agent.session, measurement, 0, 0, 0, this.config.condensationFanin);
           if (range === null) return null;
           return await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
             owner: null,

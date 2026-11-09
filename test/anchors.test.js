@@ -116,6 +116,72 @@ test("attribution never reaches outside the shadowed span", () => {
   assert.equal(covering, "## 逐字锚点\n- ZZZ_TOKEN_XYZ (seq 1)\n");
 });
 
+test("the anchor section stops at its 120-line bound, keeping the verified ones", () => {
+  const probes = Array.from({ length: 200 }, (_, index) => `probe_${String(index).padStart(3, "0")}`);
+  // Only probes 150..199 occur in the span, so exactly 50 anchors are verified.
+  const session = sessionOf(["span head", ...probes.slice(150)]);
+  const summary = ["## 逐字锚点", ...probes.map((probe) => `- ${probe}`), "", "## 目标与约束", "- 把结论写进报告"].join("\n");
+  const lines = attributeAnchorPointers(summary, session, session.events.map((event) => event.seq)).split("\n");
+  const section = lines.slice(1, lines.indexOf(""));
+  assert.equal(section.length, 120, "the 120-line bound is enforced in code, not only asked for in the prompt");
+  assert.ok(section.includes("- probe_150 (seq 1)"), "a verified anchor keeps its pointer and its slot");
+  assert.ok(section.includes("- probe_199 (seq 50)"));
+  assert.equal(section.filter((line) => !line.includes("(seq ")).length, 70, "the remaining 70 slots hold unverified anchors");
+  assert.ok(section.includes("- probe_000"));
+  assert.ok(!section.includes("- probe_070"), "later unverified anchors are the first to go");
+  assert.equal(lines.at(-1), "- 把结论写进报告", "the sections after the list are untouched");
+});
+
+test("a line holding only a backtick, and a copied section heading, are dropped", () => {
+  const session = sessionOf([
+    "这里有一个 ` 反引号",
+    "模型把标题 ## 目标与约束 抄进了词表",
+    "真正该留的 REAL_TOKEN 在第三行"
+  ]);
+  // Both garbage lines DO resolve in the span, so the drop is the prune and not a missing pointer.
+  const summary = ["## 逐字锚点", "`", "`## 目标与约束`", "- REAL_TOKEN", "", "## 目标与约束", "- 写报告"].join("\n");
+  const out = attributeAnchorPointers(summary, session, [0, 1, 2]);
+  assert.equal(out, ["## 逐字锚点", "- REAL_TOKEN (seq 2)", "", "## 目标与约束", "- 写报告"].join("\n"));
+});
+
+test("a path, a URL, a bare number and a one-word anchor all survive the prune", () => {
+  const session = sessionOf(["cp /tmp/x 之后 curl https://example.com/a?b=c 跑了 42 次，这只是一个 fact"]);
+  const summary = ["## 逐字锚点", "- /tmp/x", "- https://example.com/a?b=c", "- 42", "- fact", "", "## 目标与约束", "- 写报告"].join("\n");
+  const lines = attributeAnchorPointers(summary, session, [0]).split("\n");
+  assert.deepEqual(lines.slice(1, 5), [
+    "- /tmp/x (seq 0)",
+    "- https://example.com/a?b=c (seq 0)",
+    "- 42 (seq 0)",
+    "- fact (seq 0)"
+  ]);
+});
+
+test("anchorPointers: false returns even a dirty over-long section untouched", async () => {
+  const session = sessionOf(["probe_000 和 ` 都在这一行"]);
+  const dirty = ["## 逐字锚点", "`", ...Array.from({ length: 200 }, (_, index) => `- probe_${index}`), "", "## 目标与约束", "- 写报告"].join("\n");
+  const ctx = { llm: { stream: () => stubStream(dirty) } };
+  const prepared = { session, start: 0, end: 0, shadowedSeqs: [0], shadowedTokenCount: 20000 };
+  const off = await summarizeLeaf(ctx, resolveConfig({ anchorPointers: false }), prepared, { session, options: {} }, 2400, undefined);
+  assert.equal(off.summary[0].text, dirty, "off is the escape hatch: no pointers, no prune, no cap");
+  const on = await summarizeLeaf(ctx, resolveConfig({}), prepared, { session, options: {} }, 2400, undefined);
+  assert.ok(on.summary[0].text.length < dirty.length, "and the default path is where the bound lives");
+});
+
+test("overflow cuts the anchor the span repeats most before a one-off literal", () => {
+  // `uniq_1` is a PREFIX of `uniq_10`..`uniq_128` on purpose: a bare substring count
+  // scored it ~20 repeats and cut it before `the`, the word the span really repeats.
+  const unique = Array.from({ length: 129 }, (_, index) => `uniq_${index}`);
+  const session = sessionOf([`${"the ".repeat(9)}the ${unique.join(" ")}`]);
+  const summary = ["## 逐字锚点", "- the", ...unique.map((token) => `- ${token}`), "", "## 目标与约束", "- 写报告"].join("\n");
+  const lines = attributeAnchorPointers(summary, session, [0]).split("\n");
+  const section = lines.slice(1, lines.indexOf(""));
+  assert.equal(section.length, 120);
+  assert.ok(!section.some((line) => line.startsWith("- the")), "the word the span repeats is the cheapest line");
+  assert.ok(section.includes("- uniq_1 (seq 0)"), "being a prefix of longer anchors is not being repeated");
+  assert.ok(section.includes("- uniq_0 (seq 0)"), "a literal mentioned once keeps its slot");
+  assert.ok(!section.some((line) => line.startsWith("- uniq_128")), "ties drop the latest-listed");
+});
+
 /** Minimal chunk stream: one text block then a normal finish. */
 async function* stubStream(text) {
   yield { type: "block-start", index: 0, blockType: "text" };

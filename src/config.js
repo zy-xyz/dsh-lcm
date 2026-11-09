@@ -417,7 +417,7 @@ function validatePolicy(config, name) {
   if (config.checkpointCap !== undefined) assertPositiveInteger(`${name}.checkpointCap`, config.checkpointCap);
   if (config.summaryFloorTokens !== undefined) assertPositiveInteger(`${name}.summaryFloorTokens`, config.summaryFloorTokens);
   if (config.leafSpanTokens !== undefined) assertPositiveInteger(`${name}.leafSpanTokens`, config.leafSpanTokens);
-  if (config.condensationFanin !== undefined) assertPositiveInteger(`${name}.condensationFanin`, config.condensationFanin);
+  if (config.condensationFanin !== undefined) assertCondensationFanin(`${name}.condensationFanin`, config.condensationFanin);
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);
@@ -474,6 +474,25 @@ function assertNonEmptyString(name, value) {
 function assertPositiveInteger(name, value) {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} (${String(value)}) must be a positive integer`);
+  }
+}
+
+/**
+ * Require a condensation fanin of at least 2.
+ *
+ * Not an ordinary "positive integer" check, because the floor is semantic: ./region.js
+ * gates its whole condensation branch - and the skip over the checkpoints already on
+ * the surface - on `fanin > 1`. A fanin of 1 does not make condensation rarer, it
+ * turns it off, and with it every leaf starts at the previous checkpoint again: the
+ * surface holds one checkpoint forever and its depth grows by one per compaction
+ * (measured: 1 checkpoint, depth 1,2,3 over a three-round replay). The message names
+ * that consequence so the value is not read as "just a small fanin".
+ * @param name - config path for the offending key.
+ * @param value - candidate fanin.
+ */
+function assertCondensationFanin(name, value) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 2) {
+    throw new Error(`${name} (${String(value)}) must be an integer >= 2: below 2 the condensation branch and its skip over existing checkpoints are both off, so every compaction re-summarises its own last summary and the surface holds one checkpoint at a growing depth`);
   }
 }
 

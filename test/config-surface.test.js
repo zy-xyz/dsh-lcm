@@ -122,6 +122,38 @@ test("the schema rejects the wrong type for each newly declared key", () => {
   }
 });
 
+// ── the one key whose floor is semantic, not numeric ───────────────────────
+
+test("condensationFanin is floored at 2 in both configuration layers", () => {
+  // 1 is not a small fanin, it is the defect the key exists to prevent: ./region.js
+  // gates its whole condensation branch - and its skip over the checkpoints already
+  // on the surface - on `fanin > 1`. At 1 the automatic path loses both, every leaf
+  // starts at the previous checkpoint again, and the surface holds one checkpoint at
+  // a growing depth (replayed: depths [1], [2], [3] with one checkpoint throughout).
+  // The schema is the composition-time half; ./config.js is the runtime half. A
+  // guard in only one of them is a hole, so both are asserted here.
+  const consequence = /re-summarises its own last summary/;
+  assert.throws(() => resolveConfig({ condensationFanin: 1 }), /\[?condensationFanin\]?/u, "the runtime validator must name the key");
+  assert.throws(() => resolveConfig({ condensationFanin: 1 }), /integer >= 2/u, "and the floor");
+  assert.throws(() => resolveConfig({ condensationFanin: 1 }), consequence, "and the consequence, so 1 is not read as a small value");
+  assert.throws(() => LcmCompactionEngine.Config({ condensationFanin: 1 }), "the composition schema must reject 1 too");
+
+  // 2 is the smallest fanin that keeps the branch reachable, and it must be accepted
+  // by both layers and survive the round trip a patch re-route performs.
+  assert.equal(resolveConfig({ condensationFanin: 2 }).condensationFanin, 2);
+  assert.doesNotThrow(() => LcmCompactionEngine.Config({ condensationFanin: 2 }));
+  assert.equal(LcmCompactionEngine.Config.simplify({ condensationFanin: 2 }).condensationFanin, 2);
+
+  // No other key got floored on the way: 1 is still a legal SIZE for the keys that
+  // are sizes, which is what keeps this a change to one key rather than a policy.
+  const sizes = resolveConfig({ checkpointCap: 1, summaryFloorTokens: 1, leafSpanTokens: 1, stallCooldownMs: 1 });
+  assert.deepEqual(
+    [sizes.checkpointCap, sizes.summaryFloorTokens, sizes.leafSpanTokens, sizes.stallCooldownMs],
+    [1, 1, 1, 1],
+    "the fanin floor must not spread to the size keys"
+  );
+});
+
 // ── 2: the peer ranges accept the prerelease the harness actually ships ─────
 
 test("every peer range accepts the installed prerelease", { skip: skipSemver }, () => {

@@ -1306,9 +1306,17 @@ lcm status
 
 **宽度出现了，`fanin` 真的会跑，而且 d2 说明合并真的发生了。**
 
+**这份重放覆盖的只有自动路径。** 上面每一轮走的都是 `compactIfNeeded` 的自动参数（`retain 16000`、`summaryFloorTokens 512`、`leafSpanTokens 24000`、`fanin 4`），**手动 `/compact` 入口一次都没进入**。而手动路径当时传的是 `selectCompactableRange(session, measurement, 0)` —— 三个参数，`fanin = 0` —— 于是「跳过已存在 checkpoint」那段分支（它和合并同在 `fanin > 1` 里）在手动路径上**从不执行**：
+
+- 第一次 `/compact`：seqs 3-15，表面 `[system][cp][tail]`，一个 checkpoint，深度 1；
+- 追加三整轮后第二次 `/compact`：**选中的正是上一个 checkpoint**（seqs 23-23），表面仍是**一个** checkpoint，深度 2；
+- 什么都没有就再敲一次 `/compact`：撞收缩闸 `ManualCompactionError("summary")` —— 原因串 `compiled checkpoint is not smaller than the shadowed content (337 >= 337)`，一次模型调用换来「摘要不比它自己小」。
+
+所以本节这张表只证明**自动路径**有宽度：它不能用来证明 `/compact` 也有宽度，当时的手动路径宽度恒为 1。手动入口的修复与回归测试见 `docs/DESIGN.md` 第 2 节和 `test/manual-compact.test.js`。
+
 ### 顺带把第 5 步（Assembly）解决掉了
 
-因为**合并只吃前导段**，更深的节点必然落在最前；而**表面顺序就是模型看到的顺序**。所以上下文自然读成 `[system][rollup][leaves][fresh tail]` —— **正是 lcm-x 的组装顺序，一行排序代码都不需要**。
+因为**一次合并只吃同一深度的一整段连续 checkpoint**，更深的节点必然落在最前；而**表面顺序就是模型看到的顺序**。所以上下文自然读成 `[system][rollup][leaves][fresh tail]` —— **正是 lcm-x 的组装顺序，一行排序代码都不需要**。
 
 子代理同时把契约钉死了（`bench/ASSEMBLY.md`）：`SurfaceOp` 被运行时校验卡成**恰好三个键**（`surface.js:189-199`），`fold` 把范围塌成**一个 seq**（`surface.js:435-439`），`dsh-compaction` 的文档也写「replaces the selected surface span with **one** summary node」。**单条替换是真的**，但它不再是障碍。
 

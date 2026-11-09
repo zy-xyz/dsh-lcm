@@ -7,13 +7,17 @@
  * events and their `(seq N)` pointers, so the next model turn sees them.
  * The log is append-only, so hits are always the original content.
  *
+ * Lexical on purpose, not by omission: the semantic route lives on the
+ * `search` tool (see `resolveConfig` for the measured reason).
+ *
  * @module dsh-lcm/command
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { estimateEntryTokens } from "./compiler.js";
 import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
-import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, searchSession } from "./search.js";
+import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, searchSession } from "./search.js";
 
 export const name = "command-lcm-search";
 export const inject = ["commands"];
@@ -28,6 +32,15 @@ export function resolveConfig(config = {}) {
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("CommandRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("CommandRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("CommandRecallConfig: legacyNames must be a boolean");
+  // /lcm-search is deliberately lexical, and says so instead of accepting a
+  // vector rank it would ignore: it is the operator's grep, typed at a prompt
+  // and answered inline. The semantic arm costs ~88 ms per candidate text on
+  // the measured endpoint (44.0 s cold for the 500-event window, src/vectors.js),
+  // and that is a stall a human feels in the UI. The `search` tool owns the
+  // vector route, where the model's wording is the thing that needs help.
+  if (!RANK_MODES.includes(rank)) {
+    throw new Error("CommandRecallConfig: rank must be one of " + RANK_MODES.join(", ") + " — /lcm-search is lexical; set a vector rank on the lcm_search tool row instead");
+  }
   return { maxRecallTokens, maxSearchHits, legacyNames, rank };
 }
 
@@ -112,6 +125,28 @@ export function apply(ctx, config) {
 }
 
 /**
+ * Tokens of the checkpoint body one `compaction/summary` event actually produced.
+ *
+ * `maxTokens` on that event is the summary TARGET the instruction asked the model
+ * to aim for — `summarize.js` returns its `budgetTokens`, and `region.js` commits
+ * it under the contract's field name. Summing it reported the request as if it
+ * were the result: on a real session the surface claimed "16384 kept, 22.68:1,
+ * 355241 saved" for a checkpoint whose body is 6183 tokens (15832 chars), where
+ * the measured answer is "6183 kept, 60.10:1, 365442 saved".
+ *
+ * The measurement is the event's own `summary` blocks, sized with
+ * `estimateEntryTokens` — the estimator the engine states its shrink guarantee
+ * and its budgets in, so the two sides of the ratio stay estimator-to-estimator.
+ * @param summary - one `compaction/summary` event.
+ * @returns the produced body size in estimated tokens (0 when nothing was recorded).
+ */
+function keptTokensOf(summary) {
+  const blocks = summary.data?.summary;
+  if (!Array.isArray(blocks)) return 0;
+  return estimateEntryTokens(blocks.map((block) => (block.type === "text" ? block.text ?? "" : "")).join("\n"));
+}
+
+/**
  * `/lcm-status` — the state surface G6.1 asks for, without adding a tool.
  *
  * lcm-x exposes `lcm_status` / `lcm_inspect` for the same reason: after a
@@ -133,7 +168,7 @@ export function buildStatus(session) {
   let keptTotal = 0;
   for (const summary of summaries) {
     shadowedTotal += summary.data?.shadowedTokenCount ?? 0;
-    keptTotal += summary.data?.maxTokens ?? 0;
+    keptTotal += keptTokensOf(summary);
   }
   const ratio = keptTotal === 0 ? "n/a" : (shadowedTotal / keptTotal).toFixed(2) + ":1";
   const byDepth = new Map();

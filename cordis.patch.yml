@@ -47,16 +47,44 @@
 - insert:
     - id: compaction-lcm
       name: dsh-lcm
-      # Vector recall layer. Off by default in the engine; enabled here so the
-      # semantic arm is exercised in production, with the endpoint, model and
-      # dimension that were measured to answer 200 with 4096 floats.
+      # No vector keys on this row on purpose. The engine declares vector* in its
+      # schema and resolves them in its config, but nothing in the compaction
+      # path reads them: the semantic route belongs to the SEARCH surface below.
+      # A "vectorEnabled: true" here looked enabled in --dump-config while
+      # "search" quietly stayed lexical.
+    - id: tool-lcm-expand
+      name: dsh-lcm/tool
+      # Vector recall layer, on the row that actually calls it: resolveConfig in
+      # src/tool.js hands these keys to searchSessionHybrid, and without "rank"
+      # the layer is inert anyway (the default is the measured lexical
+      # "density"). Endpoint, model and dimension were measured to answer 200
+      # with 4096 floats.
+      #
+      # rank: hybrid, not vector. A vector-only rank replaces the hit set instead
+      # of adding to it: it top-Ks the recent window by cosine, so a literal
+      # pattern (an id, a path, an error code) the log matches exactly loses to
+      # events that are merely similar in topic. Hybrid fuses the lexical ranks
+      # with the semantic ones (RRF), so exact matches keep their place and a
+      # wording mismatch can still surface. A dead endpoint degrades this to
+      # plain lexical with a notice, so the setting cannot break a search.
       config:
+        rank: hybrid
         vectorEnabled: true
         vectorBaseUrl: http://10.126.126.3:1234/v1
         vectorModel: text-embedding-qwen3-vl-embedding-8b
         vectorDim: 4096
-    - id: tool-lcm-expand
-      name: dsh-lcm/tool
+        # The candidate window is what the model CANNOT read: events off the
+        # session surface. The visible tail is already in context verbatim, so
+        # embedding it would be pure waste - on the measured 24k-event session
+        # 19800 events were still visible and only 4213 were compacted.
+        #
+        # Cost tracks length, not event count (32 texts: 27/33/60/119/230 ms per
+        # text at 40/200/800/2000/4000 chars ~ 18 ms + 0.23 ms per token), so the
+        # primary bound is tokens. 100k admitted the newest 203 of 4213 compacted
+        # events and measured 26.7 s cold, 132 ms warm; the count cap only stops a
+        # log of one-line events from buying the same cost in tiny pieces.
+        vectorCandidateTokens: 100000
+        vectorCandidateLimit: 500
     - id: command-lcm-search
       name: dsh-lcm/command
     - id: lcm-compaction-gate

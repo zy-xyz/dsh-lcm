@@ -117,12 +117,22 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     condensationFanin: 4       # same-depth checkpoints merge into one higher node at this fanin
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
     emptySummaryRetries: 2     # retry a response with no text block (a truncated-but-textual one is never retried)
-    # ── optional vector recall (off by default) ──
-    vectorEnabled: false       # both gates must open: this + rank=vector|hybrid
+
+# The semantic route lives on the SEARCH row, not on the engine. The engine
+# declares and resolves the vector keys but the compaction path never reads one,
+# so a "vectorEnabled: true" here looks enabled in --dump-config while search
+# quietly stays lexical.
+- id: tool-lcm-expand
+  name: dsh-lcm/tool
+  config:
+    rank: hybrid               # both gates must open: this + vectorEnabled
+    vectorEnabled: false       # off by default; with it false, rank hybrid IS the lexical result
     vectorBaseUrl: "http://10.126.126.3:1234/v1"
     vectorModel: "text-embedding-qwen3-vl-embedding-8b"
     vectorDim: 4096
     vectorTopK: 8
+    vectorCandidateTokens: 100000  # first-search cost is per text; this bounds it
+    vectorCandidateLimit: 500      # count ceiling, so tiny events cannot buy the same cost
     vectorTimeoutMs: 20000
     vectorCacheDir: ".lcm-vectors"
 ```
@@ -144,6 +154,19 @@ query-shape mismatch, not a bug in the matcher. Two ways out, both opt-in:
 With `vectorEnabled: false` — the default — both modes cost nothing: the search
 path is byte-identical to the lexical one, asserted by test. An unreachable
 backend degrades to lexical and says so in the result text instead of throwing.
+
+**Which events the semantic route can see.** Only events the current surface does
+*not* show — the compacted half. Ranking the tail would be wasted: those messages
+are already in the model's context verbatim. Measured on a 24 013-event session,
+"newest N events" covered 100% of the live tail and 1.6% of the compacted history,
+i.e. the wrong half. The window is priced in **tokens** (`vectorCandidateTokens`),
+because cost tracks text length and not event count: on the measured endpoint
+~18 ms per text plus ~0.23 ms per token, and neither batching (87–92 ms/text at
+batch sizes 8–128) nor concurrency (8 parallel POSTs were *worse*, 205 ms/text)
+moves it. 100 000 tokens is ~200 compacted events and ~19 s cold, then free per
+text from the disk cache. Older compacted events are reachable by pattern, not by
+similarity — `rank: "hybrid"` is what keeps them in the answer, and every result
+header states the region it actually covered.
 
 Budget math is basic's, verbatim:
 

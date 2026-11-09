@@ -112,21 +112,70 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
     // the level, so the summary never condenses and the assembled context keeps
     // N separate leaves instead of one rollup.
     //
-    // Only a LEADING run at one depth qualifies. A run that mixes depths would
-    // merge a parent with its own children, which is not condensation - it is
-    // summarising a summary of itself.
+    // The run must sit at ONE depth. A run that mixes depths would merge a parent
+    // with its own children, which is not condensation - it is summarising a
+    // summary of itself.
+    //
+    // The run must also be the FIRST MAXIMAL one anywhere in the compactable
+    // window, not merely the leading one. Leading-only fires exactly once per
+    // session: as soon as one depth-2 node exists it IS the leading run, so the
+    // depth-1 siblings behind it can never be leading again and condensation is
+    // unreachable forever. Measured on the 40-round replay that motivated this
+    // (retain 16000, floor 512, leaf 24000, fanin 4): round 7 condensed to [2],
+    // then rounds 8-40 appended one depth-1 leaf per round until the surface read
+    // [2, 1 x 33] - maxDepth 2, 34 checkpoints on the surface, surface 49. The
+    // assembled context grew linearly, which is the failure fanin exists to
+    // prevent.
     const dag = deriveDag(session);
-    const run = [];
-    for (let index = firstIdx; index < keepFromIdx; index += 1) {
-      const node = dag.nodeBySeq.get(surfaceNodes[index]);
-      if (node === undefined) break;
-      if (run.length === 0 || node.depth === run[0].depth) run.push({ index, depth: node.depth });
-      else break;
+    const depthAt = (index) => dag.nodeBySeq.get(surfaceNodes[index])?.depth;
+    let runStart = -1;
+    let runEnd = -1;
+    let openStart = -1;
+    let openDepth = 0;
+    let scan = firstIdx;
+    for (; scan < keepFromIdx; scan += 1) {
+      const depth = depthAt(scan);
+      if (openStart >= 0 && depth === openDepth) continue;
+      // The open run ends here, at a different depth or at the end of the checkpoint
+      // block. Checkpoints are one contiguous block at the front of the surface (a
+      // leaf always opens past them, so no raw message is interleaved), which is why
+      // the first non-checkpoint also ends a run - and why a run that ends there is
+      // maximal on the whole surface.
+      if (openStart >= 0 && scan - openStart >= fanin) {
+        runStart = openStart;
+        runEnd = scan;
+        break;
+      }
+      if (depth === undefined) break;
+      openStart = scan;
+      openDepth = depth;
     }
-    if (run.length >= fanin) {
-      let endIdx = run[fanin - 1].index;
-      while (endIdx > firstIdx && !toolPairingBalancedAfter(session, surfaceNodes[endIdx])) endIdx -= 1;
-      if (endIdx >= firstIdx) return { start: surfaceNodes[firstIdx], end: surfaceNodes[endIdx] };
+    // `scan === keepFromIdx` means the run was still open when the compactable
+    // window ended, and it is maximal only when the surface does not continue at the
+    // same depth behind the retained tail. Merging the visible part would park a
+    // depth d+1 node in front of a depth d sibling the tail kept, and assembly would
+    // read a rollup before a leaf it never absorbed.
+    if (runEnd < 0 && scan === keepFromIdx && openStart >= 0 && keepFromIdx - openStart >= fanin && depthAt(keepFromIdx) !== openDepth) {
+      runStart = openStart;
+      runEnd = keepFromIdx;
+    }
+    if (runStart >= 0 && toolPairingBalancedBefore(session, surfaceNodes[runStart])) {
+      // The END is walked back to a balanced cut exactly as the leaf path does, and
+      // the range is taken only when that cut was already balanced. Merging the
+      // WHOLE run is what keeps positional depths non-increasing: the left
+      // neighbour has a strictly greater depth (d + 1 <= it), the right neighbour a
+      // strictly smaller one (d < d + 1), so the new node is ordered correctly by
+      // construction. Stopping at fanin nodes instead would leave same-depth
+      // siblings to the RIGHT of the new node - a depth d + 1 node in front of a
+      // depth d one, the exact inversion a rollup must not create. Cutting a run
+      // short for tool pairing has the same shape, so an unbalanced end skips
+      // condensation for this round and lets the leaf path make the progress. For a
+      // run of checkpoints the two checks coincide anyway: every member is a
+      // `user/message` (balance delta 0), so the cut balance is constant across
+      // the run, and a balanced start makes every end boundary balanced.
+      let endIdx = runEnd - 1;
+      while (endIdx > runStart && !toolPairingBalancedAfter(session, surfaceNodes[endIdx])) endIdx -= 1;
+      if (endIdx === runEnd - 1) return { start: surfaceNodes[runStart], end: surfaceNodes[endIdx] };
     }
     // Skip the checkpoints that are already there. This is the piece that made the
     // whole condensation path unreachable, and it took a replay to see it.
@@ -140,9 +189,13 @@ export function selectCompactableRange(session, measurement, retainTokens, minTo
     // covered only by a synthetic test that built the surface by hand.
     //
     // Starting past them is also what gives lcm-x step 5 for free. A condensation
-    // only ever merges the LEADING run, so a deeper node always lands earliest, and
-    // surface position IS the model-visible message order - the context reads
-    // [system][rollup][leaves][fresh tail] with no ordering code at all.
+    // lands at the first position of the run it merges and never past a shallower
+    // sibling, so positional depths stay non-increasing and surface position IS the
+    // model-visible message order - the context reads
+    // [system][rollup][leaves][fresh tail] with no ordering code at all. Measured on
+    // the 40-round replay with the run rule above: the deepest node is always first,
+    // the surface peaks at 28 nodes and 7 checkpoints (21 / 6 at round 40) instead of
+    // 49 / 34, and maxDepth reaches 3 at round 23.
     let leafStart = firstIdx;
     const leading = new Set([...dag.nodeBySeq.keys()]);
     while (leafStart < keepFromIdx && leading.has(surfaceNodes[leafStart])) leafStart += 1;

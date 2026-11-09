@@ -1,6 +1,6 @@
 # Design: how `dsh-lcm` compacts a session
 
-This describes the engine as it ships at 0.7.0. The previous version of this file
+This describes the engine as it ships at 0.8.0. The previous version of this file
 was a decision memo written before the code existed; its milestones are now either
 shipped in a different shape or dropped, and the last section lists where it and
 the code disagree.
@@ -63,10 +63,23 @@ this guard is in the source as the incident string `span=1 seqs=24-24
 shadowedTokens=428 budget=512`. A single large node is not refused on count: one
 40 000-token tool result is exactly what compaction is for, and it does shrink.
 
-Manual `/compact` deliberately passes none of these guards
-(`src/index.js:777`): floor 0, no leaf cap, no fanin, retain 0. An operator who asks
-for a compaction gets whatever the surface allows, including the shape the engine
-would have refused on its own.
+Manual `/compact` deliberately passes none of these size guards
+(`src/index.js:796`): floor 0, no leaf cap, retain 0. An operator who asks for a
+compaction gets whatever the surface allows, including the shape the engine would
+have refused on its own.
+
+The condensation fanin is the one knob it keeps, and that is not a compromise. The
+`fanin > 1` branch is the only place that also skips the checkpoints already on the
+surface, so a manual run without it re-summarises its own last summary. Measured on
+the real classes: after a first `/compact` and three fresh turns, the second run
+selected exactly the previous checkpoint (seqs 23-23) and the surface went from one
+depth-1 node to one depth-2 node; a repeat with nothing new at all threw
+`ManualCompactionError("summary")` on the shrink gate (`337 >= 337`), spending a
+model call to be told the summary could not be smaller than itself. "Do not
+re-summarise my own summary" is not a guard an operator would ever waive, so the
+manual path passes the configured fanin and nothing else: floor, leaf cap and
+retention stay off. What that buys on the same session: two compactions leave two
+depth-1 checkpoints, not one at depth 2.
 
 The cost is honest: a 147k span becomes 7 calls, and the production-scale 436k span
 would become about 19, run serially, so wall clock grows with the span even though
@@ -84,15 +97,26 @@ any restart, which is why `appendPluginRecord` is not used for it.
 Depth alone did nothing until selection used it. Without condensation the surface
 accumulates a flat row of depth-1 leaves: every checkpoint is independent, nothing
 produces a rollup, and the assembled context grows linearly with history instead of
-logarithmically. So before taking the oldest bytes again, selection looks at the
-leading run of the compactable prefix and, when at least `condensationFanin` nodes sit
-at the same depth, selects exactly that many and replaces them with one node one
-level up (`src/region.js:105`).
+logarithmically. So before taking the oldest bytes again, selection looks for a run
+of checkpoints at one depth and, when that run holds at least `condensationFanin`
+nodes, merges the WHOLE run into one node one level up (`src/region.js:107`).
 
-Only a leading run qualifies, for a reason that is not stylistic: a run that mixes
+A run must sit at ONE depth, for a reason that is not stylistic: a run that mixes
 depths would merge a parent with its own children, which is not condensation but
-summarising a summary of itself. The boundary is then walked back until it is
-balanced, so the merge never splits a step.
+summarising a summary of itself. The end is then walked back until it is balanced,
+and the merge is taken only when that cut was already balanced, so it never splits a
+step.
+
+One restriction does the limiting, and it is worth naming plainly so this section
+does not overclaim. Selecting only the LEADING run — the first version of this rule —
+condenses at most ONCE per session: the node it creates is then the leading node, so
+the depth-1 siblings behind it can never lead again and the row behind it only grows.
+Measured on that 40-round replay: one depth-2 node, then a flat row of depth-1 leaves
+(`[2, 1 x 33]`, max depth 2, 34 checkpoints on the surface). Selection therefore takes
+the first MAXIMAL same-depth run anywhere in the compactable window instead of only at
+its head, which is what lets a second and a third rollup exist. What is still not
+implemented: merging more than one run per compaction, and folding a run into an
+existing node of the same depth.
 
 Absorbed depth is also what the summarizer is told. `maxAbsorbedDepth` feeds one line
 of the instruction, so a span that already contains a depth-2 checkpoint is asked to
@@ -274,6 +298,37 @@ rank mode is lexical by default (`seq`, `score`, `density`); the optional vector
 hybrid modes are inert unless `vectorEnabled` is set, and with it off the output is
 byte-identical to lexical. Both tools also register under the previous backend's names
 (`recall`, `search`) unless `legacyNames` is disabled.
+
+The vector keys belong to the SEARCH row (`dsh-lcm/tool`), not to the engine row.
+The engine declares and resolves them — its schema is a whitelist, so an
+undeclared key is dropped when a patch re-route writes the configuration back —
+but nothing in the compaction path reads one. Measured consequence of getting this
+wrong: `vectorEnabled: true` on the engine row reads as enabled in
+`--dump-config` while `lcm_search` stays lexical, because `resolveConfig({})` in
+`src/tool.js` resolves an absent config to `{rank: "density", enabled: false}`.
+The bundle patch, README, `config.example.yaml` and
+`docs/PRODUCTION-INSTALL.md` all carried that mistake and are corrected.
+
+Which events the semantic route ranks is a design decision, not a detail. It
+ranks the events the current surface does NOT show — the compacted half — because
+ranking the tail buys nothing: those messages are already in the model's context
+verbatim. Measured on a 24 013-event session, a "newest N events" window covered
+100% of the live tail and 1.6% of the compacted history, i.e. exactly the wrong
+half. The window is priced in tokens (`vectorCandidateTokens`, default 100 000)
+rather than in events, because cost tracks text length: on the measured endpoint
+about 18 ms per text plus 0.23 ms per estimated token, and neither batching
+(87–92 ms/text across batch sizes 8–128) nor concurrency (8 parallel POSTs:
+205 ms/text, worse than serial) changes it. 100 000 tokens is ~200 compacted
+events and ~19 s on a cold cache, then free per text. The residual limitation is
+stated in the result header on every call: older compacted events cannot be
+reached by similarity at all, only by a lexical pattern, which is why
+`rank: "hybrid"` is the setting that keeps them in the answer. A session that has
+never compacted has no candidates and the hybrid result is the lexical one.
+
+`/lcm-search` stays lexical on purpose and now rejects a vector rank instead of
+accepting one it would ignore: it is answered inline at a prompt, and a ~20 s
+stall is a thing a human feels, while the tool is where a wording mismatch
+actually needs help.
 
 `/lcm-search` and `/lcm-status` are commands, so a human types them and a model
 cannot (`src/command.js:84`, `src/command.js:156`). I made `/lcm-status` a command

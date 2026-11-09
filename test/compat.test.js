@@ -57,6 +57,16 @@ test("legacyNames: false drops the original command name", () => {
   assert.deepEqual(commands, ["lcm-search", "lcm-status"]);
 });
 
+test("/lcm-search stays lexical and refuses a vector rank instead of ignoring it", () => {
+  // The operator's grep: answered inline at a prompt, so it does not pay the
+  // semantic arm's cost (~90 ms per candidate text, src/vectors.js). A vector
+  // rank here used to be accepted and silently ignored; now it is an error.
+  assert.equal(command.resolveConfig({}).rank, "density");
+  assert.throws(() => command.resolveConfig({ rank: "hybrid" }), /lexical/);
+  assert.throws(() => command.resolveConfig({ rank: "vector" }), /lexical/);
+  for (const rank of ["seq", "score", "density"]) assert.equal(command.resolveConfig({ rank }).rank, rank);
+});
+
 test("a tool definition can be built under either name", () => {
   const resolved = tool.resolveConfig({});
   assert.equal(tool.defineRecallTool(resolved).name, "lcm_expand");

@@ -34,6 +34,37 @@ export const DEFAULT_VECTOR_MODEL = "text-embedding-qwen3-vl-embedding-8b";
 export const DEFAULT_VECTOR_DIM = 4096;
 /** Candidates the vector route contributes to one ranking. */
 export const DEFAULT_VECTOR_TOPK = 8;
+
+/**
+ * Hard ceiling on events one search embeds, as a second bound.
+ *
+ * The primary budget is {@link DEFAULT_VECTOR_CANDIDATE_TOKENS}, because the
+ * endpoint's cost tracks text length: 32 texts measured 27/33/60/119/230 ms per
+ * text at 40/200/800/2000/4000 characters, i.e. `18 ms per text + 0.23 ms per
+ * estimated token`. A count alone would underprice a log of huge tool dumps and
+ * overprice a log of one-line markers, so the count stays only as a ceiling for
+ * the second case: 500 tiny events still costs ~13 s.
+ */
+export const DEFAULT_VECTOR_CANDIDATE_LIMIT = 500;
+
+/**
+ * Token budget one search spends embedding the events it cannot otherwise read.
+ *
+ * Candidates come from OUTSIDE the session surface: events still on the surface
+ * are already in the model's context verbatim, so embedding them is pure waste
+ * and inflates the very first search. Measured on a real 24013-event session:
+ * 4213 events were compacted and 19800 were still on the surface, so a
+ * newest-first window over the whole log would have spent its budget entirely
+ * on text the model could already see.
+ *
+ * 100000 estimated tokens admitted the real session's newest 203 compacted
+ * events (99765 tokens, seq >= 21691, of 4213 compacted) and measured 26.7 s on
+ * a cold cache, 132 ms warm. The residual limitation is real: the 4010 compacted
+ * events older than that budget are still unreachable by similarity, and only a
+ * lexical pattern finds them. `rank: "hybrid"` keeps those lexical hits in the
+ * answer; `rank: "vector"` alone does not.
+ */
+export const DEFAULT_VECTOR_CANDIDATE_TOKENS = 100000;
 /** Per-request ceiling, so a hung backend cannot hold a search open. */
 export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
 /** Relative cache directory, resolved against the process cwd by the caller. */
@@ -107,6 +138,10 @@ export function resolveVectorConfig(config = {}) {
   assertPositiveInteger("LcmVectorConfig.vectorDim", dim);
   const topK = config.vectorTopK ?? DEFAULT_VECTOR_TOPK;
   assertPositiveInteger("LcmVectorConfig.vectorTopK", topK);
+  const candidateLimit = config.vectorCandidateLimit ?? DEFAULT_VECTOR_CANDIDATE_LIMIT;
+  assertPositiveInteger("LcmVectorConfig.vectorCandidateLimit", candidateLimit);
+  const candidateTokens = config.vectorCandidateTokens ?? DEFAULT_VECTOR_CANDIDATE_TOKENS;
+  assertPositiveInteger("LcmVectorConfig.vectorCandidateTokens", candidateTokens);
   const timeoutMs = config.vectorTimeoutMs ?? DEFAULT_VECTOR_TIMEOUT_MS;
   assertPositiveInteger("LcmVectorConfig.vectorTimeoutMs", timeoutMs);
   const cacheDir = config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR;
@@ -117,6 +152,8 @@ export function resolveVectorConfig(config = {}) {
     model,
     dim,
     topK,
+    candidateLimit,
+    candidateTokens,
     timeoutMs,
     cacheDir
   });
@@ -651,6 +688,8 @@ function isResolvedVectorConfig(value) {
     typeof value.model === "string" &&
     Number.isInteger(value.dim) &&
     Number.isInteger(value.topK) &&
+    Number.isInteger(value.candidateLimit) &&
+    Number.isInteger(value.candidateTokens) &&
     Number.isInteger(value.timeoutMs) &&
     typeof value.cacheDir === "string";
 }

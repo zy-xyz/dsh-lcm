@@ -164,3 +164,54 @@ test("a leaf never opens on the result half of a tool pair", () => {
     assert.notEqual(range.start, 4, "it must not open on the assistant tool-call node");
   }
 });
+
+test("a short leading run does not block the next run of the same depth", () => {
+  // The leading-only rule died here: with depths [2, 1, 1, 1, 1] the leading run
+  // is one node, so nothing condensed and the four depth-1 siblings behind the
+  // rollup were unreachable forever. Measured on the 40-round replay that exposed
+  // it: this exact shape sat on the surface from round 8 to round 40 (growing to
+  // [2, 1 x 33]) while condensation never fired again.
+  //
+  // The surface is built by hand because only POSITIONAL depth matters to the
+  // selector, and a synthetic log is the only way to place the rollup first: the
+  // real commit path replaces its children in place (see the replay test in
+  // surface-breadth.test.js, which drives foldSurface for real). deriveDag resolves
+  // depth from shadowedSeqs, so the parent here names a later seq - that is the one
+  // thing a real log cannot contain, and it does not affect what is asserted.
+  const events = [{ seq: 0, type: "system/message", data: { message: { role: "system", content: [{ type: "text", text: "sys" }] } } }];
+  const push = (seq, type, data) => events.push({ seq, type, data });
+  push(1, "compaction/summary", { compactionId: "m", shadowedSeqs: [4], shadowedTokenCount: 10 });
+  push(2, "user/message", { content: [{ type: "text", text: "rollup" }], source: { kind: "compact-checkpoint", compactionId: "m" } });
+  for (let leaf = 0; leaf < 4; leaf += 1) {
+    const seq = 3 + leaf * 2;
+    push(seq, "compaction/summary", { compactionId: "d" + leaf, shadowedSeqs: [], shadowedTokenCount: 10 });
+    push(seq + 1, "user/message", { content: [{ type: "text", text: "leaf" + leaf }], source: { kind: "compact-checkpoint", compactionId: "d" + leaf } });
+  }
+  push(11, "user/message", { content: [{ type: "text", text: "tail a" }] });
+  push(12, "user/message", { content: [{ type: "text", text: "tail b" }] });
+  const bySeq = new Map(events.map((event) => [event.seq, event]));
+  const session = {
+    id: "short-leading-run",
+    events,
+    get surface() {
+      return { nodes: events.filter((event) => event.type !== "compaction/summary").map((event) => event.seq), replaceGeneration: 1 };
+    },
+    eventAt: (seq) => bySeq.get(seq),
+    deriveEventMessage: (event) => event.data?.content ? { role: "user", content: event.data.content } : null
+  };
+  const measurement = priced(session, 1000);
+  assert.deepEqual(session.surface.nodes, [0, 2, 4, 6, 8, 10, 11, 12], "two depth-1 leaves under the rollup, then four siblings");
+
+  const selected = selectCompactableRange(session, measurement, 0, 0, 0, 4);
+  assert.ok(selected !== null, "the second run is long enough, so something must condense");
+  assert.equal(selected.start, 4, "the new node lands at the SECOND run's first position, not at the rollup");
+  assert.equal(selected.end, 10, "and covers that run to its last sibling");
+  const covered = session.surface.nodes.slice(session.surface.nodes.indexOf(selected.start), session.surface.nodes.indexOf(selected.end) + 1);
+  assert.deepEqual(covered, [4, 6, 8, 10], "exactly the four same-depth siblings, never the depth-2 rollup");
+  assert.ok(!covered.includes(2), "the rollup is outside the span: a parent is never merged with its children");
+
+  // Fanin 0 keeps the historical whole-prefix start, so the new rule is only ever
+  // reached through the condensation path.
+  const plain = selectCompactableRange(session, measurement, 0, 0, 0, 0);
+  assert.equal(plain.start, 2, "without a fanin the selector still starts at the oldest node");
+});

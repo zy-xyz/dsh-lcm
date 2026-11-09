@@ -21,7 +21,7 @@
  */
 import { estimateEntryTokens, renderEventBody, sanitize, truncateTokens } from "./compiler.js";
 import { resolveEventAt, sessionEvents } from "./events.js";
-import { RRF_K, hybridRank, rankByVector, resolveVectorConfig } from "./vectors.js";
+import { RRF_K, VECTOR_TEXT_LIMIT, hybridRank, rankByVector, resolveVectorConfig } from "./vectors.js";
 
 /** Default cap on the number of matching events shown in one result. */
 export const DEFAULT_MAX_SEARCH_HITS = 50;
@@ -320,7 +320,10 @@ export async function searchSessionHybrid(session, patternSource, config, signal
   }
   const pattern = compileSearchPattern(patternSource);
   const lexical = collectHits(session, pattern, LEXICAL_BASE_RANK);
-  const items = collectVectorItems(session);
+  const { items, tokens: candidateTokens, hidden } = collectVectorItems(session, {
+    events: vectorConfig.candidateLimit,
+    tokens: vectorConfig.candidateTokens
+  });
   let ranked;
   try {
     // In vector mode every candidate is ranked and top-K is the answer; in
@@ -347,9 +350,15 @@ export async function searchSessionHybrid(session, patternSource, config, signal
   }
   const { hits, truncated } = renderHits(candidates, config.maxSearchHits, config.maxRecallTokens);
   const tokens = tokensOf(hits);
+  // What the window actually covered, stated as measured: the compacted region
+  // when the session exposes a surface, plain candidates when it cannot.
+  const scope = hidden === null
+    ? items.length + " candidate event(s)"
+    : items.length + " newest compacted event(s) of " + hidden;
   if (rankMode === "vector") {
     const lines = [
-      '[vector "' + pattern.source + '": ' + hits.length + " event(s) by cosine similarity (top " + vectorConfig.topK + ")]",
+      '[vector "' + pattern.source + '": ' + hits.length + " event(s) by cosine similarity (top " + vectorConfig.topK + " of " + scope + ", " + candidateTokens + " tokens, seq >= " + (items[0]?.seq ?? "-") + ")]",
+      ...(items.length === 0 ? ["[nothing is compacted yet — the session surface shows every event, so there is nothing for the semantic route to reach]"] : []),
       ...hits.map((hit) => hit.text),
       ...(truncated ? ["[search budget exhausted; some hits were cut]"] : [])
     ];
@@ -372,7 +381,7 @@ export async function searchSessionHybrid(session, patternSource, config, signal
   const shownLexical = hits.filter((hit) => lexicalBySeq.has(hit.seq)).length;
   const omitted = Math.max(0, lexical.totalMatches - shownLexical);
   const lines = [
-    '[hybrid "' + pattern.source + '": ' + lexical.totalMatches + " lexical match(es) + " + ranked.length + " vector candidate(s), RRF k=" + RRF_K + "]",
+    '[hybrid "' + pattern.source + '": ' + lexical.totalMatches + " lexical match(es) + " + ranked.length + " vector candidate(s) from the " + scope + " (" + candidateTokens + " tokens, seq >= " + (items[0]?.seq ?? "-") + "), RRF k=" + RRF_K + "]",
     ...hits.map((hit) => hit.text),
     ...(omitted > 0 ? ["[" + omitted + " more matching event(s) omitted — narrow the pattern or use recall]"] : []),
     ...(truncated ? ["[search budget exhausted; some hits were cut]"] : [])
@@ -393,17 +402,83 @@ export async function searchSessionHybrid(session, patternSource, config, signal
   };
 }
 
-/** Every renderable event of one session, as embedding candidates. */
-function collectVectorItems(session) {
+/**
+ * The events the model cannot read without a tool call: everything the session
+ * surface does not show.
+ *
+ * That set, not recency, is what the semantic route is for. Events still on the
+ * surface are in the context verbatim, so embedding them costs time to rank text
+ * the model can already read — on a real 24013-event session 19800 of them were
+ * still visible and only 4213 were compacted, so a newest-first window over the
+ * whole log spent its entire budget on the visible half and left the compacted
+ * half 1.6% covered.
+ *
+ * Within that set the order stays newest-first (recent-but-compacted is the more
+ * likely answer), and the window is priced in estimated tokens rather than in
+ * events, because the endpoint's cost tracks length: 32 texts at
+ * 40/200/800/2000/4000 characters cost 27/33/60/119/230 ms per text, i.e.
+ * roughly `18 ms per text + 0.23 ms per estimated token`. A count ceiling stays
+ * alongside it for logs whose events are one-line turn markers.
+ *
+ * The residual loss is real and stated: compacted events older than the budget
+ * remain unreachable by similarity, and only a lexical pattern reaches them.
+ * `rank: "hybrid"` keeps those lexical hits in the answer.
+ *
+ * @param session - session-shaped value with events, optionally a surface.
+ * @param bounds - `{ events, tokens }` ceilings (positive integers).
+ * @returns `[{ seq, text }]` in log order.
+ */
+function collectVectorItems(session, bounds) {
+  const visible = visibleSeqs(session);
+  const maxEvents = Number.isSafeInteger(bounds.events) ? bounds.events : Number.POSITIVE_INFINITY;
+  const maxTokens = Number.isSafeInteger(bounds.tokens) ? bounds.tokens : Number.POSITIVE_INFINITY;
   const events = sessionEvents(session);
   const items = [];
-  for (const event of events) {
+  let tokens = 0;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (items.length >= maxEvents || tokens >= maxTokens) break;
+    const event = events[index];
     if (!Number.isSafeInteger(event?.seq)) continue;
+    // Already in the model's context: ranking it would buy nothing.
+    if (visible !== null && visible.has(event.seq)) continue;
     const { body } = eventBody(session, event);
     if (body.length === 0) continue;
+    // Price the bytes that are actually embedded, not the whole event.
+    const text = body.slice(0, VECTOR_TEXT_LIMIT);
+    const cost = estimateEntryTokens(text);
+    if (tokens + cost > maxTokens) break;
+    tokens += cost;
     items.push({ seq: event.seq, text: body });
   }
-  return items;
+  items.reverse();
+  return { items, tokens, hidden: visible === null ? null : hiddenCount(events, visible) };
+}
+
+/** How many seq-bearing events sit outside the surface (the compacted region). */
+function hiddenCount(events, visible) {
+  let hidden = 0;
+  for (const event of events) {
+    if (Number.isSafeInteger(event?.seq) && !visible.has(event.seq)) hidden += 1;
+  }
+  return hidden;
+}
+
+/**
+ * The seqs the session surface currently shows, or null when the value carries
+ * no surface at all (a fixture or an older caller) — in which case every event
+ * is treated as unread, so nothing is silently excluded.
+ * @param session - session-shaped value.
+ * @returns the visible seq set, or null.
+ */
+function visibleSeqs(session) {
+  const nodes = session?.surface?.nodes;
+  if (!Array.isArray(nodes)) return null;
+  const visible = new Set();
+  for (const node of nodes) {
+    const seq = typeof node === "number" ? node : node?.seq;
+    if (Number.isSafeInteger(seq)) visible.add(seq);
+  }
+  return visible;
 }
 
 /** A vector-only hit: the head of an event the pattern never matched. */

@@ -475,6 +475,22 @@ function spanBody(session, seq) {
   return renderEventBody(session, event).body;
 }
 
+/** One character that can sit inside a word (`_` is not a Unicode letter or number). */
+const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
+
+/**
+ * Whether a word character sits at `index`.
+ * Out of range counts as a boundary, which is what an anchor at the very start or
+ * end of the span needs.
+ * @param text - string to inspect.
+ * @param index - position, possibly -1 or past the end.
+ * @returns true when a word character sits there.
+ */
+function wordAt(text, index) {
+  if (index < 0 || index >= text.length) return false;
+  return WORD_CHAR_RE.test(text[index]);
+}
+
 /**
  * Build a one-pass, case-folded index over the shadowed span.
  *
@@ -527,6 +543,37 @@ function buildSpanIndex(session, shadowedSeqs) {
         }
       }
       return found;
+    },
+    /**
+     * How often the anchor occurs in the span as a delimited literal.
+     *
+     * Used only to rank anchors when the section overflows: the instruction
+     * promises 「唯一性优先」 — a literal the span mentions once is worth more than
+     * a generic word it repeats hundreds of times — and without a count that
+     * promise is unenforceable.
+     *
+     * Delimited, not bare substrings. A bare substring count inflated any anchor
+     * that is a PREFIX of other anchors — counted on a 129-token list, `uniq_1`
+     * matched `uniq_10`..`uniq_19` and `uniq_100`..`uniq_128` and scored ~20
+     * repeats, outranking a word the span really repeats 10 times, so the wrong
+     * line was the one cut. A side that starts or ends outside the word class
+     * imposes no boundary, which keeps `/tmp/x` and `https://…` matching inside
+     * running text.
+     * @param anchor - literal anchor text.
+     * @returns the delimited occurrence count (0 when the span never held it).
+     */
+    count(anchor) {
+      const needle = anchor.toLowerCase();
+      if (needle.length === 0) return 0;
+      const left = wordAt(needle, 0);
+      const right = wordAt(needle, needle.length - 1);
+      let total = 0;
+      let at = haystack.indexOf(needle);
+      while (at >= 0) {
+        if ((!left || !wordAt(haystack, at - 1)) && (!right || !wordAt(haystack, at + needle.length))) total += 1;
+        at = haystack.indexOf(needle, at + needle.length);
+      }
+      return total;
     }
   };
 }
@@ -549,6 +596,91 @@ function anchorTextOf(line) {
 }
 
 /**
+ * How many anchor lines the checkpoint may carry.
+ *
+ * The instruction states this bound (`ANCHOR_RULE`: 「**最多 120 行**」), but a
+ * stated bound is not an enforced one. Measured on a production run: the model
+ * wrote 262 anchor lines — 5 944 characters, 38% of the whole checkpoint body —
+ * because nothing on the engine side ever counted them. The number is copied
+ * from that sentence on purpose, so prompt and code cannot drift apart.
+ */
+const ANCHOR_LINE_CAP = 120;
+
+/**
+ * The section headings the instruction itself printed.
+ *
+ * Measured failure: that same run copied the instruction's own headings into
+ * the anchor word list (one line held nothing but `## 目标与约束`, backticked).
+ * Such a string pasted into `lcm_search` matches the checkpoint that contains
+ * it, which is exactly the self-reference the anchor list exists to avoid. Only
+ * these six phrases are dropped: a heading the model invented stays, because
+ * guessing which other heading is noise would risk real text.
+ */
+const SKELETON_PHRASES = new Set(SUMMARY_SKELETON.map((heading) => heading.replace(/^#{1,6}\s*/u, "").trim()));
+
+/**
+ * Whether one anchor line carries nothing a search could use.
+ *
+ * Two narrow shapes, both measured: a line with no letter and no number at all
+ * (a lone backtick, a stray dash) and a skeleton heading copied verbatim.
+ * Everything else survives on purpose — `fact`, `/tmp/x`, `0xfffffe00075b9000`,
+ * `42` and `2023-05-30` are precisely the strings the section exists to carry.
+ * A filter keyed on "too short" or "reads like prose" would delete the golds
+ * the measured failures were made of: of 15 paired failures, 7 golds were
+ * numeric and 6 were short prose.
+ * @param anchor - normalized anchor text.
+ * @returns true when the line must be dropped.
+ */
+function isNonContentAnchor(anchor) {
+  // `\p{L}` covers CJK and every other script, so a one-word anchor like 缓存 is
+  // content while a leftover backtick or bullet is not.
+  if (!/[\p{L}\p{N}]/u.test(anchor)) return true;
+  // Trailing colon included: a heading copied into an open list usually keeps it.
+  return SKELETON_PHRASES.has(anchor.replace(/^#{1,6}\s*/u, "").replace(/[：:]\s*$/u, "").trim());
+}
+
+/**
+ * Anchor text of one section line, with a pointer the model copied forward
+ * stripped, so the prune below can rank and count it. `anchorTextOf` reports
+ * such a line as "no anchor" on purpose (re-attributing would append a second
+ * pointer), which is the wrong answer here.
+ * @param line - one line of the summary.
+ * @returns the anchor text, or null when the line carries no anchor.
+ */
+function anchorContentOf(line) {
+  const trimmed = line.trim();
+  if (trimmed.length === 0 || HEADING_RE.test(trimmed)) return null;
+  let anchor = trimmed.replace(EXISTING_POINTER_RE, "");
+  anchor = anchor.replace(BULLET_RE, "").trim();
+  anchor = anchor.replace(/^`+([\s\S]*?)`+$/u, "$1").trim();
+  if (anchor.length === 0) return null;
+  return anchor;
+}
+
+/**
+ * Order anchors worst-first for deletion when the section overflows.
+ *
+ * The instruction's own wording — 「唯一性优先、具体优先」 — made checkable
+ * instead of merely asked for. Three keys, in this order:
+ *
+ *   1. keep the anchors that exist verbatim in the span. A pointer is the only
+ *      proof the string was really there, so an unverified line goes before a
+ *      verified one: the pointed subset is the part that carries fidelity.
+ *   2. among equals keep the least-repeated. A literal the span mentions once is
+ *      worth more than a word it repeats hundreds of times.
+ *   3. ties keep the earliest-listed, because position is the model's own
+ *      ranking and the model is the only party that saw the span.
+ * @param left - one ranked anchor row.
+ * @param right - the other ranked anchor row.
+ * @returns negative when `left` must be deleted first.
+ */
+function byDeletionPriority(left, right) {
+  if (left.pointer !== right.pointer) return left.pointer ? 1 : -1;
+  if (left.repeats !== right.repeats) return right.repeats - left.repeats;
+  return right.order - left.order;
+}
+
+/**
  * Append (seq N) to every verbatim anchor the span actually contained.
  *
  * The model is asked for anchor values, never for pointers: the summarizer
@@ -562,11 +694,20 @@ function anchorTextOf(line) {
  * lcm_expand to the wrong event. An anchor with no pointer is honest
  * information — this string is not in the log as written.
  *
+ * The same pass holds the anchor section to its promised shape. Two engine-side
+ * corrections, both deterministic and both on the far side of the model call so
+ * the prefix-cache contract above still holds: lines carrying no content (a lone
+ * backtick, a heading the instruction itself printed) are dropped, and an
+ * over-long section is cut to `ANCHOR_LINE_CAP`. Measured need: one production
+ * run emitted 262 anchor lines holding both kinds of garbage, and neither the
+ * prompt nor anything else stopped it.
+ *
  * @param text - model-returned markdown.
  * @param session - session-shaped value owning the events.
  * @param shadowedSeqs - seqs of the span being replaced; nothing outside it is
  *   searched, because a seq outside the span is not in this checkpoint's scope.
- * @returns the markdown with (seq N) appended where attribution succeeded.
+ * @returns the markdown with (seq N) appended where attribution succeeded, and
+ *   the anchor section pruned to real content and to its 120-line bound.
  */
 export function attributeAnchorPointers(text, session, shadowedSeqs) {
   if (typeof text !== "string" || text.length === 0) return text;
@@ -581,15 +722,47 @@ export function attributeAnchorPointers(text, session, shadowedSeqs) {
     }
   }
   const index = buildSpanIndex(session, shadowedSeqs);
-  if (index.haystack.length === 0) return text;
-  for (let line = heading + 1; line < sectionEnd; line += 1) {
-    const anchor = anchorTextOf(lines[line]);
-    if (anchor === null) continue;
-    const seq = index.lookup(anchor);
-    if (seq === undefined) continue;
-    lines[line] = lines[line].replace(/\s+$/u, "") + " (seq " + seq + ")";
+  // An empty index only means nothing can be attributed. The prune below still
+  // has to run: the bound is about the checkpoint's shape, not about what this
+  // particular span happened to contain.
+  if (index.haystack.length > 0) {
+    for (let line = heading + 1; line < sectionEnd; line += 1) {
+      const anchor = anchorTextOf(lines[line]);
+      if (anchor === null) continue;
+      const seq = index.lookup(anchor);
+      if (seq === undefined) continue;
+      lines[line] = lines[line].replace(/\s+$/u, "") + " (seq " + seq + ")";
+    }
   }
-  return lines.join("\n");
+  // Rebuild the section in one pass. A dropped line is not an anchor at all, so
+  // it must not consume one of the 120 slots; a blank line is presentation and is
+  // neither counted nor removed.
+  const rows = [];
+  for (let line = heading + 1; line < sectionEnd; line += 1) {
+    const anchor = anchorContentOf(lines[line]);
+    if (anchor === null) {
+      rows.push({ text: lines[line], anchor: null });
+      continue;
+    }
+    if (isNonContentAnchor(anchor)) continue;
+    rows.push({
+      text: lines[line],
+      anchor,
+      // Either the model copied this pointer out of a child checkpoint or the
+      // loop above just attributed one; both mean the string exists verbatim.
+      pointer: EXISTING_POINTER_RE.test(lines[line].trim()),
+      repeats: index.count(anchor),
+      order: line
+    });
+  }
+  const anchors = rows.filter((row) => row.anchor !== null);
+  const doomed = new Set();
+  if (anchors.length > ANCHOR_LINE_CAP) {
+    const worst = [...anchors].sort(byDeletionPriority).slice(0, anchors.length - ANCHOR_LINE_CAP);
+    for (const row of worst) doomed.add(row);
+  }
+  const kept = rows.filter((row) => !doomed.has(row)).map((row) => row.text);
+  return [...lines.slice(0, heading + 1), ...kept, ...lines.slice(sectionEnd)].join("\n");
 }
 
 /**
