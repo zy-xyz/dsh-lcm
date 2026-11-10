@@ -253,6 +253,24 @@ One command, no hand-editing of profile files:
 dsh plugin --profile web add <path-to-this-package-or-its-tarball>
 ```
 
+From a git URL — the path a marketplace install takes, and the one verified here
+(`dsh plugin --profile <p> add github:zy-xyz/dsh-lcm` installed 0.15.0 with the
+bundle manifest intact in ~1m51s, building from source):
+
+```bash
+dsh plugin --profile web add github:zy-xyz/dsh-lcm
+```
+
+Every official package is a peer, not a dependency: the harness already ships
+`@deepseek-ai/dsh-compaction`, `dsh-llm`, `dsh-session`, `dsh-token-meter`,
+`dsh-tools`, `dsh-util-values`, `cordis` and `schemastery`, and a second copy is
+a version-skew bug. They are declared `optional` in `peerDependenciesMeta`, so a
+profile that resolves them from the host tree gets no warning noise, and the dsh
+ranges enumerate patch tuples with an explicit prerelease tag
+(`>=0.2.2-0 <0.3.0-0 || >=0.2.3-0 <0.3.0-0 || …`) because node-semver otherwise
+admits a prerelease only on the exact `major.minor.patch` tuple named in the
+range — `^0.2.2-0` accepts `0.2.2-rc.1` and silently rejects `0.2.3-rc.1`.
+
 That runs pnpm in the profile, then the plugin manager's own reconciliation
 (`reconcileBundleSelection`) registers the package in `dsh.profile.bundles`
 because this package declares `dsh.bundle.patch`. From then on the bundle patch is

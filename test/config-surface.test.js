@@ -171,14 +171,30 @@ test("every peer range accepts the installed prerelease", { skip: skipSemver }, 
   assert.deepEqual(unsatisfied, []);
 });
 
-test("a stable 0.2.x release is still inside every dsh peer range", { skip: skipSemver }, () => {
-  // The widened range must not become a prerelease-only pin: 0.2.5 is the shape
-  // of the next stable release and has to stay installable.
+test("every dsh peer range admits both a future stable and a future patch prerelease", { skip: skipSemver }, () => {
+  // Two properties, and the second one is the trap the marketplace guide names:
+  //
+  //   1. the range must not become a prerelease-only pin — 0.2.5 is the shape of
+  //      the next stable release and has to stay installable;
+  //   2. it must not silently exclude the next PATCH prerelease either. node-semver
+  //      only admits a prerelease when some comparator sits on the SAME
+  //      major.minor.patch tuple and itself carries a prerelease tag, so a plain
+  //      `^0.2.2-0` accepts 0.2.2-rc.1 and then rejects 0.2.3-rc.1. That is an
+  //      ERESOLVE for every user on the next harness patch, which is why the
+  //      range enumerates tuples instead.
   const pkg = JSON.parse(readPackageJson());
-  const broken = Object.entries(pkg.peerDependencies)
-    .filter(([, range]) => range.startsWith("^0.2."))
-    .filter(([, range]) => !semver.satisfies("0.2.5", range))
-    .map(([name, range]) => `${name} ${range}`);
+  const dshPeers = Object.entries(pkg.peerDependencies).filter(([name]) => name.startsWith("@deepseek-ai/dsh-"));
+  assert.ok(dshPeers.length > 0, "this test is meaningless with no dsh peers");
+  const broken = [];
+  for (const [name, range] of dshPeers) {
+    for (const probe of ["0.2.5", "0.2.3-rc.1", "0.2.4-rc.1"]) {
+      if (!semver.satisfies(probe, range)) broken.push(`${name} ${range} rejects ${probe}`);
+    }
+    // And it must still refuse what it cannot support.
+    for (const probe of ["0.1.7-rc.2", "0.3.0-rc.1"]) {
+      if (semver.satisfies(probe, range)) broken.push(`${name} ${range} wrongly accepts ${probe}`);
+    }
+  }
   assert.deepEqual(broken, []);
 });
 

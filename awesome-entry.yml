@@ -1,0 +1,6 @@
+url: https://github.com/zy-xyz/dsh-lcm
+name: zy-xyz/dsh-lcm
+category: session
+description:
+  en: 'Context compaction engine for DeepSeek Harness that keeps the session log append-only: an LLM writes a summary for a leaf of compacted events, the leaf is replaced by one checkpoint node, and nothing is deleted, so lcm_search still matches inside what a checkpoint summarized and lcm_expand restores any event by seq. Summaries nest through condensation at fanin 4, a threshold crossing sweeps several leaves under two clocks, and an idle pass resumes a sweep that ran out of budget. Optional semantic recall ranks compacted events by cosine similarity against a configurable embedding endpoint, with a corpus backfill command and a /lcm-embed status that reports the candidate window.'
+  zh: '为 DeepSeek Harness 设计的上下文压缩引擎，会话日志始终只追加：LLM 为一段被压缩事件写摘要，该段被替换为一条 checkpoint 节点，内容不删除，因此 lcm_search 仍能命中已被摘要折叠的原文，lcm_expand 可按 seq 原样恢复任意事件。摘要按 fanin 4 逐层凝聚，越过阈值时在双时钟约束下一次 sweep 多个叶，预算用尽后由空闲续跑接着完成。可选语义召回按余弦相似度对已压缩事件排序，支持任意 OpenAI 兼容 embedding 端点，附带语料回填命令与报告候选窗口的 /lcm-embed status。'

@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.15.1 — 2026-11-10 — conform to the awesome-dsh-plugin submission rules
+
+Read `awesome-dsh-plugin/contributing.md` and checked dsh-lcm against every rule
+it states. Four were not met; three are fixed here.
+
+### Fixed — `@deepseek-ai/schemastery` was a dependency
+
+The guide requires official `@deepseek-ai/*` packages to be
+`peerDependencies`, because the harness already ships them and a second copy is a
+version-skew bug waiting to happen. `schemastery` was the only one left in
+`dependencies`; it is now a peer alongside the other seven, and `dependencies` is
+empty. Verified it still resolves at runtime from the linked plugin to the
+host's copy (`…/dsh/node_modules/@deepseek-ai/schemastery`).
+
+### Fixed — the peer ranges silently excluded the next patch prerelease
+
+This is the trap the guide calls out, and we were in it. node-semver admits a
+prerelease only when some comparator sits on the SAME `major.minor.patch` tuple
+and itself carries a prerelease tag, so `^0.2.2-0` accepted `0.2.2-rc.1` and then
+rejected `0.2.3-rc.1` — an ERESOLVE for everyone on the next harness patch.
+
+The ranges now enumerate tuples with an explicit prerelease tag on each:
+
+```
+>=0.2.2-0 <0.3.0-0 || >=0.2.3-0 <0.3.0-0 || >=0.2.4-0 <0.3.0-0 || >=0.2.5-0 <0.3.0-0
+```
+
+Verified: accepts the installed `0.2.2-rc.1`, the future `0.2.3-rc.1` /
+`0.2.4-rc.1` / `0.2.5-rc.1` and the stable `0.2.5`, while still refusing
+`0.1.7-rc.2` and `0.3.0-rc.1`. The test that guarded this previously only checked
+the installed version and a stable, which is why the gap survived; it now probes
+both future shapes and both refusals per peer.
+
+### Added — `peerDependenciesMeta`, all `optional: true`
+
+The established pattern among listed plugins, and it matters here: the harness
+provides these through its own tree, so a profile that resolves them differently
+should get a warning rather than a blocked install. Eight entries, one per peer.
+
+### Added — the marketplace entry itself
+
+`awesome-entry.yml` — the one file a submission is. Validated against the list's
+own reader: category `session`, both locales present, single-line descriptions,
+the English one quoted because it contains `: `, and the filename derived the way
+their `slugFor()` derives it (`zy-xyz__dsh-lcm.yml`).
+
+### Still open
+
+- **The `dsh-plugin` GitHub topic** was missing and is now set on the repository.
+- **No npm publish and no Release tarball.** The guide makes a `tarball` required
+  only when the repo cannot be installed from source, and this one can: verified
+  `dsh plugin --profile <p> add github:zy-xyz/dsh-lcm` installs 0.15.0 with the
+  bundle manifest intact. A Release tarball would still cut the 1m51s
+  build-from-source install.
+- **Four stray scripts at the repo root** (`acon-after.mjs`, `acon-final.mjs`,
+  `basic15.mjs`, `leaf-answer2.mjs`) are committed and referenced by nothing. A
+  reviewer reads the repository, so they are noise.
+
+Tests: 289, unchanged in count; the peer-range test gained the assertions above.
 ## 0.15.0 — 2026-11-10 — an idle continuation, so the clocks can be lcm-x's own
 
 The soft target left a real gap: a sweep stops with the session still over
