@@ -52,6 +52,25 @@
       # path reads them: the semantic route belongs to the SEARCH surface below.
       # A "vectorEnabled: true" here looked enabled in --dump-config while
       # "search" quietly stayed lexical.
+      config:
+        # Two clocks, like lcm-x's ForegroundBudget (soft 60 / hard 120).
+        #
+        # Measured on this backend: a leaf spans 24 000 tokens and its checkpoint
+        # lands at ~5 784, so one leaf reclaims 18 216. The floor is the system
+        # prompt (100 541) plus the retained tail (149 514) = 250 055, so draining
+        # from the 800 000 threshold needs (800 000 - 250 055) / 18 216 = 31
+        # leaves. At the measured 17.3 s per leaf that is 522 s: the old 120 s
+        # ceiling stopped after ~6 leaves, which is why every sweep landed back at
+        # ~70% of the window and looked like it had not compacted at all.
+        fullSweepMaxSeconds: 600
+        # Stop STARTING leaves here, keeping the other half to finish the leaf in
+        # flight plus the finalize. lcm-x uses the same ratio (60 of 120): without
+        # it a leaf admitted with 5 s left overruns the ceiling by its own length.
+        fullSweepSoftSeconds: 300
+        # Floor for the measured leaf cost the soft test uses, lcm-x's
+        # _THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS. Without a floor one fast
+        # condensation pass would claim the next leaf is that fast too.
+        leafEstimateFloorSeconds: 15
     - id: tool-lcm-expand
       name: dsh-lcm/tool
       # Vector recall layer, on the row that actually calls it: resolveConfig in

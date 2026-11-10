@@ -181,15 +181,26 @@ test("the sweep's time budget stops it even with passes left", async () => {
 
 // ── the configuration surface ──────────────────────────────────────────────
 
-test("the sweep is on by default, like lcm-x", () => {
+test("the sweep is on by default, and its clocks are the arithmetic this backend needs", () => {
   const config = resolveConfig({});
   assert.equal(config.thresholdFullSweep, true, "lcm-x's threshold_full_sweep_enabled defaults True");
   assert.equal(config.fullSweepMaxPasses, 12, "lcm-x's _THRESHOLD_FULL_SWEEP_MAX_PASSES");
-  assert.equal(config.fullSweepMaxSeconds, 120, "lcm-x's _THRESHOLD_FULL_SWEEP_MAX_SECONDS");
+  // The HARD ceiling is lcm-x's 120 x 5. Their sweep starts ~2 leaves and
+  // continues next turn because their soft target is 60 s; nothing schedules a
+  // follow-up pass here, so one turn has to reach the floor:
+  //   floor  = system prompt 100 541 + retained tail 149 514 = 250 055
+  //   drain  = 800 000 threshold - 250 055 = 549 945
+  //   leaves = 549 945 / 18 216 per leaf = 31, at 17.3 s each = 522 s
+  assert.equal(config.fullSweepMaxSeconds, 600, "600 s = the 522 s drain plus one leaf of slack");
+  // The SOFT target keeps half the ceiling, the same ratio lcm-x uses (60 of
+  // 120): a leaf started near the end would otherwise overrun the ceiling.
+  assert.equal(config.fullSweepSoftSeconds, 300, "half the hard ceiling, like lcm-x's 60 of 120");
+  assert.ok(config.fullSweepSoftSeconds < config.fullSweepMaxSeconds, "the soft target must leave room to finish");
+  assert.equal(config.leafEstimateFloorSeconds, 15, "lcm-x's _THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS");
 });
 
 test("the sweep keys are typed identically in both configuration layers", () => {
-  const cases = [["thresholdFullSweep", "no"], ["fullSweepMaxPasses", 1.5], ["fullSweepMaxSeconds", 0]];
+  const cases = [["thresholdFullSweep", "no"], ["fullSweepMaxPasses", 1.5], ["fullSweepMaxSeconds", 0], ["fullSweepSoftSeconds", 0], ["leafEstimateFloorSeconds", 1.5]];
   for (const [key, bad] of cases) {
     assert.throws(() => resolveConfig({ [key]: bad }), new RegExp(key, "u"), `config.js must refuse ${key}=${JSON.stringify(bad)}`);
     assert.throws(() => LcmCompactionEngine.Config({ [key]: bad }), `the composition schema must refuse ${key}=${JSON.stringify(bad)} too`);

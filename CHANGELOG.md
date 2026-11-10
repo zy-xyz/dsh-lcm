@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.14.0 — 2026-11-10 — the sweep gets a soft target, and the ceiling is sized by arithmetic
+
+Reported symptom: "past 80% it barely compacts anything". The cause was
+arithmetic, not a defect: one leaf spans 24 000 tokens and its checkpoint lands
+at ~5 784, so a leaf reclaims 18 216. The floor is the system prompt (100 541)
+plus the retained tail (149 514) = 250 055, so draining from the 800 000
+threshold needs `(800 000 - 250 055) / 18 216 = 31` leaves. At the measured
+17.3 s per leaf that is **522 s**, and the ceiling was **120 s** — about six
+leaves. Every sweep therefore landed back at ~70% of the window, which is
+indistinguishable from "it did nothing".
+
+### Changed — the hard ceiling is 600 s, derived rather than picked
+
+`fullSweepMaxSeconds: 120 → 600`. That is the 522 s drain plus one leaf of
+slack. lcm-x's 120 is not comparable: it is their HARD ceiling with a 60 s soft
+target, and their sweep continues on the next turn because a background pass
+schedules one. Nothing does that here, so one turn has to reach the floor.
+
+### Added — the soft target, and the estimate that makes it meaningful
+
+lcm-x's `ForegroundBudget` has two clocks: `hard` bounds a call already running
+(no budget can interrupt it) and `soft` decides when a call may no longer
+START. Without the soft layer our deadline was a pure wall clock, so a 17 s leaf
+admitted with 5 s left still ran and landed 12 s past the ceiling.
+
+| key | default | meaning |
+|---|---|---|
+| `fullSweepMaxSeconds` | `600` | hard ceiling for the whole sweep |
+| `fullSweepSoftSeconds` | `300` | stop STARTING leaves here; half the ceiling, the same ratio as lcm-x's 60 of 120 |
+| `leafEstimateFloorSeconds` | `15` | floor for the measured leaf cost, lcm-x's `_THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS` |
+
+The loop measures each leaf's wall and refuses to start another when
+`now + leafWall > softDeadline`. The first pass is exempt: with nothing measured
+yet, refusing it would mean never learning the leaf cost. The floor stops one
+fast condensation pass from claiming its successor will also be fast.
+
+Measured with a stub that sleeps 1.1 s per leaf, soft 10 s and hard 20 s:
+**9 leaves, 9 916 ms**, stopping on the soft target. The hard ceiling alone
+would have allowed ~18 leaves and 20 s.
+
+Tests: 286, unchanged in count — the two new keys joined the config-surface
+sample table and the sweep default test, which now states the arithmetic.
 ## 0.13.0 — 2026-11-10 — the backfill fills the CORPUS, and a capped pass advances
 
 Two defects, both found by running the backfill against real sessions rather than

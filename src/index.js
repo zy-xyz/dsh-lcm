@@ -325,6 +325,8 @@ export class LcmCompactionEngine extends CompactionEngine {
     thresholdFullSweep: z.boolean(),
     fullSweepMaxPasses: fullSweepMaxPassesSchema,
     fullSweepMaxSeconds: fullSweepMaxPassesSchema,
+    fullSweepSoftSeconds: fullSweepMaxPassesSchema,
+    leafEstimateFloorSeconds: fullSweepMaxPassesSchema,
     stallCooldownMs: maxTokensSchema,
     summarizationProvider: summarizationProviderSchema,
     summarizationModel: summarizationModelSchema,
@@ -853,13 +855,45 @@ export class LcmCompactionEngine extends CompactionEngine {
     // 30-second leaves is six minutes inside one step, and the session is blocked
     // for all of it. lcm-x bounds the same sweep by wall clock and records a
     // partial stop so the next turn continues; so does this.
-    const sweepDeadline = sweep ? Date.now() + this.config.fullSweepMaxSeconds * 1000 : Number.POSITIVE_INFINITY;
+    const sweepStart = Date.now();
+    const sweepDeadline = sweep ? sweepStart + this.config.fullSweepMaxSeconds * 1000 : Number.POSITIVE_INFINITY;
+    // TWO clocks, not one. lcm-x splits the same budget into a soft target and a
+    // hard ceiling (`_foreground_budget_seconds`, engine.py:2120):
+    //
+    //   hard = foreground_hard_seconds  (0 -> _THRESHOLD_FULL_SWEEP_MAX_SECONDS)
+    //   soft = foreground_soft_seconds  (default 60), clamped to at most hard
+    //   usable_deadline = t0 + hard - finalize_reserve
+    //
+    // and `admit()` refuses to START a call once `now + estimate > t0 + soft`,
+    // while `usable_left < MIN_CALL_SECONDS` refuses even the first one. So the
+    // effective stop in the reference is the SOFT target; `hard` only bounds a
+    // call that is already running, which no budget can interrupt.
+    //
+    // Without the soft layer our deadline was a pure wall clock: a 17 s leaf
+    // started with 5 s left still ran, landing 12 s past the budget. The soft
+    // target is what makes the stop predictable, and the reserve is what keeps
+    // the finalize (commit + re-measure) inside the ceiling.
+    const softDeadline = sweep ? sweepStart + this.config.fullSweepSoftSeconds * 1000 : Number.POSITIVE_INFINITY;
+    // How long one leaf takes, so "is there room for another one" is a question
+    // the loop can answer. Seeded from the config floor and replaced by the
+    // measured wall of each pass: lcm-x uses the p90 of the last eight calls per
+    // route (cold 30 s, floor 15 s); one route here, so the last pass is enough,
+    // clamped the same way.
+    let leafWallMs = this.config.leafEstimateFloorSeconds * 1000;
     let result = null;
     let passes = 0;
     let sweepStop = "";
     for (; passes < passBudget; passes += 1) {
-      if (passes > 0 && Date.now() >= sweepDeadline) {
+      const now = Date.now();
+      if (passes > 0 && now >= sweepDeadline) {
         sweepStop = "time_budget_exhausted";
+        break;
+      }
+      // Do not start a leaf that cannot finish before the soft target. The first
+      // pass is exempt: with nothing measured yet, refusing it would mean never
+      // learning the leaf cost at all.
+      if (passes > 0 && now + leafWallMs > softDeadline) {
+        sweepStop = "soft_target_reached";
         break;
       }
       // The span floor is what stops the "span=1 seqs=24-24 shadowedTokens=428
@@ -894,7 +928,16 @@ export class LcmCompactionEngine extends CompactionEngine {
         /* v8 ignore next -- paired with the defensive post-success branch above. */
         break;
       }
+      const leafStarted = Date.now();
       result = await this.compactRegion(range.start, range.end, agent, signal);
+      // The measured cost of the leaf just written, which is what the next pass's
+      // "is there room for another one" test uses. Clamped to the same floor and
+      // ceiling lcm-x uses for its estimate (15 s .. hard budget), so one freak
+      // slow leaf cannot end the sweep early on its own.
+      leafWallMs = Math.min(
+        Math.max(Date.now() - leafStarted, this.config.leafEstimateFloorSeconds * 1000),
+        this.config.fullSweepMaxSeconds * 1000
+      );
       // A stored checkpoint is the one unambiguous progress signal, and lcm-x clears
       // its hold on exactly that. Anything that reaches here has a new node on the
       // surface, so the session is no longer stalled.

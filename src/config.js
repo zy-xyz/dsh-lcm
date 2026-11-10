@@ -96,9 +96,35 @@ const DEFAULT_FULL_SWEEP_MAX_PASSES = 12;
  * all of it. lcm-x bounds the same sweep at 120 s and records
  * `time_budget_exhausted` as a partial stop, letting the next turn continue.
  * Measured leaf latency on this backend after removing the replayed system
- * prompt is ~30 s, so 120 s is roughly four leaves per sweep.
+ * prompt is ~30 s, so 600 s is roughly twenty leaves per sweep.
+ *
+ * Why 600 and not lcm-x's 120: their 120 is the HARD ceiling and their SOFT
+ * target is 60 s, so a reference sweep starts about two leaves per turn and
+ * continues on the next one. Ours has to reach the floor in a single turn to be
+ * useful, because nothing schedules a follow-up pass: measured, the floor is
+ * system prompt 100 541 + retained tail 149 514 = 250 055, so draining from the
+ * 800 000 threshold needs ~31 leaves at 17.3 s each = 522 s. 600 s is that
+ * arithmetic plus one leaf of slack, not a round number picked by feel.
  */
-const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
+const DEFAULT_FULL_SWEEP_MAX_SECONDS = 600;
+/**
+ * When the sweep stops STARTING leaves, leaving room to finish the one running.
+ *
+ * lcm-x's `foreground_soft_seconds` defaults to 60 with a hard of 120, i.e. half
+ * the ceiling, and `admit()` refuses a call once `now + estimate > t0 + soft`.
+ * Half is the ratio that keeps a sweep from ending on a truncated leaf; the
+ * remaining half is the reserve that pays for the leaf already in flight plus the
+ * finalize (commit and re-measure). Same ratio here: 300 of 600.
+ */
+const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 300;
+/**
+ * Floor for the measured leaf cost used by the soft-target test.
+ *
+ * lcm-x floors its p90 estimate at `_THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS = 15`.
+ * A floor is what stops one fast leaf from admitting a slow successor: with no
+ * floor, a 2 s condensation pass would claim the next leaf also costs 2 s.
+ */
+const DEFAULT_LEAF_ESTIMATE_FLOOR_SECONDS = 15;
 /**
  * How many same-depth checkpoints trigger a condensation into one higher node.
  *
@@ -180,6 +206,8 @@ const LCM_KEYS = [
   "thresholdFullSweep",
   "fullSweepMaxPasses",
   "fullSweepMaxSeconds",
+  "fullSweepSoftSeconds",
+  "leafEstimateFloorSeconds",
   "stallCooldownMs",
   "anchorPointers",
   "emptySummaryRetries",
@@ -287,6 +315,8 @@ export function resolveConfig(config = {}) {
     thresholdFullSweep: config.thresholdFullSweep ?? DEFAULT_THRESHOLD_FULL_SWEEP,
     fullSweepMaxPasses: config.fullSweepMaxPasses ?? DEFAULT_FULL_SWEEP_MAX_PASSES,
     fullSweepMaxSeconds: config.fullSweepMaxSeconds ?? DEFAULT_FULL_SWEEP_MAX_SECONDS,
+    fullSweepSoftSeconds: config.fullSweepSoftSeconds ?? DEFAULT_FULL_SWEEP_SOFT_SECONDS,
+    leafEstimateFloorSeconds: config.leafEstimateFloorSeconds ?? DEFAULT_LEAF_ESTIMATE_FLOOR_SECONDS,
     stallCooldownMs: config.stallCooldownMs ?? DEFAULT_STALL_COOLDOWN_MS,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
@@ -467,6 +497,8 @@ function validatePolicy(config, name) {
   if (config.thresholdFullSweep !== undefined && typeof config.thresholdFullSweep !== "boolean") throw new Error(`${name}.thresholdFullSweep must be a boolean`);
   if (config.fullSweepMaxPasses !== undefined) assertPositiveInteger(`${name}.fullSweepMaxPasses`, config.fullSweepMaxPasses);
   if (config.fullSweepMaxSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepMaxSeconds`, config.fullSweepMaxSeconds);
+  if (config.fullSweepSoftSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepSoftSeconds`, config.fullSweepSoftSeconds);
+  if (config.leafEstimateFloorSeconds !== undefined) assertPositiveInteger(`${name}.leafEstimateFloorSeconds`, config.leafEstimateFloorSeconds);
   // The stall hold's deadline was the ONE key of the 28 declared in the schema
   // and never checked here, so `"60000"` or `1.5` reached the engine and
   // `Date.now() + stallCooldownMs` produced `NaN`. Every `Date.now() < NaN`

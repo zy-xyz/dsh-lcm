@@ -115,7 +115,9 @@ Three bounds replace the threshold test:
 |---|---|---|
 | `thresholdFullSweep` | `true` | the sweep itself; `false` restores one-leaf-per-crossing |
 | `fullSweepMaxPasses` | `12` | lcm-x's constant; 12 × 24 000 is 28.8% of a 1M window |
-| `fullSweepMaxSeconds` | `120` | passes are not a spend guard when a pass is slow: twelve 30-second leaves is six minutes inside one step |
+| `fullSweepMaxSeconds` | `600` | the HARD ceiling, sized by arithmetic rather than copied: the floor is system prompt 100 541 + retained tail 149 514 = 250 055, so draining from the 800 000 threshold needs 31 leaves, and 31 × the measured 17.3 s is 522 s. lcm-x's 120 is not comparable — see below |
+| `fullSweepSoftSeconds` | `300` | stop STARTING leaves here. Half the ceiling, the same ratio as lcm-x's 60 of 120 |
+| `leafEstimateFloorSeconds` | `15` | floor for the measured leaf cost the soft test uses, lcm-x's `_THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS` |
 
 Exhausting either budget is a **partial** stop, not a failure: the last checkpoint
 is returned and the next turn continues. That matches lcm-x, which records
@@ -123,6 +125,32 @@ is returned and the next turn continues. That matches lcm-x, which records
 The manual path (`requireBelowThreshold`, a model switch) keeps the old retry
 budget, because "the sweep ran out of passes" is not an answer to "why can this
 model not be admitted".
+
+**Two clocks, not one, and the soft one is what stops the sweep.** lcm-x's
+`ForegroundBudget` (`escalation.py:130`) splits the same budget into `soft` and
+`hard`; `hard` bounds a call already running — no budget can interrupt one —
+while `admit()` refuses to START a call once `now + estimate > t0 + soft`, and
+refuses even the first one when `usable_left < 15 s`. Its defaults are 60 and
+120, so a reference sweep starts about two leaves and continues next turn.
+
+A single deadline was measured to be insufficient here: a 17 s leaf admitted
+with 5 s left still ran, landing 12 s past the ceiling. So the loop now measures
+each leaf's wall, floors it at `leafEstimateFloorSeconds` (one fast
+condensation pass must not claim its successor is also fast), and refuses to
+start another leaf when `now + leafWall > softDeadline`. The first pass is
+exempt: with nothing measured yet, refusing it would mean never learning the
+cost. Measured with a stub sleeping 1.1 s per leaf under soft 10 s / hard 20 s:
+9 leaves and 9 916 ms, stopping on the soft target where the hard ceiling alone
+would have allowed ~18 leaves.
+
+**Why our ceiling is 600 s when lcm-x ships 120.** Their 120 is a hard ceiling
+with a 60 s soft target, and their corpus work also runs in a bounded
+background pass, so a sweep that stops early is picked up later. Nothing
+schedules a follow-up here, and the arithmetic says a full drain is 522 s:
+the floor is the system prompt (100 541) plus the retained tail (149 514) =
+250 055, one leaf reclaims 18 216, so 800 000 → 250 055 needs 31 leaves. A
+120 s ceiling stopped at six, which is why every sweep landed back near 70% of
+the window and looked like it had compacted nothing.
 
 ## 3. Condensation at fanin 4
 
