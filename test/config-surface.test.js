@@ -231,6 +231,7 @@ const KEY_SAMPLES = {
   fullSweepMaxPasses: { config: { fullSweepMaxPasses: 6 }, bad: { fullSweepMaxPasses: 1.5 } },
   fullSweepMaxSeconds: { config: { fullSweepMaxSeconds: 60 }, bad: { fullSweepMaxSeconds: 0 } },
   fullSweepSoftSeconds: { config: { fullSweepSoftSeconds: 30 }, bad: { fullSweepSoftSeconds: 0 } },
+  fullSweepReserveSeconds: { config: { fullSweepReserveSeconds: 5 }, bad: { fullSweepReserveSeconds: -1 } },
   leafEstimateFloorSeconds: { config: { leafEstimateFloorSeconds: 15 }, bad: { leafEstimateFloorSeconds: 1.5 } },
   stallCooldownMs: { config: { stallCooldownMs: 60000 }, bad: { stallCooldownMs: 0 } },
   anchorPointers: { config: { anchorPointers: false }, bad: { anchorPointers: "no" } },

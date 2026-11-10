@@ -95,28 +95,35 @@ const DEFAULT_FULL_SWEEP_MAX_PASSES = 12;
  * 30 s each is 6 minutes inside a single step, and the session stays blocked for
  * all of it. lcm-x bounds the same sweep at 120 s and records
  * `time_budget_exhausted` as a partial stop, letting the next turn continue.
- * Measured leaf latency on this backend after removing the replayed system
- * prompt is ~30 s, so 600 s is roughly twenty leaves per sweep.
  *
- * Why 600 and not lcm-x's 120: their 120 is the HARD ceiling and their SOFT
- * target is 60 s, so a reference sweep starts about two leaves per turn and
- * continues on the next one. Ours has to reach the floor in a single turn to be
- * useful, because nothing schedules a follow-up pass: measured, the floor is
- * system prompt 100 541 + retained tail 149 514 = 250 055, so draining from the
- * 800 000 threshold needs ~31 leaves at 17.3 s each = 522 s. 600 s is that
- * arithmetic plus one leaf of slack, not a round number picked by feel.
+ * 120 s matches lcm-x exactly, and it is affordable because a sweep no longer has
+ * to finish in one turn: `_continueOnIdle` resumes it when the agent goes idle,
+ * which is the gap lcm-x fills with its bounded background pass. Measured on this
+ * backend a leaf costs ~17.3 s, so 120 s starts six or seven of them, and the
+ * floor (system prompt 100 541 + retained tail 149 514 = 250 055) is reached over
+ * a few idle passes instead of one long block.
  */
-const DEFAULT_FULL_SWEEP_MAX_SECONDS = 600;
+const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
 /**
  * When the sweep stops STARTING leaves, leaving room to finish the one running.
  *
  * lcm-x's `foreground_soft_seconds` defaults to 60 with a hard of 120, i.e. half
  * the ceiling, and `admit()` refuses a call once `now + estimate > t0 + soft`.
  * Half is the ratio that keeps a sweep from ending on a truncated leaf; the
- * remaining half is the reserve that pays for the leaf already in flight plus the
- * finalize (commit and re-measure). Same ratio here: 300 of 600.
+ * remaining half pays for the leaf already in flight plus the finalize.
+ * Same ratio, same numbers: 60 of 120.
  */
-const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 300;
+const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 60;
+/**
+ * Slice of the hard ceiling reserved for the commit and the re-measure.
+ *
+ * lcm-x reserves `min(20, max(5, p90(finalize)))` and subtracts it from the hard
+ * clock (`usable_deadline = t0 + hard - reserve`). We have no measured finalize
+ * history to take a p90 from, so this is the midpoint of their range: a commit
+ * plus one meter re-measure on this backend takes a few seconds, and 10 s leaves
+ * room for a slow disk without eating a whole leaf.
+ */
+const DEFAULT_FULL_SWEEP_RESERVE_SECONDS = 10;
 /**
  * Floor for the measured leaf cost used by the soft-target test.
  *
@@ -207,6 +214,7 @@ const LCM_KEYS = [
   "fullSweepMaxPasses",
   "fullSweepMaxSeconds",
   "fullSweepSoftSeconds",
+  "fullSweepReserveSeconds",
   "leafEstimateFloorSeconds",
   "stallCooldownMs",
   "anchorPointers",
@@ -316,6 +324,7 @@ export function resolveConfig(config = {}) {
     fullSweepMaxPasses: config.fullSweepMaxPasses ?? DEFAULT_FULL_SWEEP_MAX_PASSES,
     fullSweepMaxSeconds: config.fullSweepMaxSeconds ?? DEFAULT_FULL_SWEEP_MAX_SECONDS,
     fullSweepSoftSeconds: config.fullSweepSoftSeconds ?? DEFAULT_FULL_SWEEP_SOFT_SECONDS,
+    fullSweepReserveSeconds: config.fullSweepReserveSeconds ?? DEFAULT_FULL_SWEEP_RESERVE_SECONDS,
     leafEstimateFloorSeconds: config.leafEstimateFloorSeconds ?? DEFAULT_LEAF_ESTIMATE_FLOOR_SECONDS,
     stallCooldownMs: config.stallCooldownMs ?? DEFAULT_STALL_COOLDOWN_MS,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
@@ -498,6 +507,7 @@ function validatePolicy(config, name) {
   if (config.fullSweepMaxPasses !== undefined) assertPositiveInteger(`${name}.fullSweepMaxPasses`, config.fullSweepMaxPasses);
   if (config.fullSweepMaxSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepMaxSeconds`, config.fullSweepMaxSeconds);
   if (config.fullSweepSoftSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepSoftSeconds`, config.fullSweepSoftSeconds);
+  if (config.fullSweepReserveSeconds !== undefined) assertNonNegativeInteger(`${name}.fullSweepReserveSeconds`, config.fullSweepReserveSeconds);
   if (config.leafEstimateFloorSeconds !== undefined) assertPositiveInteger(`${name}.leafEstimateFloorSeconds`, config.leafEstimateFloorSeconds);
   // The stall hold's deadline was the ONE key of the 28 declared in the schema
   // and never checked here, so `"60000"` or `1.5` reached the engine and

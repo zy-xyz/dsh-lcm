@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.15.0 — 2026-11-10 — an idle continuation, so the clocks can be lcm-x's own
+
+The soft target left a real gap: a sweep stops with the session still over
+threshold, and the only thing that resumed it was the next `agent/pre-step` —
+i.e. the operator typing something. lcm-x has no such gap, but not because it
+compacts in the background: its `threading` work is embedding maintenance and
+rollup, never `compress()`. What it has is a next turn.
+
+### Added — `_continueOnIdle`
+
+When the agent reports `idle` — the signal the base engine already trusts for
+clearing `overflowRetries` — one more bounded pass runs through the SAME
+automatic path, so every guard still applies: threshold, retained tail, span
+floor, and its own two clocks. Nothing is mid-turn and no request is in flight,
+so a compaction cannot race a live surface edit. An in-flight set keeps it to one
+pass per session (a second would only re-measure the same surface and lose the
+race), and a failure is swallowed into the debug log because there is no turn to
+fail.
+
+### Changed — the clocks go back to lcm-x's numbers
+
+| key | 0.14.0 | 0.15.0 |
+|---|---|---|
+| `fullSweepMaxSeconds` | `600` | `120` |
+| `fullSweepSoftSeconds` | `300` | `60` |
+| `fullSweepReserveSeconds` | — | `10` |
+
+600 was the workaround for having no continuation: the drain is 31 leaves at
+17.3 s = 522 s, so one turn had to fit it. With the idle pass the same 522 s is
+paid over a few turns of idle instead of one ten-minute block, and the ceiling
+can be lcm-x's 120.
+
+### Added — the third admission test, and the finalize reserve
+
+`admit()` in the reference applies three tests before a call may START, and we
+only had two of them:
+
+```
+usable_left = (t0 + hard - reserve) - now
+if not progress and usable_left < 15:      stop   # even the first call
+elif estimate > usable_left:               stop   # does not fit the hard clock
+elif now + estimate > t0 + soft:           stop   # would cross the soft target
+```
+
+The missing one is the middle: `now + leafWall > usableDeadline`. Without it a
+leaf could be admitted 5 s before the ceiling and run 17 s past it — the exact
+failure the reserve exists to prevent. `usableDeadline` is now
+`t0 + hard - reserve` with `fullSweepReserveSeconds` defaulting to 10, the
+midpoint of lcm-x's `clamp(p90(finalize), 5, 20)`.
+
+### Measured
+
+| probe | result |
+|---|---|
+| three tests, soft 3 s / hard 6 s / reserve 1 s, 0.7 s per leaf | 3 leaves, 2 107 ms — stops on the soft target |
+| reserve 2 s of a 4 s ceiling, 0.5 s per leaf | ≤ 4 leaves, inside 4 000 ms |
+| idle hook, twice in a row | second call ignored (in-flight stays 1) |
+| idle hook, full pass | 12 leaves, guard released afterwards |
+| idle hook under threshold | 0 leaves, guard released, no throw |
+
+Tests: 286 → 289.
 ## 0.14.0 — 2026-11-10 — the sweep gets a soft target, and the ceiling is sized by arithmetic
 
 Reported symptom: "past 80% it barely compacts anything". The cause was

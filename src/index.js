@@ -326,6 +326,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     fullSweepMaxPasses: fullSweepMaxPassesSchema,
     fullSweepMaxSeconds: fullSweepMaxPassesSchema,
     fullSweepSoftSeconds: fullSweepMaxPassesSchema,
+    fullSweepReserveSeconds: fullSweepMaxPassesSchema,
     leafEstimateFloorSeconds: fullSweepMaxPassesSchema,
     stallCooldownMs: maxTokensSchema,
     summarizationProvider: summarizationProviderSchema,
@@ -375,6 +376,14 @@ export class LcmCompactionEngine extends CompactionEngine {
    */
   pressureConfigFaults = new Map();
   overflowRetries = new WeakMap();
+  /**
+   * Sessions with an idle-continuation pass in flight.
+   *
+   * A guard against two passes on one session: `agent/status` can fire `idle`
+   * more than once (a re-render, a retried turn), and a second pass would only
+   * re-measure the same surface and lose the race to the first.
+   */
+  idlePasses = new Set();
   overflowAgents = new WeakMap();
   constructor(ctx, config = {}) {
     super(ctx);
@@ -457,6 +466,25 @@ export class LcmCompactionEngine extends CompactionEngine {
     }));
     disposers.push(ctx.on("agent/status", ({ agent, status }) => {
       if (status === "idle") this.overflowRetries.delete(agent);
+      // ── the idle continuation ───────────────────────────────────────────
+      // A sweep that stops on its soft target leaves the session still over
+      // threshold, and the only thing that used to pick it up was the NEXT
+      // pre-step — i.e. the next thing the operator types. lcm-x does not have
+      // that gap: its corpus work runs in a bounded background pass, so a
+      // partial sweep is finished without a user turn.
+      //
+      // `idle` is the safe place to do the same here, and it is the signal the
+      // base engine already trusts (it clears `overflowRetries` on it): nothing
+      // is mid-turn, no request is in flight, so a compaction cannot race a
+      // live surface edit. The pass is the SAME automatic path, so every guard
+      // still applies — threshold, retained tail, span floor, and its own two
+      // clocks. A no-op when the session is under threshold.
+      //
+      // Deliberately not awaited: `agent/status` is a notification, not a
+      // middleware chain, and blocking it would stall whatever the host does
+      // next. Failures go to the debug log only — an idle pass that cannot make
+      // progress must never surface as an error the operator has to dismiss.
+      if (status === "idle") this._continueOnIdle(agent);
     }));
     // A model switch is a pressure event: the next request runs on a DIFFERENT
     // window, and if the new one is smaller the history that comfortably fit the
@@ -711,6 +739,53 @@ export class LcmCompactionEngine extends CompactionEngine {
     };
   }
   /**
+   * Continue a sweep that stopped on its soft target, once the agent is idle.
+   *
+   * The soft target exists so a leaf never overruns the hard ceiling, which means
+   * a sweep deliberately stops with the session still over threshold. Before this,
+   * the only thing that resumed it was the next `agent/pre-step` — i.e. the
+   * operator typing something. lcm-x has no such gap: its corpus maintenance runs
+   * in a bounded background pass, so a partial sweep finishes without a user turn.
+   *
+   * `idle` is the safe moment here. It is the signal the base engine already
+   * trusts (it clears `overflowRetries` on it), nothing is mid-turn and no request
+   * is in flight, so a compaction cannot race a live surface edit. The pass is the
+   * SAME automatic path, so every guard still applies: threshold, retained tail,
+   * span floor, its own two clocks. Under threshold it is a no-op that returns
+   * before any model call.
+   *
+   * Not awaited by the caller: `agent/status` is a notification, not middleware.
+   * One in-flight pass per session, because a second one would only re-measure the
+   * same surface and lose the race to the first.
+   * @param agent - the agent that just went idle.
+   */
+  _continueOnIdle(agent) {
+    const id = agent?.session?.id;
+    if (id === undefined) return;
+    if (this.idlePasses.has(id)) return;
+    this.idlePasses.add(id);
+    // A detached promise, so the host's idle handling is never blocked. The
+    // catch is the only place an idle failure can go: there is no turn to fail.
+    void (async () => {
+      try {
+        const result = await this.compactIfNeeded(agent, "pressure", undefined);
+        if (result !== null) {
+          this.ctx.logger.info(
+            `compaction (idle): shadowed ${result.shadowedSeqs.length} surface nodes (seqs ${result.shadowedRange.start}-${result.shadowedRange.end}, ~${result.shadowedTokenCount} tokens)`
+          );
+        }
+      } catch (error) {
+        // Under threshold, misconfigured, or nothing compactable: all of these are
+        // ordinary answers to "is there work?", and none of them is worth an error
+        // the operator has to dismiss. The debug log keeps them findable.
+        engineDebug(this.config, `idle compaction skipped: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.idlePasses.delete(id);
+      }
+    })();
+  }
+
+  /**
    * Compact for replayed step-boundary pressure or one provider-confirmed
    * context overflow. Both triggers price the latest durable routed request
    * envelope; overflow bypasses the normal threshold and retained-tail policy
@@ -856,7 +931,15 @@ export class LcmCompactionEngine extends CompactionEngine {
     // for all of it. lcm-x bounds the same sweep by wall clock and records a
     // partial stop so the next turn continues; so does this.
     const sweepStart = Date.now();
-    const sweepDeadline = sweep ? sweepStart + this.config.fullSweepMaxSeconds * 1000 : Number.POSITIVE_INFINITY;
+    // `usableDeadline`, not the raw ceiling: lcm-x computes
+    // `t0 + hard - finalize_reserve` and reserves that slice for the commit and
+    // the re-measure that follows the last leaf. Without it the hard clock is a
+    // promise the loop cannot keep — a leaf admitted at 599 s still has to write
+    // its checkpoint afterwards.
+    const sweepReserveMs = this.config.fullSweepReserveSeconds * 1000;
+    const sweepDeadline = sweep
+      ? sweepStart + this.config.fullSweepMaxSeconds * 1000 - sweepReserveMs
+      : Number.POSITIVE_INFINITY;
     // TWO clocks, not one. lcm-x splits the same budget into a soft target and a
     // hard ceiling (`_foreground_budget_seconds`, engine.py:2120):
     //
@@ -885,13 +968,27 @@ export class LcmCompactionEngine extends CompactionEngine {
     let sweepStop = "";
     for (; passes < passBudget; passes += 1) {
       const now = Date.now();
+      // ── the three admission tests, in lcm-x's order ──────────────────────
+      // `admit()` (escalation.py:159) refuses to START a call when
+      //   1. the hard clock has no usable time left,
+      //   2. the estimate does not fit in what is left, or
+      //   3. the estimate would carry the call past the SOFT target.
+      // All three need the estimate, which is why the estimate comes first here.
+      //
+      // The first pass is exempt from 2 and 3: with nothing measured, refusing it
+      // would mean never learning the leaf cost at all. lcm-x exempts it the same
+      // way (`if not self.progress`), but still applies a 15 s floor to test 1.
       if (passes > 0 && now >= sweepDeadline) {
         sweepStop = "time_budget_exhausted";
         break;
       }
-      // Do not start a leaf that cannot finish before the soft target. The first
-      // pass is exempt: with nothing measured yet, refusing it would mean never
-      // learning the leaf cost at all.
+      if (passes > 0 && now + leafWallMs > sweepDeadline) {
+        // No room for one more leaf even before the soft target: this is the hard
+        // clock answering through the estimate rather than through elapsed time,
+        // which is what stops a leaf being admitted 5 s before the ceiling.
+        sweepStop = "time_budget_exhausted";
+        break;
+      }
       if (passes > 0 && now + leafWallMs > softDeadline) {
         sweepStop = "soft_target_reached";
         break;

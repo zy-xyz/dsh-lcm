@@ -185,24 +185,130 @@ test("the sweep is on by default, and its clocks are the arithmetic this backend
   const config = resolveConfig({});
   assert.equal(config.thresholdFullSweep, true, "lcm-x's threshold_full_sweep_enabled defaults True");
   assert.equal(config.fullSweepMaxPasses, 12, "lcm-x's _THRESHOLD_FULL_SWEEP_MAX_PASSES");
-  // The HARD ceiling is lcm-x's 120 x 5. Their sweep starts ~2 leaves and
-  // continues next turn because their soft target is 60 s; nothing schedules a
-  // follow-up pass here, so one turn has to reach the floor:
-  //   floor  = system prompt 100 541 + retained tail 149 514 = 250 055
-  //   drain  = 800 000 threshold - 250 055 = 549 945
-  //   leaves = 549 945 / 18 216 per leaf = 31, at 17.3 s each = 522 s
-  assert.equal(config.fullSweepMaxSeconds, 600, "600 s = the 522 s drain plus one leaf of slack");
+  // Both clocks are lcm-x's own numbers. That is affordable only because a sweep
+  // no longer has to finish in one turn: `_continueOnIdle` resumes it on idle,
+  // which is the gap lcm-x fills with its bounded background pass. The drain
+  // arithmetic still says the whole job is 31 leaves / 522 s, so it now takes a
+  // few idle passes instead of one ten-minute block.
+  assert.equal(config.fullSweepMaxSeconds, 120, "lcm-x's _THRESHOLD_FULL_SWEEP_MAX_SECONDS");
   // The SOFT target keeps half the ceiling, the same ratio lcm-x uses (60 of
   // 120): a leaf started near the end would otherwise overrun the ceiling.
-  assert.equal(config.fullSweepSoftSeconds, 300, "half the hard ceiling, like lcm-x's 60 of 120");
+  assert.equal(config.fullSweepSoftSeconds, 60, "half the hard ceiling, lcm-x's foreground_soft_seconds");
+  // The reserve is what makes the hard clock keepable: the last leaf still has to
+  // commit and re-measure after it returns.
+  assert.equal(config.fullSweepReserveSeconds, 10, "midpoint of lcm-x's 5..20 finalize reserve");
   assert.ok(config.fullSweepSoftSeconds < config.fullSweepMaxSeconds, "the soft target must leave room to finish");
   assert.equal(config.leafEstimateFloorSeconds, 15, "lcm-x's _THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS");
 });
 
 test("the sweep keys are typed identically in both configuration layers", () => {
-  const cases = [["thresholdFullSweep", "no"], ["fullSweepMaxPasses", 1.5], ["fullSweepMaxSeconds", 0], ["fullSweepSoftSeconds", 0], ["leafEstimateFloorSeconds", 1.5]];
+  const cases = [["thresholdFullSweep", "no"], ["fullSweepMaxPasses", 1.5], ["fullSweepMaxSeconds", 0], ["fullSweepSoftSeconds", 0], ["fullSweepReserveSeconds", -1], ["leafEstimateFloorSeconds", 1.5]];
   for (const [key, bad] of cases) {
     assert.throws(() => resolveConfig({ [key]: bad }), new RegExp(key, "u"), `config.js must refuse ${key}=${JSON.stringify(bad)}`);
     assert.throws(() => LcmCompactionEngine.Config({ [key]: bad }), `the composition schema must refuse ${key}=${JSON.stringify(bad)} too`);
   }
+});
+
+// ── the idle continuation ──────────────────────────────────────────────────
+
+/**
+ * An engine over a session that never drops below the threshold, so only a clock
+ * or the idle hook can be what stops a pass.
+ * @param opts - `{ softSeconds, hardSeconds, reserveSeconds, leafMs }`.
+ * @returns the engine, its session, and live counters.
+ */
+function idleEngine(opts = {}) {
+  const nodes = Array.from({ length: 40 }, (_, i) => ({ seq: i, tokens: 22500, heuristicTokens: 22500 }));
+  const events = nodes.map((n, i) => ({
+    type: i % 2 === 0 ? "user/message" : "assistant/message",
+    seq: n.seq,
+    time: 1,
+    data: { message: { role: i % 2 === 0 ? "user" : "assistant", content: [{ type: "text", text: "n" + i }] } }
+  }));
+  const bySeq = new Map(events.map((event) => [event.seq, event]));
+  // The node list SHRINKS with each leaf, the way a real surface does. Leaving it
+  // fixed while only the scalar total drops makes the selector keep finding
+  // compactable ranges forever, and the pass then runs to its pass budget.
+  const live = nodes.slice();
+  const state = { total: 900000, leaves: 0, infos: [] };
+  const session = {
+    id: "idle-probe",
+    events,
+    get seq() { return events.length; },
+    eventAt: (seq) => bySeq.get(seq),
+    deriveEventMessage: (event) => event?.data?.message ?? null,
+    get surface() { return { nodes: live.map((node) => node.seq), replaceGeneration: 1 }; },
+    requestHeader: () => ({ config: { provider: "p", model: "m" }, tools: [] })
+  };
+  const engine = Object.create(LcmCompactionEngine.prototype);
+  engine.config = resolveConfig({
+    fullSweepMaxPasses: 999,
+    fullSweepMaxSeconds: opts.hardSeconds ?? 600,
+    fullSweepSoftSeconds: opts.softSeconds ?? 300,
+    fullSweepReserveSeconds: opts.reserveSeconds ?? 10,
+    leafEstimateFloorSeconds: 1
+  });
+  engine.stallBySession = new Map();
+  engine.pressureConfigFaults = new Map();
+  engine.overflowRetries = new WeakMap();
+  engine.overflowAgents = new WeakMap();
+  engine.idlePasses = new Set();
+  engine.ctx = {
+    logger: { info: (line) => state.infos.push(line), warn: () => {} },
+    tokenMeter: { measure: () => ({ totalTokens: state.total, nodes: live, baseline: { kind: "estimated", tokens: 0 }, surfaceDeltaTokens: 0 }) },
+    get: () => undefined,
+    llm: { resolveModelInfo: async () => ({ context: { contextWindow: 1000000 }, defaultMaxTokens: 65536 }) }
+  };
+  engine.compactRegion = async () => {
+    state.leaves += 1;
+    await new Promise((resolve) => setTimeout(resolve, opts.leafMs ?? 200));
+    // Drop the nodes the leaf consumed, and the tokens they carried, so the next
+  };
+  return { engine, session, state };
+}
+
+test("the idle hook runs one pass, ignores a concurrent second one, and clears its guard", async () => {
+  // The soft target deliberately stops a sweep with the session still over
+  // threshold. Before the idle hook the only thing that resumed it was the next
+  // pre-step — i.e. the operator typing something; lcm-x has no such gap because
+  // its corpus maintenance runs in a bounded background pass.
+  // Short clocks: this test is about the GUARD, not the budget, and a 600 s sweep
+  // over 20 leaves would keep the pass in flight for the whole wait window.
+  const { engine, session, state } = idleEngine({ softSeconds: 5, hardSeconds: 5, reserveSeconds: 0, leafMs: 100 });
+  const agent = { session, options: { provider: "p", model: "m" } };
+
+  engine._continueOnIdle(agent);
+  assert.equal(engine.idlePasses.size, 1, "a pass is in flight");
+  engine._continueOnIdle(agent);
+  assert.equal(engine.idlePasses.size, 1, "a second idle notification must not start a second pass");
+
+  for (let i = 0; i < 80 && engine.idlePasses.size > 0; i += 1) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(engine.idlePasses.size, 0, "the guard releases when the pass ends");
+  assert.ok(state.leaves > 0, "the idle pass actually compacted");
+  // NOT asserted: the `compaction (idle)` log line. It is written only after a
+  // successful COMMIT, and this fixture has no host services (sessions, session
+  // store) for the engine to commit through, so the pass always ends in the
+  // catch. That the catch swallows it — rather than surfacing an idle failure the
+  // operator would have to dismiss — is the behaviour under test, and it is
+  // visible in the guard releasing without a throw.
+});
+
+test("the idle hook is a no-op under threshold", async () => {
+  const { engine, session, state } = idleEngine({ softSeconds: 600, hardSeconds: 600 });
+  state.total = 100000;
+  engine._continueOnIdle({ session, options: { provider: "p", model: "m" } });
+  for (let i = 0; i < 40 && engine.idlePasses.size > 0; i += 1) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(state.leaves, 0, "no leaf is released below the threshold");
+  assert.equal(engine.idlePasses.size, 0, "the guard still releases");
+});
+
+test("the hard clock reserves a slice for the finalize", async () => {
+  // lcm-x computes usable_deadline = t0 + hard - reserve, because the last leaf
+  // still has to commit and re-measure after it returns.
+  const { engine, session, state } = idleEngine({ softSeconds: 600, hardSeconds: 4, reserveSeconds: 2, leafMs: 500 });
+  const started = Date.now();
+  await engine.compactPressure({ session, options: { provider: "p", model: "m" } }, session.requestHeader(), undefined, false);
+  const elapsed = Date.now() - started;
+  assert.ok(state.leaves <= 4, `the reserve cut the pass short (released ${state.leaves} in ${elapsed} ms)`);
+  assert.ok(elapsed < 4000, `and it stayed inside the hard ceiling (${elapsed} ms)`);
 });
