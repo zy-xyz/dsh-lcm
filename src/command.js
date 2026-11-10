@@ -32,7 +32,7 @@ const name = "command-lcm-search";
 const inject = ["commands"];
 const USAGE = "Usage: /lcm-search <keyword|regex>";
 const EMBED_NAME = "lcm-embed";
-const EMBED_USAGE = "Usage: /lcm-embed status | /lcm-embed backfill [--apply] [--limit N]";
+const EMBED_USAGE = "Usage: /lcm-embed status | /lcm-embed backfill [--apply] [--limit N] [--window]";
 
 /**
  * lcm-x's backfill default. A pass is bounded because the cost is the texts,
@@ -339,7 +339,31 @@ function defineStatusCommand(commandName = "lcm-status") {
  * @param cfg - resolved vector settings (candidate bounds included).
  * @returns `[{ seq, text }]` in log order.
  */
-function embedCandidates(session, cfg) {
+/**
+ * The compacted corpus a backfill may fill, or the priced search window.
+ *
+ * Two different questions, and conflating them was a defect:
+ *
+ *   - `"window"` — what ONE SEARCH may ask about. Priced in tokens, newest
+ *     first, bounded by `vectorCandidateTokens`. This is what `status` reports,
+ *     because it answers "is the semantic route warm for this session".
+ *   - `"corpus"` — EVERY compacted content event, with no token budget. This is
+ *     what a backfill fills, because the reference implementation's
+ *     `/lcm embed backfill` selects every missing row in the store and uses
+ *     `--limit` only as a per-pass cap. Measured on this repo: the window was
+ *     fully warm (76/76) while the corpus was 4.0% covered (558 of 13 975), so
+ *     a window-only backfill reported success and left the corpus cold — and
+ *     the window ROLLS, so events leaving it were never embedded at all.
+ *
+ * Both use the search route's own collector and the same 4 000-character slice,
+ * so the cache keys written here are the keys a later search looks up.
+ *
+ * @param session - the calling agent's session.
+ * @param cfg - resolved vector settings (window bounds included).
+ * @param scope - `"window"` (default) or `"corpus"`.
+ * @returns `[{ seq, text }]` in log order.
+ */
+function embedCandidates(session, cfg, scope = "window") {
   // The search route's own collector, not a copy.
   //
   // Which texts get embedded is decided by four interacting rules: message-
@@ -348,7 +372,10 @@ function embedCandidates(session, cfg) {
   // rules would fill keys the search route never looks up — a backfill that
   // reports success and changes nothing. `collectVectorItems` is exported from
   // ./search.js for exactly this caller.
-  const { items } = collectVectorItems(session, { events: cfg.candidateLimit, tokens: cfg.candidateTokens });
+  const bounds = scope === "corpus"
+    ? { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER }
+    : { events: cfg.candidateLimit, tokens: cfg.candidateTokens };
+  const { items } = collectVectorItems(session, bounds);
   return items
     .map((item) => ({ seq: item.seq, text: String(item.text ?? "").slice(0, VECTOR_TEXT_LIMIT) }))
     .filter((item) => item.text.trim().length > 0);
@@ -373,10 +400,18 @@ function parseEmbedArgs(rawInput) {
   if (action !== "backfill") return { error: EMBED_USAGE };
   let apply = false;
   let limit = DEFAULT_BACKFILL_LIMIT;
+  // Corpus by default, like the reference implementation; `--window` opts into
+  // the priced search window instead (cheap, but it ROLLS: events that leave it
+  // were never embedded, so it is a warm-up, not a fill).
+  let scope = "corpus";
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index].toLowerCase();
     if (token === "--apply") {
       apply = true;
+      continue;
+    }
+    if (token === "--window") {
+      scope = "window";
       continue;
     }
     if (token === "--limit") {
@@ -389,7 +424,7 @@ function parseEmbedArgs(rawInput) {
     }
     return { error: EMBED_USAGE };
   }
-  return { action: "backfill", apply, limit };
+  return { action: "backfill", apply, limit, scope };
 }
 
 /**
@@ -500,17 +535,35 @@ function describeAuth(source, name) {
 async function embedBackfill(session, cfg, options = {}) {
   const limit = options.limit ?? DEFAULT_BACKFILL_LIMIT;
   const apply = options.apply === true;
-  const candidates = embedCandidates(session, cfg);
-  // `--limit` keeps the NEWEST N of the window: recent-but-compacted is the
-  // more likely answer, the order the search route ranks in as well.
-  const selected = candidates.slice(Math.max(0, candidates.length - limit));
+  // Default CORPUS, not window. The reference implementation's backfill selects
+  // every missing row and treats `--limit` as a per-pass cap; filling only the
+  // priced window left the corpus 4.0% covered while reporting a full window.
+  const scope = options.scope === "window" ? "window" : "corpus";
+  const candidates = embedCandidates(session, cfg, scope);
   const cache = vectorCache(cfg);
-  const pending = [];
+  // `--limit` bounds ONE PASS's work, so it must be applied to the UNCACHED
+  // texts, not to the corpus.
+  //
+  // Measured defect: the limit was applied to the corpus first (keep the newest
+  // N, newest-first) and the cache was consulted afterwards. A session whose
+  // corpus exceeded the limit therefore selected the same newest N on every
+  // pass, found them all cached, embedded 0, and reported the same `remaining`
+  // forever — the older texts were unreachable by any number of re-runs. On a
+  // 5179-text session with `--limit 1000` that was 4179 texts permanently
+  // stranded: `round 1 embedded 865 remaining 4179`, `round 2 embedded 0
+  // remaining 4179`.
+  //
+  // Newest-first ordering is kept, so a capped pass still spends its calls on
+  // the likeliest-needed half; the difference is that each pass advances.
+  const pendingAll = [];
   let alreadyCached = 0;
-  for (const candidate of selected) {
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index];
     if (await cache.get(candidate.text) !== null) alreadyCached += 1;
-    else pending.push(candidate.text);
+    else pendingAll.push(candidate.text);
   }
+  const pending = pendingAll.slice(0, limit);
+
   let embedded = 0;
   let failed = 0;
   let consecutiveFailures = 0;
@@ -557,17 +610,39 @@ async function embedBackfill(session, cfg, options = {}) {
       }
     }
   }
-  const report = { scanned: selected.length, alreadyCached, embedded, failed, limit, applied: apply };
+  // `remaining` is what a capped pass leaves behind, so an operator can see that
+  // another `--apply` has work to do instead of assuming one pass drained the
+  // corpus. `corpus` is the whole selection size and `scope` names which one this
+  // pass walked. `remaining` counts UNRESOLVED texts only: everything not already
+  // cached, minus what this pass actually wrote.
+  const remaining = Math.max(0, pendingAll.length - embedded);
+  const report = {
+    // `scanned` is how many texts this pass examined, cached ones included, so
+    // the invariant `scanned === alreadyCached + embedded + failed` still holds
+    // once every pending text either lands or fails.
+    scanned: alreadyCached + pending.length,
+    alreadyCached,
+    embedded,
+    failed,
+    limit,
+    applied: apply,
+    corpus: candidates.length,
+    remaining,
+    scope
+  };
   return { report, text: renderEmbedBackfill(cfg, candidates.length, pending.length, report, cache.dir, stopped) };
 }
 
 /** Render one backfill report. */
 function renderEmbedBackfill(cfg, windowSize, pending, report, dir, stopped = "") {
   const lines = [
-    "lcm-embed backfill (" + (report.applied ? "apply" : "dry-run") + ")",
+    "lcm-embed backfill (" + (report.applied ? "apply" : "dry-run") + ", scope: " + report.scope + ")",
     "  model: " + cfg.model,
     "  cache: " + dir,
-    "  candidates: " + windowSize + " hidden text(s)",
+    // `corpus` is the whole compacted selection; `scanned` is what this pass
+    // walked after `--limit`. Printing only the second made a capped pass look
+    // like it had covered everything.
+    "  corpus: " + report.corpus + " hidden text(s)",
     "  scanned: " + report.scanned,
     "  already cached: " + report.alreadyCached
   ];
@@ -577,6 +652,11 @@ function renderEmbedBackfill(cfg, windowSize, pending, report, dir, stopped = ""
     lines.push("  would embed: " + pending, "  note: preview only; no provider call was made");
   }
   lines.push("  limit: " + report.limit, "  applied: " + (report.applied ? "yes" : "no"));
+  if (report.remaining > 0) {
+    lines.push("  remaining: " + report.remaining + " text(s) still uncached — run --apply again (or raise --limit) to continue");
+  } else {
+    lines.push("  remaining: 0 — the " + report.scope + " is fully cached");
+  }
   if (stopped === "failures") {
     lines.push(
       "  stopped: " + BACKFILL_FAILURE_LIMIT + " consecutive failed batch(es) — the endpoint is refusing these calls",
@@ -595,7 +675,7 @@ function renderEmbedBackfill(cfg, windowSize, pending, report, dir, stopped = ""
 function defineEmbedCommand(resolved, commandName = EMBED_NAME) {
   return {
     name: commandName,
-    description: "Inspect and fill the vector cache for compacted events: status | backfill [--apply] [--limit N]",
+    description: "Inspect and fill the vector cache for compacted events: status | backfill [--apply] [--limit N] [--window]",
     handler: async (invocation) => {
       const parsed = parseEmbedArgs(invocation.rawInput);
       if (parsed.error !== undefined) return { kind: "error", text: parsed.error };

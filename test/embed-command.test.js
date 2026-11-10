@@ -152,8 +152,8 @@ test("backfill without --apply is a dry run: zero provider requests", async () =
     const cfg = commandConfig(server, dir);
     const { report, text } = await embedBackfill(hiddenSession(), cfg, { apply: false });
     assert.equal(server.state.requests, 0, "a preview must not spend a provider call");
-    assert.deepEqual(report, { scanned: 5, alreadyCached: 0, embedded: 0, failed: 0, limit: 200, applied: false });
-    assert.match(text, /backfill \(dry-run\)/, text);
+    assert.deepEqual(report, { scanned: 5, alreadyCached: 0, embedded: 0, failed: 0, limit: 200, applied: false, corpus: 5, remaining: 5, scope: "corpus" });
+    assert.match(text, /backfill \(dry-run, scope: corpus\)/, text);
     assert.match(text, /would embed: 5/, text);
     assert.match(text, /applied: no/, text);
     assert.match(text, /preview only/, text);
@@ -180,7 +180,7 @@ test("--apply embeds once, and a second --apply is a pure cache hit", async () =
 
     const callsAfterFirst = server.state.requests;
     const second = await embedBackfill(hiddenSession(), cfg, { apply: true });
-    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true });
+    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true, corpus: 5, remaining: 0, scope: "corpus" });
     assert.equal(server.state.requests, callsAfterFirst, "a cached text is never sent again");
     assert.equal(server.state.inputs.length, 5);
 
@@ -219,7 +219,7 @@ test("the window is what the model cannot read, and empty text is dropped", asyn
     const cfg = commandConfig(server, dir);
     const dry = await embedBackfill(hiddenSession({ visible: 2, hidden: 3, empty: 2 }), cfg, { apply: false });
     assert.equal(dry.report.scanned, 3, "two visible events and two empty bodies are not candidates\n" + dry.text);
-    assert.match(dry.text, /candidates: 3 hidden text\(s\)/, dry.text);
+    assert.match(dry.text, /corpus: 3 hidden text\(s\)/, dry.text);
     const applied = await embedBackfill(hiddenSession({ visible: 2, hidden: 3, empty: 2 }), cfg, { apply: true });
     assert.equal(applied.report.embedded, 3, applied.text);
     assert.ok(server.state.inputs.every((text) => text.trim().length > 0), JSON.stringify(server.state.inputs));

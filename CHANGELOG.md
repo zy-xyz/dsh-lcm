@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.13.0 — 2026-11-10 — the backfill fills the CORPUS, and a capped pass advances
+
+Two defects, both found by running the backfill against real sessions rather than
+by reading code. The first is why the embedding layer looked "fully updated"
+while it was not.
+
+### Fixed — `backfill` only ever filled the search WINDOW
+
+`embedCandidates` called `collectVectorItems` with the priced window
+(`vectorCandidateTokens`, 30 000 shipped), so a backfill could only ever fill
+the newest ~76 events of a session. The window then reported itself warm
+(`candidates 76 / cached 76 / pending 0`) while the corpus was 4.0% covered:
+
+```
+会话              隐藏事件   已缓存   缺
+1165f0e1-3c3       5180      167   5013
+d7951a68-b17       4228       88   4140
+TOTAL  13975  |  558  |  13417  |  4.0%
+```
+
+And the window ROLLS: events that leave it were never embedded at all, so no
+amount of ordinary use would ever fill them.
+
+The reference implementation's `/lcm embed backfill` selects every missing row
+in the store and uses `--limit` only as a per-pass cap. `backfill` now does the
+same: `scope: "corpus"` by default (every compacted content event, no token
+budget), with `--window` opting back into the priced window for a cheap warm-up.
+Both scopes still go through `collectVectorItems` and the same 4 000-character
+slice, so the keys written are the keys a search reads.
+
+### Fixed — a capped pass could never reach past the newest N
+
+`--limit` was applied to the CORPUS before the cache was consulted, so every
+pass selected the same newest N, found them all cached, embedded 0 and reported
+the same `remaining` forever. Measured on a 5179-text session with `--limit 1000`:
+
+```
+round 1 | corpus 5179 | embedded 865 | remaining 4179
+round 2 | corpus 5179 | embedded    0 | remaining 4179   <- stuck
+```
+
+4179 texts were unreachable by any number of re-runs. The limit now bounds the
+WORK: uncached texts are collected newest-first and only the first `limit` are
+attempted, so each pass advances and `remaining` strictly decreases.
+
+### Added — the report says what the scope and the remainder are
+
+`{ corpus, remaining, scope }` join the report, and the text prints
+`corpus: N hidden text(s)` (the whole selection) next to `scanned: M` (what this
+pass walked), plus a `remaining:` line that names the next step. Printing only
+the second made a capped pass look like it had covered everything.
+
+### Changed — the shipped source defaults name the endpoint that answers
+
+`DEFAULT_VECTOR_BASE_URL` / `DEFAULT_VECTOR_MODEL` / `DEFAULT_VECTOR_DIM` still
+named a LAN LM Studio serving a 4096-d model, which no longer answers. They now
+name the OmniRoute endpoint the bundle rows already use (`codestral-embed`,
+1536). A default pointing at a dead host is worse than one pointing at a host
+that answers 401, because the 401 names the problem. The layer stays opt-in, so
+no existing setup changes.
+
+Tests: 285 → 286, including one that runs three capped passes and asserts all
+eight texts are reached exactly once.
 ## 0.12.1 — 2026-11-10 — a third-party surface must not break the semantic route
 
 Found while filling the live cache, not by reading code: the backfill probe died

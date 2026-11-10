@@ -29,12 +29,21 @@ import { basename, join } from "node:path";
 
 /** The layer is opt-in. Off means zero extra work and zero network calls. */
 export const DEFAULT_VECTOR_ENABLED = false;
-/** OpenAI-compatible embeddings root; `/embeddings` is appended. */
-export const DEFAULT_VECTOR_BASE_URL = "http://10.126.126.3:1234/v1";
-/** Measured against a live endpoint: 4096 dimensions, unit-norm output. */
-export const DEFAULT_VECTOR_MODEL = "text-embedding-qwen3-vl-embedding-8b";
+/**
+ * OpenAI-compatible embeddings root; `/embeddings` is appended.
+ *
+ * These three defaults describe the endpoint the SHIPPED bundle rows use, not a
+ * guess: a bare `vectorEnabled: true` with nothing else must land somewhere real.
+ * They previously named a LAN LM Studio serving a 4096-d model, which no longer
+ * answers — a default pointing at a dead host is worse than one pointing at a
+ * host that replies 401, because a 401 names the problem and an unreachable host
+ * does not. The layer stays off unless asked, so this changes no existing setup.
+ */
+export const DEFAULT_VECTOR_BASE_URL = "http://10.126.126.4:20128/v1";
+/** Measured live 2026-11-09: 1536 dimensions, unit-norm output. */
+export const DEFAULT_VECTOR_MODEL = "mistral-proxy/codestral-embed";
 /** Width of one embedding; a mismatch means the model changed, not that we guess. */
-export const DEFAULT_VECTOR_DIM = 4096;
+export const DEFAULT_VECTOR_DIM = 1536;
 /** Candidates the vector route contributes to one ranking. */
 export const DEFAULT_VECTOR_TOPK = 8;
 

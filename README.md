@@ -238,7 +238,7 @@ the measured response stopped being truncated.
 | `/lcm-search <pattern>` | the human-side search; appends hits as a durable user message |
 | `/lcm-status` | checkpoints, depth, tokens saved |
 | `/lcm-embed status` | model, width, cache directory, files, **which source answers the bearer token**, and whether the layer is on |
-| `/lcm-embed backfill [--apply] [--limit N]` | preview (default) or fill the vector cache for compacted events — lcm-x's `/lcm embed backfill` |
+| `/lcm-embed backfill [--apply] [--limit N] [--window]` | preview (default) or fill the vector cache for the whole compacted corpus — lcm-x's `/lcm embed backfill`. `--limit` caps one pass's work (each pass advances); `--window` fills only the priced search window instead |
 | `/recall <pattern>` | **the original command name, kept as an alias** |
 
 Nothing that already pointed at `recall`, `search` or `/recall` breaks when

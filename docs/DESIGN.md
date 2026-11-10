@@ -453,6 +453,23 @@ two consecutive failed batches stop the pass, because a dead endpoint walking a
 Nothing is lost when it stops: what was embedded is on disk and the next
 `--apply` resumes from the cache.
 
+**The scope is the corpus, not the window, and that distinction is the whole
+point.** The window (`vectorCandidateTokens`) is what ONE SEARCH may ask about,
+priced newest-first; it is what `status` reports, because it answers "is the
+route warm for this session". Filling only the window was measured to be a
+trap: the window reported itself warm (`candidates 76 / cached 76 / pending 0`)
+while the corpus was 4.0% covered (558 of 13 975), and because the window ROLLS,
+events that left it were never embedded by any amount of ordinary use. The
+reference implementation selects every missing row and treats `--limit` as a
+per-pass cap; so does this.
+
+**A capped pass advances.** `--limit` bounds the WORK, not the reach: uncached
+texts are collected newest-first and only the first `limit` are attempted, so
+`remaining` strictly decreases across passes. The first cut applied the limit to
+the corpus before consulting the cache, which selected the same newest N every
+time: `round 1 embedded 865 remaining 4179`, `round 2 embedded 0 remaining 4179`
+— 4 179 texts unreachable by any number of re-runs.
+
 `/lcm-embed status` answers the question the cache totals cannot: is the semantic
 route warm for THIS session. It prints `candidates` (the priced window from the
 calling session, via the same `collectVectorItems` the search and the backfill
@@ -471,7 +488,7 @@ Three things make the model swappable rather than merely configurable:
 |---|---|
 | a stale vector must never be read | the on-disk directory is `<cacheDir>/<12 hex of sha256(model)>-<dim>/`, and the per-text key is `sha256(model + "\n" + text)`; two models share neither a directory nor a key, and a wrong-width file is a miss (`bytes.byteLength !== dim * 4`) |
 | the stale model must be deletable as one unit | `pruneForeignVectorCaches(cfg)` removes every sibling directory under the root except the current model/width one, and reports `{removed, bytes}`; `vectorCacheStats(cfg)` reports `{dir, model, dim, files, bytes}` for the live one |
-| a fresh model must not cost a cold search | `/lcm-embed backfill` walks the same candidate set the search route embeds (`collectVectorItems`, exported from `src/search.js` for exactly this caller) and writes the same cache keys, so a warmed cache is the cache the next search reads; dry-run by default, `--apply` spends the calls, `--limit` keeps the newest N |
+| a fresh model must not cost a cold search | `/lcm-embed backfill` fills the whole compacted CORPUS (every hidden content event, no token budget) through the same `collectVectorItems` the search route uses and the same 4 000-character slice, so the keys written are the keys a search reads. `--window` opts into the priced window instead for a cheap warm-up; dry-run by default, `--apply` spends the calls, `--limit` caps one pass's WORK and each pass advances |
 | one search's cost must be bounded | `rankByVector` runs the whole embedding phase under one deadline (`DEFAULT_VECTOR_SEARCH_BUDGET_MS`, effective `max(30 000, vectorTimeoutMs)`), and every POST — bisection probes and the cleaned-variant retry included — is capped at `min(vectorTimeoutMs, deadline - now)`; a stalled search cannot become `batches x ceiling`, and the arithmetic is in the section above |
 | a search that has to stop must leave progress behind | groups of `MAX_EMBED_BATCH` are embedded and written to the cache one at a time, newest candidate first, so a stall costs the batch in flight and not the ones already paid for: the next search resumes instead of re-embedding, and a `--apply` after a stalled backfill continues from the cache |
 | a dead endpoint must not block the operator | the backfill stops after two consecutive failed batches (`BACKFILL_FAILURE_LIMIT`, the lcm-x breaker threshold) and says so, rather than walking a 200-text window at the row's 240 s ceiling |

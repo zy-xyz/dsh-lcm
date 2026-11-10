@@ -151,7 +151,7 @@ test("[embed] a dry run issues zero requests and states what it would embed", as
     assert.equal(report.alreadyCached, 0, text);
     assert.equal(report.embedded, 0, text);
     assert.equal(report.applied, false, text);
-    assert.match(text, /backfill \(dry-run\)/u, text);
+    assert.match(text, /backfill \(dry-run, scope: corpus\)/u, text);
     assert.match(text, /would embed: 5/u, text);
     assert.match(text, /preview only; no provider call was made/u, text);
     assert.match(text, /applied: no/u, text);
@@ -174,7 +174,7 @@ test("[embed] --apply fills the cache, and a re-apply is a pure cache hit", asyn
 
     const requestsAfterFirst = server.state.requests;
     const second = await embedBackfill(hiddenSession(), cfg, { apply: true });
-    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true }, second.text);
+    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true, corpus: 5, remaining: 0, scope: "corpus" }, second.text);
     assert.equal(server.state.requests, requestsAfterFirst, "a cached text is never sent again");
     assert.equal(server.state.inputs.length, 5, "and the input log did not grow");
 
@@ -187,7 +187,7 @@ test("[embed] --apply fills the cache, and a re-apply is a pure cache hit", asyn
   }
 });
 
-test("[embed] --limit N keeps the newest N of the window and says so", async () => {
+test("[embed] --limit N keeps the newest N of the CORPUS and reports what remains", async () => {
   const server = await embeddingServer();
   const root = await scratch();
   try {
@@ -201,8 +201,14 @@ test("[embed] --limit N keeps the newest N of the window and says so", async () 
       ["compacted note 5", "compacted note 6", "compacted note 7"],
       "the NEWEST three were embedded: " + JSON.stringify(server.state.inputs)
     );
-    assert.match(text, /candidates: 8 hidden text\(s\)/u, "the report still states the whole window: " + text);
+    assert.match(text, /corpus: 8 hidden text\(s\)/u, "the report still states the whole selection: " + text);
     assert.match(text, /limit: 3/u, text);
+    // The corpus is 8 and the pass walked 3, so five are still uncached. A report
+    // that did not say so would let an operator believe one capped pass had
+    // filled everything - which is exactly the bug the corpus scope fixes.
+    assert.equal(report.corpus, 8, text);
+    assert.equal(report.remaining, 5, text);
+    assert.match(text, /remaining: 5 text\(s\) still uncached/u, text);
 
     const rest = await embedBackfill(hiddenSession({ hidden: 8 }), cfg, { apply: true, limit: 8 });
     assert.equal(rest.report.alreadyCached, 3, "a wider pass reuses the three already cached");
@@ -229,7 +235,7 @@ test("[embed] empty and whitespace-only bodies are never sent to the endpoint", 
     const session = shapedSession(events, []);
     const dry = await embedBackfill(session, cfg, { apply: false });
     assert.equal(dry.report.scanned, 1, "only the one body with text is a candidate: " + dry.text);
-    assert.match(dry.text, /candidates: 1 hidden text\(s\)/u, dry.text);
+    assert.match(dry.text, /corpus: 1 hidden text\(s\)/u, dry.text);
 
     const applied = await embedBackfill(session, cfg, { apply: true });
     assert.equal(applied.report.embedded, 1, applied.text);
@@ -298,6 +304,41 @@ test("[embed] the argument grammar rejects garbage rather than interpreting it",
     assert.equal(refused.kind, "error", refused.text);
     assert.match(refused.text, /vectorEnabled: false/u, "refusing --apply names the switch: " + refused.text);
     assert.equal(server.state.inputs.length, 2, "a refused --apply sends nothing");
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("[embed] a capped pass advances: re-running reaches older uncached texts", async () => {
+  // Measured defect: --limit was applied to the CORPUS before the cache was
+  // consulted, so every pass selected the same newest N, found them cached,
+  // embedded 0 and reported the same remaining forever. On a 5179-text session
+  // with --limit 1000 that stranded 4179 texts permanently:
+  //   round 1 embedded 865 remaining 4179
+  //   round 2 embedded 0   remaining 4179
+  // A capped pass must bound the WORK, not the reach.
+  const server = await embeddingServer();
+  const root = await scratch();
+  try {
+    const cfg = commandConfig(server, root);
+    const session = () => hiddenSession({ hidden: 8 });
+
+    const first = await embedBackfill(session(), cfg, { apply: true, limit: 3 });
+    assert.equal(first.report.embedded, 3, first.text);
+    assert.equal(first.report.remaining, 5, first.text);
+
+    const second = await embedBackfill(session(), cfg, { apply: true, limit: 3 });
+    assert.equal(second.report.embedded, 3, "the second capped pass must reach three NEW texts: " + second.text);
+    assert.equal(second.report.remaining, 2, second.text);
+
+    const third = await embedBackfill(session(), cfg, { apply: true, limit: 3 });
+    assert.equal(third.report.embedded, 2, "the last pass drains what is left: " + third.text);
+    assert.equal(third.report.remaining, 0, third.text);
+
+    // All eight were reached exactly once across the three capped passes.
+    assert.equal(new Set(server.state.inputs).size, 8, JSON.stringify(server.state.inputs));
+    assert.equal(server.state.inputs.length, 8, "no text was embedded twice");
   } finally {
     await server.close();
     await rm(root, { recursive: true, force: true });
