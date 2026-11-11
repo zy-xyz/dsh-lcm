@@ -1,5 +1,7 @@
 # dsh-lcm
 
+**English** · [简体中文](README.zh-CN.md)
+
 Lossless Context Management compaction engine for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
 A drop-in replacement for `@deepseek-ai/dsh-compaction-basic`: the same

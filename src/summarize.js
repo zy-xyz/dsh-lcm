@@ -370,17 +370,35 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   // without becoming the binding constraint - the model stops well before it.
   // The floor gives a small span enough room to answer at all.
   const ceiling = Math.max(4096, budgetTokens * 2);
-  const options = {
+  /**
+   * The ceiling for one attempt: the base on the first, doubled on each retry.
+   *
+   * Measured: 10 of 121 checkpoints fell back to the deterministic rung, and the
+   * rate was 27.3% for spans whose target put the ceiling at the 4 096 floor
+   * versus 4.0% above it — a 6.8x difference, so the floor is what fails. A
+   * reasoning backend bills hidden reasoning against this same completion budget:
+   * at 4 096 the thinking can consume all of it and the response finishes with
+   * ZERO text. Retrying at the SAME ceiling then reproduces the failure by
+   * construction (it is not a sampling accident in that case), which is what the
+   * ladder did — three full-price calls, then the degraded body.
+   *
+   * Doubling costs nothing on the happy path, because the first attempt still runs
+   * at the base ceiling and the model stops well short of it when it answers.
+   * @param attempt - 1-based attempt number.
+   * @returns the completion cap for that attempt.
+   */
+  const ceilingFor = (attempt) => Math.min(ceiling * 2 ** (attempt - 1), ESCALATED_CEILING_MAX);
+  const optionsFor = (attempt) => ({
     provider: target.provider,
     model: target.model,
-    maxTokens: ceiling,
+    maxTokens: ceilingFor(attempt),
     messages,
     ...(typeof session.toolHistory === "function" ? { toolHistory: session.toolHistory() } : {}),
     ...(header?.tools === undefined ? {} : { tools: [...header.tools] }),
     sessionId: session.id,
     purpose: "compaction",
     ...(signal === undefined ? {} : { signal })
-  };
+  });
 
   // Retry policy. Two failures look alike on the wire (a finish chunk and
   // nothing usable) but mean different things:
@@ -400,9 +418,12 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   let produced = "";
   let usage;
   let finishKind;
+  let sentCeiling = ceiling;
   for (;;) {
     attempts += 1;
     signal?.throwIfAborted();
+    const options = optionsFor(attempts);
+    sentCeiling = options.maxTokens;
     const assembler = new BlockAssembler();
     for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk);
     const finish = assembler.finish;
@@ -447,12 +468,16 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   return {
     summary: [{ type: "text", text }],
     rawOutput: raw,
-    provider: options.provider,
-    model: options.model,
+    provider: target.provider,
+    model: target.model,
     // `targetTokens` is what the instruction asked the model to aim for. The
     // request ceiling is the separate `max(4096, 2 x target)` above, so recording
     // the target here is the honest field: it is not the cap that was sent.
     targetTokens: budgetTokens,
+    // The cap the attempt that produced this body actually SENT. It is not always
+    // the base ceiling any more: a retry escalates, and the record has to name the
+    // number that was in force, not the one the first attempt would have used.
+    maxTokens: sentCeiling,
     finish: finishKind,
     ...(usage === undefined ? {} : { usage })
   };
@@ -465,6 +490,17 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
  * renames the heading still produced an anchor list, and dropping pointers for
  * the whole summary over one character would be the wrong trade.
  */
+/**
+ * Hard cap on the escalated completion ceiling.
+ *
+ * 32 768 is the number measured earlier: the same prompt with an explicit 32 768
+ * finished at 8 817 characters with all six sections, where the provider default
+ * cut it mid-word at 7 734 with only the anchor section written. Two doublings
+ * from a 4 096 floor land exactly there, and going higher buys nothing — the
+ * escalation exists to clear hidden reasoning, not to enlarge the answer.
+ */
+const ESCALATED_CEILING_MAX = 32768;
+
 const ANCHOR_HEADING_RE = /^#{1,6}\s*逐字锚点/u;
 
 /** A line that already carries a pointer the model copied out of a child checkpoint. */

@@ -95,6 +95,34 @@ test("all attempts empty throws the original error after 1 + emptySummaryRetries
   assert.equal(stub.calls.length, 3, "1 attempt + the default emptySummaryRetries of 2");
 });
 
+test("an empty retry ESCALATES the completion ceiling instead of repeating it", async () => {
+  // Measured across 121 checkpoints: 10 fell back to the deterministic rung, at a
+  // rate of 27.3% when the target put the ceiling at the 4 096 floor versus 4.0%
+  // above it. A reasoning backend bills hidden reasoning against the same budget,
+  // so at 4 096 the thinking can consume all of it and the response finishes with
+  // zero text — and retrying at the SAME ceiling reproduces that by construction.
+  // The ladder used to do exactly that: three full-price calls, then a degraded body.
+  const stub = stubLlm([reasoningOnly]);
+  const p = prepared();
+  await assert.rejects(
+    summarizeLeaf({ llm: stub.llm }, resolveConfig({ emptySummaryRetries: 3 }), p, { session: p.session, options: {} }, 512, undefined),
+    /produced no text content/
+  );
+  const ceilings = stub.calls.map((call) => call.maxTokens);
+  assert.deepEqual(ceilings, [4096, 8192, 16384, 32768], "each retry doubles the cap, up to 32 768");
+});
+
+test("a successful retry reports the escalated ceiling it was sent with", async () => {
+  // The durable record states "the generation cap the summarize call sent". Once a
+  // retry escalates, that is no longer the base ceiling, and recording the base
+  // would under-report the number an operator reads to judge truncation risk.
+  const stub = stubLlm([reasoningOnly, () => withText("## 已完成\n- 压缩完成")]);
+  const p = prepared();
+  const result = await summarizeLeaf({ llm: stub.llm }, resolveConfig({}), p, { session: p.session, options: {} }, 512, undefined);
+  assert.deepEqual(stub.calls.map((call) => call.maxTokens), [4096, 8192], "the retry doubled");
+  assert.equal(result.maxTokens, 8192, "the record names the cap that produced the body");
+});
+
 test("a max-tokens truncation fails immediately: no retry is attempted", async () => {
   const stub = stubLlm([truncated, () => withText("never reached")]);
   const p = prepared();

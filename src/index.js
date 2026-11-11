@@ -626,7 +626,11 @@ export class LcmCompactionEngine extends CompactionEngine {
     let sentCeiling;
     try {
       result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
-      sentCeiling = requestCeilingTokens(budget);
+      // The cap the call actually SENT. It is no longer always the base ceiling:
+      // an empty response escalates it (see `ceilingFor`), and the record has to
+      // name the number in force or an operator judging "could this have been cut
+      // off?" reads the wrong one.
+      sentCeiling = result.maxTokens ?? requestCeilingTokens(budget);
     } catch (error) {
       // Two codes are summariser OUTCOMES rather than transport failures: an empty
       // response and a response cut at the provider's cap. A rate limit, a timeout

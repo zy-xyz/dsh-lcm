@@ -1,6 +1,6 @@
 {
   "name": "dsh-lcm",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "description": "Lossless Context Management compaction engine for the DeepSeek Harness — LLM leaf summaries over an append-only log, with lcm_expand/lcm_search recovery",
   "type": "module",
   "main": "src/index.js",
@@ -45,6 +45,7 @@
     "gate",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
     "config.example.yaml",
     "docs",
     "bench/REPORT.md",

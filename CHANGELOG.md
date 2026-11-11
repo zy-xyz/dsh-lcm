@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.16.0 — 2026-11-11 — an empty response escalates the ceiling, and a Chinese README
+
+### Fixed — the empty-response retry repeated the request that had just failed
+
+Measured across every checkpoint in this installation: 10 of 121 fell back to the
+deterministic rung, and the rate was not uniform.
+
+| span | checkpoints | fallback | rate |
+|---|---:|---:|---:|
+| ceiling pinned at the 4 096 floor | 22 | 6 | **27.3%** |
+| ceiling above it | 99 | 4 | **4.0%** |
+
+A reasoning backend bills hidden reasoning against the same completion budget, so
+at 4 096 the thinking can consume all of it and the response finishes with zero
+text. Retrying at the SAME ceiling reproduces that by construction — it is not a
+sampling accident — which is what the ladder did: three full-price calls, then a
+degraded body. The retry now doubles the cap on each attempt,
+
+```
+4096 -> 8192 -> 16384 -> 32768
+```
+
+capped at 32 768 (the number measured earlier: the same prompt with an explicit
+32 768 finished with all six sections where the provider default cut it
+mid-word). The first attempt still runs at the base ceiling, and the model stops
+well short of it when it answers, so the happy path costs nothing extra.
+
+The durable record now names the cap that actually produced the body rather than
+the base one — `compaction/summary.maxTokens` is documented as "the generation
+cap the summarize call sent", and after an escalation the base number would
+under-report it.
+
+### Added — `README.zh-CN.md`
+
+A full Chinese README, not a translated header: every section of the English one
+is present (the fidelity table, the configuration block including the sweep
+clocks, the semantic-search section, the leaf-cost projection, the tools table,
+install, design notes, limitations), with the measured numbers carried over
+unchanged. Both READMEs now carry a language switcher, and the Chinese file is
+in `files` so it ships.
+
+Tests: 289 → 291. Two new ones pin the escalation ladder and the reported
+ceiling; the property they protect is "an empty retry is a different request",
+which is exactly what was missing.
 ## 0.15.1 — 2026-11-10 — conform to the awesome-dsh-plugin submission rules
 
 Read `awesome-dsh-plugin/contributing.md` and checked dsh-lcm against every rule
