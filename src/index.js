@@ -18,7 +18,7 @@ import { CompactionEngine, ManualCompactionError } from "@deepseek-ai/dsh-compac
 import { CONTEXT_WINDOW_EXCEEDED_CODE, LlmError } from "@deepseek-ai/dsh-llm";
 import { assertNever } from "@deepseek-ai/dsh-util-values";
 import { COMPILER_REV, estimateEntryTokens, isCheckpointSource, renderEventBody } from "./compiler.js";
-import { resolveEventAt } from "./events.js";
+import { resolveEventAt, sessionEvents } from "./events.js";
 import { describeError, engineDebug } from "./debug.js";
 import {
   TargetPressureConfigError,
@@ -813,7 +813,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     void (async () => {
       try {
         const mined = readMined(this.config.assertionDir, session.id);
-        const pending = unminedCheckpoints(session.events ?? [], mined).slice(0, this.config.assertionMaxSourcesPerPass);
+        const pending = unminedCheckpoints(sessionEvents(session), mined).slice(0, this.config.assertionMaxSourcesPerPass);
         if (pending.length === 0) return;
         const deadline = AbortSignal.timeout(this.config.assertionTimeoutSeconds * 1000);
         let extracted = 0;
@@ -875,7 +875,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     const startedAt = Date.now();
     void (async () => {
       try {
-        const planned = planDayRollups(session.events ?? []);
+        const planned = planDayRollups(sessionEvents(session));
         if (planned.length === 0) return;
         const stored = readRollups(this.config.rollupDir, session.id);
         const pending = pendingRollups(planned, stored);
