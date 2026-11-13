@@ -97,12 +97,27 @@ const DEFAULT_SUMMARY_FLOOR_TOKENS = 2000;
 /**
  * Ceiling on one compaction's span, in tokens.
  *
- * Borrowed from lcm-x, which condenses in leaf chunks of `leaf_chunk_tokens`
- * (24 000) with a ~2 000-token target each and keeps every leaf. Compacting the
- * whole compactable prefix instead yields one ever-deeper checkpoint: the surface
- * never holds more than one, so the DAG has depth and no breadth, and a 400k-token
- * span is summarised in a single pass whose response the provider may truncate
- * before the sections are done. 24 000 also keeps each summariser prompt small.
+ * 24 000, lcm-x's `leaf_chunk_tokens`, and the number is a FIDELITY choice before
+ * it is a cost choice. The anchor list is capped at 120 lines, so anchor density
+ * per compacted node falls as the span grows:
+ *
+ * | span | nodes/leaf | anchors/node |
+ * |---|---|---|
+ * | 24 000 | ~90 | ~1.35 |
+ * | 96 000 | ~355 | ~0.34 |
+ *
+ * A 4x loss of pointers back into the log. The checkpoint carries `(seq N)` anchors
+ * and `lcm_search` can find what it omitted, but a node with no anchor is reachable
+ * only by searching — so widening the leaf trades recoverability for throughput.
+ *
+ * The throughput argument was measured and is real (wall time is bound by the
+ * ~2 000-token OUTPUT target, not the input: r=0.11 with output tokens, r=0.32 with
+ * input, so a 96k leaf reclaims 94 198 in 37.9 s against 21 479 in 32.3 s). It is
+ * also the wrong trade: the sweep budget can be paid in instalments, an anchor that
+ * was never written cannot be paid back later.
+ *
+ * So the budget is what gives, not the span — see `fullSweepMaxSeconds` and the
+ * idle continuation that resumes a partial sweep.
  */
 const DEFAULT_LEAF_SPAN_TOKENS = 24000;
 /**
@@ -134,23 +149,23 @@ const DEFAULT_FULL_SWEEP_MAX_PASSES = 12;
 /**
  * Wall-clock budget for one full sweep, in seconds.
  *
- * lcm-x uses 120 and we copied it, but the number was sized for ITS leaf cost and
- * its target. Neither holds here any more:
+ * lcm-x's number, and it stays: a longer budget was measured to be the wrong answer
+ * to a slow sweep. Four minutes inside one step is felt, and it buys nothing that a
+ * correctly sized target does not buy more cheaply.
  *
- *   target     0.25 x 750 000 = 187 500 tokens to reclaim
- *   per leaf   span 24 303 -> kept 2 083, i.e. ~22 200 reclaimed
- *   leaves     187 500 / 22 200 = 9
- *   leaf wall  median 19.9 s, p100 72.9 s (measured over 40 leaves)
+ * What it admits, measured over 173 leaves:
  *
- * So reaching the target costs ~180 s of leaf time at the median. A 120 s ceiling
- * cannot admit that many leaves, and the sweep would report `target_reached` never.
+ *   120 s - 10 s reserve = 110 s usable
+ *   one leaf = 32.3 s median (p100 72.9 s)
+ *   => 3 leaves per crossing, 64 437 tokens reclaimed
  *
- * 300 buys the 9 median leaves plus one slow one and the 10 s reserve. It is a real
- * cost — up to five minutes inside one step — which is why the soft target below
- * still lets an operator cap it, and why the sweep resumes on idle rather than
- * requiring one long block.
+ * paired with `fullSweepTargetShare` 0.08 so the target lands inside that budget.
+ * The pair is the design: the target says what "done" means and the clock bounds a
+ * sweep that cannot get there. Setting either without the other produced both
+ * failures this file records - a clock with no target stopped wherever it happened
+ * to be, and a target with an unreachable clock never reported done.
  */
-const DEFAULT_FULL_SWEEP_MAX_SECONDS = 300;
+const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
 /**
  * When the sweep stops STARTING leaves, leaving room to finish the one running.
  *
@@ -176,24 +191,30 @@ const DEFAULT_FULL_SWEEP_MAX_SECONDS = 300;
  */
 const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 0;
 /**
- * Fraction of the threshold that one sweep aims to drain, when the backlog is
- * bigger than one leaf.
+ * Fraction of the threshold that one sweep aims to drain.
  *
- * lcm-x bounds a sweep by a TARGET, not by the clock: `sweep_target_tokens =
- * min(leaf_chunk_tokens, threshold * 0.25)` (`compaction.py:2258-2260`) and the
- * loop runs until the summary prefix is under it. The clock is only what stops a
- * pass that cannot reach the target, which is why a 60 s soft target is enough
- * there — the target is what decides when to stop, the clock is the backstop.
+ * lcm-x bounds a sweep by a TARGET rather than by the clock (`sweep_target_tokens
+ * = min(leaf_chunk_tokens, threshold * 0.25)`, `compaction.py:2258-2260`). We had
+ * the clock alone, so a crossing stopped however much was owed — measured: a
+ * session at 705 375 tokens reported "compacted 3 times and still at 70%".
  *
- * We had the clock alone, so a crossing stopped after 3-4 leaves however much was
- * owed: measured on a session at 705 375 tokens, draining to the floor needs 26
- * leaves, and at 3-4 per crossing that is 8 crossings — which is exactly the
- * "compacted 3 times and still at 70%" report.
+ * 0.25 is lcm-x's share, but its target counts SUMMARY-PREFIX tokens, a much
+ * smaller quantity than the raw tokens this engine reclaims. Copied literally onto
+ * thresholdTokens it becomes 187 500 tokens, which at the measured 21 479 per leaf
+ * is 9 leaves and 291 s — a target the budget cannot reach and the operator does
+ * not want to wait for.
  *
- * 0.25 is lcm-x's share. Applied to `thresholdTokens`, so the target scales with
- * the window instead of being a second fixed number to keep in step.
+ * So the share is sized from the budget, not copied:
+ *
+ *   hard 120 s (−10 s reserve) / 32.3 s median leaf = 3 leaves
+ *   3 x 21 479 = 64 437 tokens = 0.086 of a 750 000 threshold
+ *
+ * 0.08 makes `target_reached` reachable inside one crossing, which is what makes
+ * the stop reason meaningful: a sweep now ends because it finished, not because a
+ * clock cut it off mid-backlog. Anything still owed is picked up by the next
+ * threshold crossing or by `_continueOnIdle`.
  */
-const DEFAULT_FULL_SWEEP_TARGET_SHARE = 0.25;
+const DEFAULT_FULL_SWEEP_TARGET_SHARE = 0.08;
 /**
  * Slice of the hard ceiling reserved for the commit and the re-measure.
  *

@@ -53,26 +53,30 @@
       # A "vectorEnabled: true" here looked enabled in --dump-config while
       # "search" quietly stayed lexical.
       config:
-        # A budget sized by the TARGET it has to reach, not copied from lcm-x.
+        # lcm-x's 120 s, and it stays. A longer budget was tried and rejected:
+        # four minutes inside one step is felt, and it bought nothing a correctly
+        # sized TARGET does not buy more cheaply.
         #
-        # The target is fullSweepTargetShare (default 0.25) of the threshold:
-        # 0.25 x 750 000 = 187 500 tokens. One leaf reclaims ~22 200, so reaching
-        # it costs 9 leaves, and the measured leaf wall is median 19.9 s / max 72.9 s
-        # (40 leaves) — about 180 s at the median.
+        # What it admits, measured over 173 leaves: 110 s usable after the reserve,
+        # 32.3 s median leaf, so 3 leaves and 64 437 tokens reclaimed per crossing.
+        fullSweepMaxSeconds: 120
+        # 0 DISABLES the soft stop, as lcm-x does for `force` (soft = 0.0, guarded
+        # by `soft > 0`).
         #
-        # lcm-x's 120 s was sized for ITS leaf cost and ITS target. Copied here it
-        # made target_reached unreachable: measured on a live sweep, one 72.9 s leaf
-        # ended the pass against a 187 500-token target having reclaimed 22 220.
-        fullSweepMaxSeconds: 300
-        # 0 DISABLES the soft stop, which is what lcm-x does for `force`
-        # (state.budget.soft = 0.0) and guards with `soft > 0`.
-        #
-        # The same measurement is why: a soft target SHORTER THAN ONE LEAF cannot
-        # bound a sweep, it ends it. 60 s against a 72.9 s leaf refused the second
-        # admission immediately, every time. A clock that can end a sweep before its
-        # target is reachable is the binding constraint, not a backstop — so the
-        # target ends a sweep and the hard ceiling bounds it.
+        # Measured reason: a soft target SHORTER THAN ONE LEAF cannot bound a sweep,
+        # it ends it. 60 s against a 72.9 s leaf refused the second admission
+        # immediately, every time.
         fullSweepSoftSeconds: 0
+        # How much one sweep aims to drain, as a share of the threshold.
+        #
+        # 0.08 x 750 000 = 60 000, which is INSIDE the 64 437 one crossing can
+        # actually reclaim. That is the point: the target has to be reachable or
+        # `target_reached` never fires and the stop reason is always a clock.
+        #
+        # lcm-x uses 0.25, but its target counts summary-prefix tokens; copied onto
+        # raw reclaimed tokens it becomes 187 500 = 9 leaves = 291 s, which is the
+        # budget the operator rejected.
+        fullSweepTargetShare: 0.08
         # Slice of the hard ceiling kept for the commit and re-measure after the
         # last leaf returns, lcm-x's finalize_reserve (theirs is clamp(p90, 5, 20)).
         fullSweepReserveSeconds: 10

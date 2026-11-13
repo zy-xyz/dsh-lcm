@@ -105,6 +105,17 @@ test("with the target unreachable, the clock is what stops it and the stop is re
   assert.ok(400000 - w.state.total < 24875, "and the target was not met");
 });
 
-test("fullSweepTargetShare ships at lcm-x's 0.25", () => {
-  assert.equal(resolveConfig({}).fullSweepTargetShare, 0.25, "lcm-x _DEFAULT_SWEEP_TARGET_THRESHOLD_SHARE");
+test("fullSweepTargetShare is sized from the budget, not copied from lcm-x", () => {
+  // lcm-x ships 0.25, but its target counts SUMMARY-PREFIX tokens. Copied onto raw
+  // reclaimed tokens it becomes 187 500 = 9 leaves = 291 s at the measured 21 479
+  // per leaf / 32.3 s each — a target the 120 s budget cannot reach.
+  //
+  // 0.08 x 750 000 = 60 000, inside the 64 437 one crossing reclaims in 110 s
+  // usable, so target_reached is reachable and the stop reason is meaningful.
+  const config = resolveConfig({});
+  assert.equal(config.fullSweepTargetShare, 0.08);
+  const threshold = Math.floor(Math.min(1000000 * config.thresholdRatio, 1000000 - config.maxTokens - config.headroomTokens));
+  const target = Math.floor(threshold * config.fullSweepTargetShare);
+  const leaves = Math.floor((config.fullSweepMaxSeconds - config.fullSweepReserveSeconds) / 32.3);
+  assert.ok(target <= leaves * 21479, `the target ${target} must fit in the ${leaves} leaves the budget admits`);
 });

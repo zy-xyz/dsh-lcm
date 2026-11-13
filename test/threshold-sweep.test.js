@@ -125,18 +125,25 @@ const HEADER = { config: { provider: "p", model: "m" }, tools: [] };
 // ── the sweep ──────────────────────────────────────────────────────────────
 
 test("a crossing keeps condensing after it drops below the threshold", async () => {
-  // 200 nodes x 1000 = 200 000 tokens against a 320 000 threshold... so shrink the
-  // window instead: threshold = window*0.8. At 400 000 that is 320 000, and the
-  // session is below it. Use a window the session CROSSES.
+  // 400 nodes x 1000 = 400 000 tokens against a 320 000 threshold: over.
   const { engine, calls, session } = sweepEngine({ nodeCount: 400, window: 400000 });
-  // 400 nodes x 1000 = 400 000 tokens >= 320 000 threshold: over.
   const result = await engine.compactPressure(agentOf(session), HEADER, undefined, false);
   assert.ok(result !== null, "the sweep returns the last checkpoint it wrote");
-  // One leaf is 4 nodes = 4000 tokens. Dropping from 400k to 320k needs 20 leaves,
-  // which exceeds the 12-pass budget, so the budget is what stops it -- and it must
-  // release far more than one.
+  // One leaf is 4 nodes = 4000 tokens. The target is 0.08 x 320 000 = 25 600, so
+  // about 7 leaves reach it — well past the first leaf that clears the threshold.
+  // The assertion is that it goes past clearing (the tick this key exists to
+  // remove) and then stops on the TARGET rather than on the pass budget.
   assert.ok(calls.length > 1, `a sweep releases more than one leaf (released ${calls.length})`);
-  assert.equal(calls.length, 12, "and stops at the pass budget, not at the first leaf below the threshold");
+  assert.ok(calls.length < 12, `the target stops it before the 12-pass budget (released ${calls.length})`);
+});
+
+test("a sweep with an unreachable target falls back to the pass budget", async () => {
+  // Same session, but the target is set above anything this fixture can reclaim,
+  // so the budget is what stops it — and it must still stop short of draining.
+  const { engine, calls, session } = sweepEngine({ nodeCount: 400, window: 400000, config: { fullSweepTargetShare: 0.9 } });
+  const result = await engine.compactPressure(agentOf(session), HEADER, undefined, false);
+  assert.ok(result !== null);
+  assert.equal(calls.length, 12, "the pass budget is the backstop when the target is out of reach");
 });
 
 test("the sweep stops at its pass budget and reports a partial, not a failure", async () => {
@@ -195,7 +202,7 @@ test("the sweep is on by default, and its clocks are the arithmetic this backend
   // lcm-x's 120 s was sized for its own leaf cost and its own target. Here the
   // target is 0.25 x 750 000 = 187 500 tokens, one leaf reclaims ~22 200, so
   // reaching it costs 9 leaves — ~180 s at the measured 19.9 s median.
-  assert.equal(config.fullSweepMaxSeconds, 300, "9 median leaves plus one slow one plus the reserve");
+  assert.equal(config.fullSweepMaxSeconds, 120, "lcm-x's number; the budget was not the problem, the target was");
   // 0 DISABLES the soft stop, and that is the fix for a measured failure: a 72.9 s
   // leaf against a 60 s soft target ended the sweep after ONE leaf, leaving a
   // 187 500-token target untouched. A clock that can end a sweep before its target
@@ -204,8 +211,8 @@ test("the sweep is on by default, and its clocks are the arithmetic this backend
   assert.equal(config.fullSweepReserveSeconds, 10, "midpoint of lcm-x's 5..20 finalize reserve");
   // The budget must still be able to hold the leaves the target implies, which is
   // the property the old 120/60 pair silently failed.
-  const leavesForTarget = Math.ceil((750000 * config.fullSweepTargetShare) / 22200);
-  assert.ok(config.fullSweepMaxSeconds - config.fullSweepReserveSeconds >= leavesForTarget * 19.9,
+  const leavesForTarget = Math.ceil((750000 * config.fullSweepTargetShare) / 21479);
+  assert.ok(config.fullSweepMaxSeconds - config.fullSweepReserveSeconds >= leavesForTarget * 32.3,
     `the hard budget must admit the ${leavesForTarget} leaves the target implies`);
   assert.equal(config.leafEstimateFloorSeconds, 15, "lcm-x's _THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS");
 });
