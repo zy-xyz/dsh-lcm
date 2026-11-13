@@ -29,7 +29,7 @@ import {
 } from "./config.js";
 import { LeafPrepCache, preparedLeafKey } from "./prep.js";
 import { appendAssertions, buildAssertionInstruction, markMined, parseAssertions, readMined, unminedCheckpoints } from "./assertion.js";
-import { appendRollup, buildRollupInstruction, buildRollupRecord, pendingRollups, planDayRollups, readRollups } from "./rollup.js";
+import { appendRollup, buildRollupInstruction, buildRollupRecord, isChronology, pendingRollups, planDayRollups, readRollups } from "./rollup.js";
 import { assertNoActiveCompaction, compactSurfaceRegion, prepareCompaction, selectCompactableRange, validateSurfaceRegion } from "./region.js";
 import { SUMMARY_SKELETON, summarizeLeaf } from "./summarize.js";
 
@@ -910,6 +910,19 @@ export class LcmCompactionEngine extends CompactionEngine {
             buildRollupInstruction(day.periodStart, budget));
           const text = summaryBodyOf(result).trim();
           if (text.length === 0) continue;
+          // A body that is not a chronology is not a rollup. Measured failure: a
+          // 3 070-token day came back as "I'll start by locating the checkpoint
+          // bodies." — 14 tokens, and nothing downstream noticed because the store
+          // accepted any non-empty text.
+          //
+          // Not stored, and not marked built either: `pendingRollups` decides that
+          // from the fingerprint, so leaving the day unwritten means the next idle
+          // retries it. That is the right answer for a bad answer — a retry costs
+          // one call, and storing prose costs every future reader.
+          if (!isChronology(text)) {
+            engineDebug(this.config, `rollup rejected ${day.periodStart}: answer is not a chronology (${text.length} chars)`);
+            continue;
+          }
           appendRollup(this.config.rollupDir, session.id, buildRollupRecord(day, text));
           built += 1;
           engineDebug(this.config, `rollup built ${day.periodStart} seqs=${prepared.shadowedSeqs.length} source=${day.tokens}`);

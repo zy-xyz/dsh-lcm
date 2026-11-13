@@ -9,10 +9,10 @@
  * The reference stores these in SQLite (`lcm_rollups`: period_kind, period_start,
  * scope, summary, status, source_fingerprint, lease) and rebuilds a period when
  * its source fingerprint changes. There is no database here, so the store is a
- * JSONL sidecar per session — durable, append-only, and outside the session log
- * for the reason that matters: a rollup committed AS a session event would become
- * a surface node and be compacted again, which is a loop that grows the thing it
- * is supposed to compress.
+ * JSONL sidecar per session — durable, and outside the session log for the reason
+ * that matters: a rollup committed AS a session event would become a surface node
+ * and be compacted again, which is a loop that grows the thing it is supposed to
+ * compress. One record per period, rewritten in place: see {@link appendRollup}.
  *
  * Only day periods are built. lcm-x also has week and month aggregates
  * (`lcm_rollup_sources` feeds them), and they exist to keep a year of history
@@ -135,14 +135,49 @@ export function readRollups(dir, sessionId) {
 }
 
 /**
- * Append one built rollup.
+ * Write one built rollup, replacing any earlier body for the same period.
+ *
+ * Append-only was wrong and the first real run proved it: the same day was written
+ * twice (17:16:45 with 1 330 tokens, 17:17:24 with 2 652) and BOTH bodies stayed in
+ * the file. `readRollups` kept the last, so the reader was right and the file was
+ * not — the superseded 1 330-token body was dead weight nobody would ever see.
+ *
+ * Rewriting the file keeps one record per period, which is what the format claims
+ * (`readRollups` dedupes by periodStart, so a duplicate was never meaningful).
+ *
+ * A period is at most a day, so the file is small and a whole-file rewrite is
+ * cheaper than the bookkeeping a log-structured store would need. Writes go to a
+ * temp file and rename, so a crash mid-write leaves the previous file intact.
  * @param dir - the rollup directory.
  * @param sessionId - the session being indexed.
  * @param record - what {@link buildRollupRecord} produced.
  */
 export function appendRollup(dir, sessionId, record) {
   fs.mkdirSync(dir, { recursive: true });
-  fs.appendFileSync(rollupPath(dir, sessionId), JSON.stringify(record) + "\n");
+  const file = rollupPath(dir, sessionId);
+  const kept = [];
+  let raw = "";
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    // First write for this session: nothing to preserve.
+  }
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) continue;
+    let existing;
+    try {
+      existing = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    // Drop the period being rewritten, and any malformed row with it.
+    if (existing?.periodStart === record.periodStart) continue;
+    kept.push(line);
+  }
+  kept.push(JSON.stringify(record));
+  const tmp = file + ".tmp";
+  fs.writeFileSync(tmp, kept.join("\n") + "\n");
+  fs.renameSync(tmp, file);
 }
 
 /**
@@ -176,15 +211,44 @@ export function pendingRollups(planned, stored) {
  */
 export function buildRollupInstruction(periodStart, targetTokens) {
   return [
-    "Summarize the checkpoint bodies below into a chronology of " + periodStart + " (UTC).",
+    "Write a chronology of " + periodStart + " (UTC) from the checkpoint bodies below.",
     "",
-    "Rules:",
-    "- About " + targetTokens + " tokens. Fewer is fine; do not pad.",
-    "- One line per distinct piece of work, in the order it happened.",
-    "- Start each line with the seq of the checkpoint it came from, as (seq N).",
-    "- Keep exact identifiers: paths, commands, host names, versions, error strings, numbers.",
-    "- No preamble, no closing summary, no praise of the work."
+    "Output format: one line per distinct piece of work, oldest first. Each line is",
+    "  (seq N) <what was done>",
+    "where N is the seq of the checkpoint the fact came from. Nothing else: no",
+    "heading, no introduction, no closing paragraph, no blank lines between entries.",
+    "",
+    "The first character of your answer must be \"(\". A reply that begins with any",
+    "sentence about the task, the bodies, or what you are about to do is wrong and",
+    "will be rejected — begin directly with the first chronology line.",
+    "",
+    "Length: about " + targetTokens + " tokens. Fewer is fine; do not pad.",
+    "Keep exact identifiers: paths, commands, host names, versions, error strings, numbers.",
+    "If the bodies contain nothing durable, answer with the single line: (seq 0) nothing durable"
   ].join("\n");
+}
+
+/**
+ * Whether a model answer is a chronology rather than talk about one.
+ *
+ * Measured failure this rejects: a 3 070-token day came back as the single
+ * sentence "I'll start by locating the checkpoint bodies." — the model describing
+ * the task instead of doing it. Fourteen tokens against a 5 000-token target, and
+ * nothing in the pipeline noticed.
+ *
+ * The test is structural, not stylistic: a chronology line starts with `(seq`.
+ * Anything else is not the requested shape, whatever it says.
+ * @param text - the model's answer.
+ * @returns true when the body is shaped like a chronology.
+ */
+export function isChronology(text) {
+  const lines = String(text ?? "").split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  if (lines.length === 0) return false;
+  const shaped = lines.filter((line) => /^\(seq \d+\)/u.test(line));
+  // At least one well-formed line and a STRICT majority of them: a body that is
+  // mostly prose with one stray citation is still prose, and `>=` would have let
+  // "Here is the timeline:\n(seq 1) did a thing" through as a chronology.
+  return shaped.length > 0 && shaped.length * 2 > lines.length;
 }
 
 /**
