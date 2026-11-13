@@ -79,9 +79,9 @@
     assertionExtraction: false # 抽取（主语, 谓语, 宾语）三元组；默认关，与 lcm-x 一致
     assertionMaxSourcesPerPass: 4
     # ── sweep 的两个时钟与收尾预留 ──
-    fullSweepMaxSeconds: 300       # 装得下 9 个叶（目标 187500 / 每叶 22200，中位 19.9s/叶）
+    fullSweepMaxSeconds: 120       # lcm-x 的 120s；110s 可用 / 32.3s 中位叶 = 3 个叶
     fullSweepSoftSeconds: 0        # 0 = 不设软目标；比目标还短的时钟会一个叶就掐死 sweep
-    fullSweepTargetShare: 0.25     # 一次 sweep 回收 threshold×此比例；时钟只是兜底
+    fullSweepTargetShare: 0.08     # 0.08×750000=60000，在一次穿越能压的 64437 之内
     fullSweepReserveSeconds: 10    # 硬上限里为“提交 + 重新测量”预留的一段
     leafEstimateFloorSeconds: 15   # 软目标判定用的叶耗时下限
 

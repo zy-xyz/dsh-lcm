@@ -130,9 +130,9 @@ Three bounds replace the threshold test:
 |---|---|---|
 | `thresholdFullSweep` | `true` | the sweep itself; `false` restores one-leaf-per-crossing |
 | `fullSweepMaxPasses` | `12` | lcm-x's constant; 12 × 24 000 is 28.8% of a 1M window |
-| `fullSweepMaxSeconds` | `300` | NOT lcm-x's 120. The target is 0.25 × 750 000 = 187 500 and one leaf reclaims ~22 200, so 9 leaves at the measured 19.9 s median is ~180 s. A 120 s ceiling makes `target_reached` unreachable by construction |
+| `fullSweepMaxSeconds` | `120` | lcm-x's number. 300 was tried and rejected: four minutes inside one step is felt, and a smaller target solves it more cheaply. 110 s usable / 32.3 s median leaf = 3 leaves |
 | `fullSweepSoftSeconds` | `0` | 0 disables the soft stop, as lcm-x does for `force`. Measured: one 72.9 s leaf against a 60 s soft target ended a sweep after one leaf with a 187 500-token target untouched — a clock shorter than one leaf is the binding constraint, not a backstop |
-| `fullSweepTargetShare` | `0.25` | what a sweep aims to reclaim: `threshold × 0.25` (lcm-x `_DEFAULT_SWEEP_TARGET_THRESHOLD_SHARE`). This is the stop condition; the soft clock only bounds a pass that cannot reach it |
+| `fullSweepTargetShare` | `0.08` | what a sweep aims to reclaim, sized so `target_reached` is REACHABLE: 0.08 × 750 000 = 60 000, inside the 64 437 one crossing reclaims. lcm-x's 0.25 counts summary-prefix tokens, not raw reclaimed tokens — copied literally it demands 9 leaves / 291 s |
 | `fullSweepReserveSeconds` | `10` | slice of the hard ceiling kept for the commit and re-measure, lcm-x's `finalize_reserve` (theirs is `clamp(p90, 5, 20)`) |
 | `leafEstimateFloorSeconds` | `15` | floor for the measured leaf cost the soft test uses, lcm-x's `_THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS` |
 

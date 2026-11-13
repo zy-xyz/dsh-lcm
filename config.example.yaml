@@ -112,9 +112,9 @@ fullSweepMaxPasses: 12
 # 抽干的总量不变：地板 = 系统提示 100541 + 保留尾部 149514 = 250055，
 # 从阈值 800000 抽到地板需 31 个叶、实测 17.3 秒/叶 → 合计 522 秒，
 # 现在分摊到几轮空闲 pass，而不是一次阻塞十分钟。
-# 300 不是 lcm-x 的 120：目标是 0.25×750000=187500，一个叶回收约 22200，需要 9 个叶，
-# 按实测中位 19.9s/叶算约 180s。120s 装不下这个目标，`target_reached` 永远到不了。
-fullSweepMaxSeconds: 300
+# 保持 lcm-x 的 120s。300s 试过并否决：单轮四分钟能感觉到，而它想解决的问题
+# 用「把目标改小」解决得更便宜。实测 110s 可用 / 32.3s 中位叶 = 3 个叶。
+fullSweepMaxSeconds: 120
 
 # 软目标（秒）：到了就不再**开**新叶，把剩下的一半留给正在跑的那个叶和收尾。
 # 默认 60，即硬上限的一半 —— 与 lcm-x 的 foreground_soft_seconds 一致。
@@ -123,14 +123,14 @@ fullSweepMaxSeconds: 300
 # 187500 的目标分文未动。比目标还短的时钟不是兜底，是主约束。
 fullSweepSoftSeconds: 0
 
-# 一次 sweep 要回收多少 = threshold × 这个比例（lcm-x _DEFAULT_SWEEP_TARGET_THRESHOLD_SHARE = 0.25）。
+# 一次 sweep 要回收多少 = threshold × 这个比例。默认 0.08。
 #
 # 这是「什么时候停」的主判据，软目标只是它的兜底 —— lcm-x 的循环条件是
 # sweep_summary_prefix_before > sweep_target_tokens，时钟只拦「到不了目标」的那一轮。
 #
 # 我们原先只有时钟：一次穿越 3-4 个叶就停，而一个 705,375 token 的会话抽到地板要 26 个叶，
 # 于是需要 8 次穿越 —— 这就是「压了 3 次还剩 70%」的算术来源。
-fullSweepTargetShare: 0.25
+fullSweepTargetShare: 0.08
 
 # 硬上限里为「提交 + 重新测量」预留的秒数。默认 10，取 lcm-x
 # finalize_reserve 区间（5–20）的中点：最后一个叶返回后还要落盘和重测，
