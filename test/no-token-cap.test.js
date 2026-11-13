@@ -145,14 +145,21 @@ test("reasoning-only responses that never produce text fail after the empty retr
   assert.equal(stub.calls.length, 3, "1 attempt + the default emptySummaryRetries of 2 — no budget escalation");
 });
 
-test("a truncated response that carries text still fails on the first attempt", async () => {
-  const stub = stubLlm([textMaxTokens, () => withText("never reached")]);
+test("a truncated response that carries text retries with a RAISED ceiling", async () => {
+  // This used to assert one call, on the argument that "a retry truncates
+  // identically at full price". That was true only while the ceiling was a
+  // constant; `ceilingFor` makes the retry a different request, so the argument now
+  // says the opposite. Measured live: three condensation passes truncated at the
+  // 4 096 floor and fell to the deterministic rung because this path gave up.
+  const stub = stubLlm([textMaxTokens]);
   const p = prepared();
   await assert.rejects(
     summarizeLeaf({ llm: stub.llm }, resolveConfig({}), p, { session: p.session, options: {} }, 512, undefined),
     (error) => error.code === "MAX_TOKENS" && /truncated at the token cap/.test(error.message)
   );
-  assert.equal(stub.calls.length, 1, "a deterministic truncation earns no retry");
+  const ceilings = stub.calls.map((call) => call.maxTokens);
+  assert.ok(stub.calls.length > 1, `a truncation earns retries at a bigger ceiling (got ${stub.calls.length})`);
+  assert.deepEqual(ceilings, [4096, 8192, 16384], "each retry doubles");
 });
 
 test("an error finish throws the transport failure without retrying", async () => {

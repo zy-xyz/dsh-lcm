@@ -428,18 +428,24 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
     ...(signal === undefined ? {} : { signal })
   });
 
-  // Retry policy. Two failures look alike on the wire (a finish chunk and
-  // nothing usable) but mean different things:
+  // Retry policy. Both failures come from the SAME ceiling being too small, and
+  // both are retried by RAISING it — the only difference is what the wire reports:
   //
-  //   empty — no text AND a clean finish: a sampling accident. Retried on the
-  //           SAME prompt and route, because changing either would make the one
-  //           reproducible failure unreproducible.
-  //   max-tokens — the provider's OWN default ceiling cut the completion. WITH
-  //           text that is deterministic truncation: an incomplete checkpoint,
-  //           and a retry truncates identically at full price. WITHOUT text it
-  //           is the empty case wearing the truncation finish reason, so it
-  //           falls through to the empty-response retry below — which is the
-  //           right handling, because there is no budget left to escalate.
+  //   empty      — no text, clean finish. A reasoning backend billed the whole
+  //                completion budget to hidden thinking.
+  //   max-tokens — the ceiling cut it. WITH text this used to throw immediately,
+  //                on the argument that "a retry truncates identically at full
+  //                price" — true only while the ceiling was a constant. Once the
+  //                retry raises it, the same argument says retry: a bigger cap is
+  //                exactly what the response needed.
+  //
+  // Measured on the first live sweep after `ceilingFor` landed: three consecutive
+  // condensation passes (4 checkpoint bodies, ~9 400-token spans) fell to the
+  // deterministic rung with `maxTokens` unrecorded, i.e. they truncated at the
+  // 4 096 floor and were never given the escalation the empty path already had.
+  //
+  // `ceilingFor` stops growing at ESCALATED_CEILING_MAX, so the ladder terminates
+  // even when the model would overrun at every size.
   const emptyRetries = config.emptySummaryRetries;
   let attempts = 0;
   let raw;
@@ -463,10 +469,20 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
       .map((block) => block.text)
       .join("\n")
       .trim();
-    if (finish.kind === "max-tokens" && produced.length > 0) throw maxTokensTruncation();
+    // A truncated body is not usable as-is, but the SAME escalation that rescues an
+    // empty response rescues it: the ceiling was too small. Only give up when the
+    // ceiling can no longer grow, which is what bounds the ladder.
+    if (finish.kind === "max-tokens" && produced.length > 0) {
+      const next = ceilingFor(attempts + 1);
+      if (attempts <= emptyRetries && next > sentCeiling) {
+        engineDebug(config, `summarize truncated at ${sentCeiling}; retrying at ${next} attempt=${attempts}/${emptyRetries + 1}`);
+        continue;
+      }
+      throw maxTokensTruncation();
+    }
     if (produced.length > 0) {
       usage = assembler.usage;
-      if (attempts > 1) engineDebug(config, `summarize empty-response retry succeeded attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind}`);
+      if (attempts > 1) engineDebug(config, `summarize retry succeeded attempt=${attempts}/${emptyRetries + 1} finish=${finish.kind} ceiling=${sentCeiling}`);
       break;
     }
     engineDebug(

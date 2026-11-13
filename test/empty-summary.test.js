@@ -123,14 +123,32 @@ test("a successful retry reports the escalated ceiling it was sent with", async 
   assert.equal(result.maxTokens, 8192, "the record names the cap that produced the body");
 });
 
-test("a max-tokens truncation fails immediately: no retry is attempted", async () => {
-  const stub = stubLlm([truncated, () => withText("never reached")]);
+test("a truncation retries with a bigger ceiling, and a retry that fits is used", async () => {
+  // The ceiling was too small — that is the whole failure — so the retry raises it
+  // instead of resending the same request. Measured live: three condensation passes
+  // truncated at the 4 096 floor and fell to the deterministic rung because this
+  // path threw on the first attempt while the empty path already escalated.
+  const stub = stubLlm([truncated, () => withText("## 已完成\n- 压缩完成")]);
+  const p = prepared();
+  const result = await summarizeLeaf({ llm: stub.llm }, resolveConfig({}), p, { session: p.session, options: {} }, 512, undefined);
+  assert.deepEqual(stub.calls.map((call) => call.maxTokens), [4096, 8192], "the retry doubled");
+  assert.match(result.summary[0].text, /压缩完成/u, "and its answer is kept");
+  assert.equal(result.maxTokens, 8192, "the record names the cap that produced the body");
+});
+
+test("a truncation that never fits still fails, once the ceiling stops growing", async () => {
+  const stub = stubLlm([truncated]);
   const p = prepared();
   await assert.rejects(
-    summarizeLeaf({ llm: stub.llm }, resolveConfig({}), p, { session: p.session, options: {} }, 512, undefined),
+    summarizeLeaf({ llm: stub.llm }, resolveConfig({ emptySummaryRetries: 2 }), p, { session: p.session, options: {} }, 512, undefined),
     (error) => error.code === "MAX_TOKENS" && /truncated at the token cap/.test(error.message)
   );
-  assert.equal(stub.calls.length, 1, "a deterministic truncation must not be re-sampled");
+  // 1 + emptySummaryRetries calls, the same budget the empty path gets:
+  // 4 096 -> 8 192 -> 16 384, then the retries are spent and it throws. Two bounds
+  // exist — the retry budget and ESCALATED_CEILING_MAX — and the retry budget is
+  // the one that binds here, because three doublings of 4 096 stop well short of
+  // 32 768.
+  assert.deepEqual(stub.calls.map((call) => call.maxTokens), [4096, 8192, 16384], "the same retry budget as the empty path");
 });
 
 test("emptySummaryRetries: 0 disables the retry", async () => {
