@@ -132,22 +132,25 @@ const DEFAULT_THRESHOLD_FULL_SWEEP = true;
  */
 const DEFAULT_FULL_SWEEP_MAX_PASSES = 12;
 /**
- * Wall-clock budget for one full sweep, in seconds (lcm-x's
- * `_THRESHOLD_FULL_SWEEP_MAX_SECONDS`).
+ * Wall-clock budget for one full sweep, in seconds.
  *
- * The pass budget alone is not a spend guard when one pass is slow: 12 leaves at
- * 30 s each is 6 minutes inside a single step, and the session stays blocked for
- * all of it. lcm-x bounds the same sweep at 120 s and records
- * `time_budget_exhausted` as a partial stop, letting the next turn continue.
+ * lcm-x uses 120 and we copied it, but the number was sized for ITS leaf cost and
+ * its target. Neither holds here any more:
  *
- * 120 s matches lcm-x exactly, and it is affordable because a sweep no longer has
- * to finish in one turn: `_continueOnIdle` resumes it when the agent goes idle,
- * which is the gap lcm-x fills with its bounded background pass. Measured on this
- * backend a leaf costs ~17.3 s, so 120 s starts six or seven of them, and the
- * floor (system prompt 100 541 + retained tail 149 514 = 250 055) is reached over
- * a few idle passes instead of one long block.
+ *   target     0.25 x 750 000 = 187 500 tokens to reclaim
+ *   per leaf   span 24 303 -> kept 2 083, i.e. ~22 200 reclaimed
+ *   leaves     187 500 / 22 200 = 9
+ *   leaf wall  median 19.9 s, p100 72.9 s (measured over 40 leaves)
+ *
+ * So reaching the target costs ~180 s of leaf time at the median. A 120 s ceiling
+ * cannot admit that many leaves, and the sweep would report `target_reached` never.
+ *
+ * 300 buys the 9 median leaves plus one slow one and the 10 s reserve. It is a real
+ * cost — up to five minutes inside one step — which is why the soft target below
+ * still lets an operator cap it, and why the sweep resumes on idle rather than
+ * requiring one long block.
  */
-const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
+const DEFAULT_FULL_SWEEP_MAX_SECONDS = 300;
 /**
  * When the sweep stops STARTING leaves, leaving room to finish the one running.
  *
@@ -157,14 +160,21 @@ const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
  * remaining half pays for the leaf already in flight plus the finalize.
  * Same ratio, same numbers: 60 of 120.
  *
- * This is the BACKSTOP, not the stop. What normally ends a productive sweep is
- * `fullSweepTargetShare`: once a pass has reclaimed its share of the threshold it
- * is done, and the clock only bounds a pass that cannot get there. Reading the two
- * together matters — with the clock alone a crossing stopped after 3-4 leaves
- * however much was owed, which is why a session at 705 375 tokens reported
- * "compacted 3 times and still at 70%".
+ * 0 DISABLES IT, and that is the default. lcm-x treats 0 the same way (`soft > 0`
+ * guards the test, and `force` sets it to 0 outright). The reason is arithmetic:
+ * a leaf here costs a median of 19.9 s but has been measured at 72.9 s, so a 60 s
+ * soft target can be SHORTER THAN ONE LEAF. When that happens the estimate after
+ * the first leaf exceeds the whole budget, the second admission is refused, and the
+ * sweep ends after exactly one leaf — measured live on this session: one 72.9 s leaf
+ * out of 469 470 tokens reclaimed 22 220 against a 187 500 target, then stopped.
+ *
+ * A clock that can end a sweep before its target is reachable is not a backstop, it
+ * is the binding constraint wearing a backstop's name. So the HARD ceiling is what
+ * bounds a sweep, and `fullSweepTargetShare` is what ends it. An operator who wants
+ * a short leash sets this to a value at least a few leaf-costs long; 0 keeps the
+ * sweep going until the target or the hard clock, whichever comes first.
  */
-const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 60;
+const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 0;
 /**
  * Fraction of the threshold that one sweep aims to drain, when the backlog is
  * bigger than one leaf.

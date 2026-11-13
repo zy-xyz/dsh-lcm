@@ -191,19 +191,22 @@ test("the sweep is on by default, and its clocks are the arithmetic this backend
   const config = resolveConfig({});
   assert.equal(config.thresholdFullSweep, true, "lcm-x's threshold_full_sweep_enabled defaults True");
   assert.equal(config.fullSweepMaxPasses, 12, "lcm-x's _THRESHOLD_FULL_SWEEP_MAX_PASSES");
-  // Both clocks are lcm-x's own numbers. That is affordable only because a sweep
-  // no longer has to finish in one turn: `_continueOnIdle` resumes it on idle,
-  // which is the gap lcm-x fills with its bounded background pass. The drain
-  // arithmetic still says the whole job is 31 leaves / 522 s, so it now takes a
-  // few idle passes instead of one ten-minute block.
-  assert.equal(config.fullSweepMaxSeconds, 120, "lcm-x's _THRESHOLD_FULL_SWEEP_MAX_SECONDS");
-  // The SOFT target keeps half the ceiling, the same ratio lcm-x uses (60 of
-  // 120): a leaf started near the end would otherwise overrun the ceiling.
-  assert.equal(config.fullSweepSoftSeconds, 60, "half the hard ceiling, lcm-x's foreground_soft_seconds");
-  // The reserve is what makes the hard clock keepable: the last leaf still has to
-  // commit and re-measure after it returns.
+  // These are NOT lcm-x's numbers, and the difference is measured, not stylistic.
+  // lcm-x's 120 s was sized for its own leaf cost and its own target. Here the
+  // target is 0.25 x 750 000 = 187 500 tokens, one leaf reclaims ~22 200, so
+  // reaching it costs 9 leaves — ~180 s at the measured 19.9 s median.
+  assert.equal(config.fullSweepMaxSeconds, 300, "9 median leaves plus one slow one plus the reserve");
+  // 0 DISABLES the soft stop, and that is the fix for a measured failure: a 72.9 s
+  // leaf against a 60 s soft target ended the sweep after ONE leaf, leaving a
+  // 187 500-token target untouched. A clock that can end a sweep before its target
+  // is reachable is the binding constraint, not a backstop.
+  assert.equal(config.fullSweepSoftSeconds, 0, "0 = bounded by the target and the hard clock only");
   assert.equal(config.fullSweepReserveSeconds, 10, "midpoint of lcm-x's 5..20 finalize reserve");
-  assert.ok(config.fullSweepSoftSeconds < config.fullSweepMaxSeconds, "the soft target must leave room to finish");
+  // The budget must still be able to hold the leaves the target implies, which is
+  // the property the old 120/60 pair silently failed.
+  const leavesForTarget = Math.ceil((750000 * config.fullSweepTargetShare) / 22200);
+  assert.ok(config.fullSweepMaxSeconds - config.fullSweepReserveSeconds >= leavesForTarget * 19.9,
+    `the hard budget must admit the ${leavesForTarget} leaves the target implies`);
   assert.equal(config.leafEstimateFloorSeconds, 15, "lcm-x's _THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS");
 });
 

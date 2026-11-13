@@ -1226,7 +1226,12 @@ export class LcmCompactionEngine extends CompactionEngine {
       ? Math.floor(spec.thresholdTokens * this.config.fullSweepTargetShare)
       : 0;
     const sweepFloorTokens = sweep ? measurement.totalTokens - sweepTargetTokens : 0;
-    const softDeadline = sweep ? sweepStart + this.config.fullSweepSoftSeconds * 1000 : Number.POSITIVE_INFINITY;
+    // `0` disables the soft stop entirely (lcm-x guards its own test with `soft > 0`
+    // and `force` sets it to 0). Without this, 0 would evaluate to `sweepStart` and
+    // refuse the second leaf on every sweep — the opposite of what 0 means.
+    const softDeadline = sweep && this.config.fullSweepSoftSeconds > 0
+      ? sweepStart + this.config.fullSweepSoftSeconds * 1000
+      : Number.POSITIVE_INFINITY;
     // How long one leaf takes, so "is there room for another one" is a question
     // the loop can answer. Seeded from the config floor and replaced by the
     // measured wall of each pass: lcm-x uses the p90 of the last eight calls per
