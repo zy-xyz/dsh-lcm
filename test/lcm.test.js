@@ -489,13 +489,16 @@ test("resolveCompactSpec honours the routed output reservation (audit D2)", () =
 });
 
 test("an explicit maxTokens bounds the summary TARGET (audit D3)", () => {
-  const tight = resolveConfig({ maxTokens: 2048 });
-  // scaled target for a 100k span would be 12000, but maxTokens bounds it.
-  // This is a target the instruction names, not a request cap (see no-token-cap).
-  assert.equal(resolveSummaryBudget(tight, 100000), 2048);
-
+  // The shipping target is a flat 2 000 (floor == cap, lcm-x leaf_target_*), so a
+  // maxTokens ABOVE it changes nothing; one BELOW it is the binding bound.
   const loose = resolveConfig({});
-  assert.equal(resolveSummaryBudget(loose, 100000), Math.min(16384, 12000));
+  assert.equal(resolveSummaryBudget(loose, 100000), 2000, "the fixed lcm-x target");
+
+  const tight = resolveConfig({ maxTokens: 1024 });
+  assert.equal(resolveSummaryBudget(tight, 100000), 1024, "maxTokens under the target binds");
+
+  const floored = resolveConfig({ maxTokens: 800, summaryFloorTokens: 2000 });
+  assert.equal(resolveSummaryBudget(floored, 100000), 800, "maxTokens wins over the floor");
 
   // The target never goes below 1, so a pathological config still yields a prompt.
   const tiny = resolveConfig({ maxTokens: 1, summaryFloorTokens: 512 });

@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.20.0 — 2026-11-13 — a fixed 2 000-token leaf target, like the reference
+
+Asked why the Hermes machine spends longer compacting and removes more per pass,
+with both sides on defaults. Measured `~/.hermes/lcm.db` and found the answer: the
+two defaults are not the same number.
+
+```python
+# lcm-x config.py:1487-1489
+leaf_target_ratio: float = 0.20
+leaf_target_min_tokens: int = 2_000
+leaf_target_max_tokens: int = 2_000    # floor == cap
+
+# engine.py:386
+return min(cap, max(floor, int(source_tokens * ratio)))
+#    = min(2000, max(2000, span*0.2)) = 2000, the ratio can never win
+```
+
+So every reference leaf summarises to exactly 2 000 tokens regardless of input.
+Ours scaled at 12%, which keeps proportionally MORE the bigger the span:
+
+| span | target before | target now | ratio before | ratio now |
+|---:|---:|---:|---:|---:|
+| 24 000 | 2 880 | 2 000 | 8.3:1 | 12.0:1 |
+| 57 000 | 6 840 | 2 000 | 8.3:1 | 28.5:1 |
+| 157 000 | 16 384 | 2 000 | 9.6:1 | 78.5:1 |
+
+### Changed — `summaryRatio` 0.12 → 0.20, `summaryFloorTokens` 512 → 2000, `checkpointCap` 16384 → 2000
+
+Floor equal to cap collapses `clamp(span × ratio, floor, cap)` to one number, which
+is exactly what `min(2000, max(2000, span × 0.20))` computes. Both constants are
+commented as deliberately equal so the next reader does not "fix" a ratio that
+cannot win.
+
+Measured leaf sources in the reference DB: 22 at 10–24k, 58 at 24–50k, 32 at
+50–100k, 18 at 100k+ (mean 56 981). Its longer wall clock follows from that input
+size, not from a different budget — and a 24k span now compressing at 12:1 instead
+of 8.3:1 is the other half of what the user noticed.
+
+### Consequence worth naming
+
+`summaryFloorTokens` is also the selector's span floor, doubled: with 2 000, a span
+at or below 4 000 is refused because a 2 000-token summary cannot shrink it below
+half. That is a real behaviour change for small sessions — two fixtures pinned the
+old floor explicitly (the sweep clocks test and the model-switch test), because both
+measure something other than the floor and a 4 000-token fixture leaf would
+otherwise be refused before the thing under test ran.
+
+Tests: 305, one rewritten (D3 now asserts the flat target and that `maxTokens`
+under it binds), two fixtures pinned.
 ## 0.19.0 — 2026-11-13 — the other three background passes, with lcm-x's switches
 
 The previous entry added leaf preparation and said it was the only background pass

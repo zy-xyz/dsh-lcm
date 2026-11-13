@@ -71,10 +71,29 @@ const DEFAULT_HEADROOM_TOKENS = 65536;
  * compactable band that 0.16 gave away.
  */
 const DEFAULT_RETAIN_RATIO = 0.05;
-/** Summary budget as a fraction of the shadowed span (LCM-only). */
-const DEFAULT_SUMMARY_RATIO = 0.12;
-/** Lower bound for one summary, so a small span still yields a usable note. */
-const DEFAULT_SUMMARY_FLOOR_TOKENS = 512;
+/**
+ * Summary budget as a fraction of the shadowed span.
+ *
+ * lcm-x sets `leaf_target_ratio` 0.20 but its floor and cap are BOTH 2 000
+ * (`config.py:1487-1489`), so the ratio can never win: every leaf summary is
+ * exactly 2 000 tokens no matter how big the source. The three keys here reproduce
+ * that exactly — 0.20 / floor 2 000 / cap 2 000 — because a fixed target is the
+ * behaviour being matched, not a rounding of it.
+ *
+ * What it costs: a 24 000-token leaf now keeps 2 000 instead of 2 880, and a span
+ * from 24 000 to 157 000 compresses at 12:1 to 78:1 rather than a flat 8:1. Detail
+ * that no longer fits is still reachable — the checkpoint carries `(seq N)` anchors
+ * into the append-only log and `lcm_search` scans what it omitted — which is the
+ * same recovery path the reference relies on.
+ */
+const DEFAULT_SUMMARY_RATIO = 0.2;
+/**
+ * Lower bound for one summary, lcm-x `leaf_target_min_tokens`.
+ *
+ * Also the selector's span floor, doubled: a span at or below twice this could
+ * never shrink to under half, so the call is refused before it is paid for.
+ */
+const DEFAULT_SUMMARY_FLOOR_TOKENS = 2000;
 /**
  * Ceiling on one compaction's span, in tokens.
  *
@@ -178,17 +197,20 @@ const DEFAULT_CONDENSATION_FANIN = 4;
  */
 const DEFAULT_STALL_COOLDOWN_MS = 60000;
 /**
- * Ceiling on one summary's TARGET length.
+ * Ceiling on one summary's TARGET length: lcm-x `leaf_target_max_tokens`.
  *
- * Not a request cap and not a post-hoc gate: the summarizer sends no
- * `maxTokens`, so a model that overshoots this is accepted as-is. The real
- * bound on a compaction transaction is the shrink guarantee in
- * `region.compactSurfaceRegion` (`framedSummaryTokenCount < shadowedRouteTokenCount`),
- * which a cap cannot substitute for — and which a truncation at this number
- * would actively work against, because truncation cuts the tail of the anchor
- * list, the one section that carries fidelity.
+ * Equal to the floor on purpose. `resolveSummaryBudget` clamps to
+ * `[summaryFloorTokens, checkpointCap]`, so floor == cap collapses the whole
+ * formula to that one number — which is exactly what the reference computes
+ * (`min(2000, max(2000, span * 0.20))`). A `ratio` that cannot win looks like a
+ * bug until you read both constants together; this comment exists so the next
+ * reader does not "fix" it.
+ *
+ * Not a request cap and not a post-hoc gate: a model that overshoots is accepted
+ * as-is. The real bound on a compaction transaction is the shrink guarantee in
+ * `region.compactSurfaceRegion` (`framedSummaryTokenCount < shadowedRouteTokenCount`).
  */
-const DEFAULT_CHECKPOINT_CAP = 16384;
+const DEFAULT_CHECKPOINT_CAP = 2000;
 /**
  * Whether a leaf summary anchor list gets `(seq N)` pointers.
  *

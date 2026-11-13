@@ -64,21 +64,28 @@ modelPolicies: []
 
 # ── LCM 专有键（只增行为，不改共享键的含义）────────────────────────────
 
-# 单次摘要目标长度 = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)
-# 让压缩比在不同窗口下保持稳定，而不是被 headroomTokens 单点决定。
-# 默认 0.12（≈ 8:1）。同样是「目标」，不是请求上限。
-summaryRatio: 0.12
+# 单次摘要目标长度 = clamp(shadowed × summaryRatio, summaryFloorTokens, checkpointCap)。
+#
+# 三个默认值 0.20 / 2000 / 2000 一起看才成立：lcm-x 的 leaf_target_ratio 是 0.20，
+# 但 leaf_target_min_tokens 和 leaf_target_max_tokens **都**是 2000，所以比例永远不生效，
+# 每个叶摘要恒为 2000 token —— min(2000, max(2000, span×0.2)) = 2000。
+# 这里逐字复现该行为，因为要对齐的是「固定目标」本身，不是它的近似。
+#
+# 代价：24k 跨度从保留 2880 降到 2000；24k→157k 的跨度压缩比从恒定 8:1 变成 12:1→78:1。
+# 装不下的细节仍可达 —— checkpoint 带 (seq N) 锚点指向只追加的日志，lcm_search 能扫它省略的内容。
+summaryRatio: 0.20
 
-# 摘要预算下限，保证小片段也能产出可用摘要。默认 512。
-# 注意它和 maxTokens/checkpointCap 的先后：target = min(cap, max(floor, span×ratio)) 再取 min(maxTokens)。
-# 也就是说 maxTokens 是最后一道上限，把它设到 floor 以下时 floor 会被压下去（maxTokens: 100 + floor: 512 → target 100）。
-# 想要 floor 生效，就别把 maxTokens 设得比它小。
-summaryFloorTokens: 512
+# 摘要预算下限（lcm-x leaf_target_min_tokens）。默认 2000。
+# 它同时是选择器的跨度下限的两倍：跨度 ≤ 2×floor 时摘要不可能压到一半以下，
+# 所以那次调用在付钱之前就被拒绝。floor=2000 意味着跨度 ≤ 4000 不会被压。
+# target = min(cap, max(floor, span×ratio))，最后再取 min(maxTokens)。
+summaryFloorTokens: 2000
 
-# 单次摘要目标长度的上限。默认 16384。
+# 单次摘要目标长度的上限（lcm-x leaf_target_max_tokens）。默认 2000，与 floor 相等。
+# floor == cap 会把整个公式塌缩成那一个数 —— 看着像 bug，其实是原版行为，别“修”它。
 # 注意：它**不是**事后闸门 —— 模型超出这个数照样接受。真正兜住这次事务的是
 # region 层的 shrink 保证（framed 摘要必须小于被替换的区间）。
-checkpointCap: 16384
+checkpointCap: 2000
 
 # 一次压缩最多吃掉多少 token。默认 24000（借自 lcm-x 的 leaf_chunk_tokens）。
 # 为什么要有这个上限：整段一次压完时，单次响应常被 provider 的上限截断，

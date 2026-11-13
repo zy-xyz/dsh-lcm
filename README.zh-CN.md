@@ -65,9 +65,9 @@
     modelPolicies: []
     auto: true
     # ── 仅 LCM ──
-    summaryRatio: 0.12         # 摘要目标 = clamp(跨度*ratio, 下限, 上限)
-    summaryFloorTokens: 512
-    checkpointCap: 16384
+    summaryRatio: 0.20         # 下限==上限==2000，所以目标恒为 2000
+    summaryFloorTokens: 2000   # lcm-x leaf_target_min_tokens
+    checkpointCap: 2000        # lcm-x leaf_target_max_tokens（相等是有意的）
     leafSpanTokens: 24000      # 一次压缩最多吃这么多；48000 可把调用次数减半
     condensationFanin: 4       # 同深度 checkpoint 凑够这个数就合并成上一层的一个节点
     anchorPointers: true       # 事后给每条逐字锚点补 (seq N)

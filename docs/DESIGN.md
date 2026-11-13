@@ -641,9 +641,9 @@ configuration drops in without noticing (`src/config.js:188`).
 | `thresholdRatio` | 0.75 | lcm-x's `context_threshold`, not basic's 0.8. On a 1M window this moves the trigger from 800 000 to 750 000 — 50 000 tokens of request headroom bought back for compacting slightly earlier |
 | `headroomTokens` | 65536 | inherited from basic, unchanged |
 | `retainRatio` | 0.05 | between basic's 0.16 and lcm-x's 24 000 tokens. The band arithmetic on a 1M window: 0.16 → tail 149 514 / floor 250 055 / compactable 499 945; **0.05 → 46 723 / 147 264 / 602 736**; 0.026 (lcm-x) → 24 296 / 124 837 / 625 163 |
-| `summaryRatio` | 0.12 | target is 12% of the span, clamped below |
-| `summaryFloorTokens` | 512 | a small span still gets a usable target, and this is also the selector's floor |
-| `checkpointCap` | 16384 | ceiling on the target, not a request cap |
+| `summaryRatio` | 0.20 | with floor == cap == 2 000 it cannot win, which is the point: every leaf target is a flat 2 000 (lcm-x `leaf_target_ratio`) |
+| `summaryFloorTokens` | 2000 | lcm-x `leaf_target_min_tokens`; also the selector's span floor doubled, so a span ≤ 4 000 is refused before a call is paid for |
+| `checkpointCap` | 2000 | lcm-x `leaf_target_max_tokens`, equal to the floor on purpose — that equality is what makes the target fixed |
 | `leafSpanTokens` | 24000 | one leaf per compaction, oldest first (section 2) |
 | `condensationFanin` | 4 | same-depth run that folds into one node (section 3) |
 | `stallCooldownMs` | 60000 | hold deadline for a stalled session (section 5); 0 disables |
@@ -669,11 +669,20 @@ candidates. 0.75 buys 50 000 tokens of headroom on the request; 0.05 buys back
 103 000 tokens of compactable band without going all the way to lcm-x's 24 000,
 which this engine's coarser leaf summaries are not tuned for.
 
-The rest of the formula, unchanged:
+The target formula keeps its shape but its three constants now reproduce the
+reference exactly:
 
 ```
-targetTokens     = min(clamp(shadowed * summaryRatio, summaryFloorTokens, checkpointCap), maxTokens)
+targetTokens = min(clamp(shadowed * 0.20, 2000, 2000), maxTokens)
+             = 2000                     for any span, which is lcm-x's
+                                        min(2000, max(2000, span * 0.20))
 ```
+
+Floor equal to cap is what collapses it. A ratio that cannot win reads like a
+bug, so the reason is recorded here and in `src/config.js`: the reference fixes
+its leaf target at 2 000 by setting `leaf_target_min_tokens` and
+`leaf_target_max_tokens` to the same number, and matching the behaviour means
+matching the equality rather than approximating it with a ratio.
 
 `maxTokens` defaults to `headroomTokens`, which keeps basic's key working: a
 configuration that set it still gets that number as what the model is asked to aim

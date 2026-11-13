@@ -112,9 +112,9 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     modelPolicies: []
     auto: true
     # ── LCM-only ──
-    summaryRatio: 0.12         # summary target = clamp(span*ratio, floor, cap)
-    summaryFloorTokens: 512
-    checkpointCap: 16384
+    summaryRatio: 0.20         # floor == cap == 2000, so the target is a flat 2000
+    summaryFloorTokens: 2000   # lcm-x leaf_target_min_tokens
+    checkpointCap: 2000        # lcm-x leaf_target_max_tokens (equal on purpose)
     leafSpanTokens: 24000      # one compaction summarises at most this much; 48000 halves the call count
     condensationFanin: 4       # same-depth checkpoints merge into one higher node at this fanin
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor

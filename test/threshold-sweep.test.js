@@ -83,6 +83,12 @@ function sweepEngine(opts = {}) {
   const config = resolveConfig({
     leafSpanTokens: 4000,
     retainTokens: 1000,
+    // These tests are about the sweep clocks and the pass budget, not about the
+    // span floor. The shipping floor is 2 000 (lcm-x leaf_target_min_tokens), and
+    // the selector refuses a span at or below TWICE it — which is exactly this
+    // fixture's 4 000-token leaf. Pin the old floor so the fixture keeps measuring
+    // what its name says.
+    summaryFloorTokens: 512,
     thresholdRatio: 0.8,
     thresholdFullSweep: true,
     fullSweepMaxPasses: 12,

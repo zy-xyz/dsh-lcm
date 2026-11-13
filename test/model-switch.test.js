@@ -113,7 +113,12 @@ function buildWorld(windowOf, turns = 3) {
   // the seeded three-turn history prices at 974. The default 65536 headroom would
   // make every window in this fixture unreachable, and the point of the test is the
   // switch decision, not the pressure arithmetic (test/min-span.test.js owns that).
-  const engine = new LcmCompactionEngine(ctx, { auto: true, headroomTokens: 128 });
+  // `summaryFloorTokens` is pinned to the historical 512 on purpose. The shipping
+  // floor is 2 000 (lcm-x `leaf_target_min_tokens`) and the selector refuses a span
+  // at or below TWICE it, so this fixture — whose whole history prices under 2 000 —
+  // would have nothing compactable and the switch would be refused for the span
+  // floor rather than for the window it is meant to test.
+  const engine = new LcmCompactionEngine(ctx, { auto: true, headroomTokens: 128, summaryFloorTokens: 512 });
   const agent = { session: session, options: {} };
   return { session: session, ctx: ctx, meter: meter, engine: engine, agent: agent, llmCalls: llmCalls };
 }
