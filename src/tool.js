@@ -24,9 +24,18 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, recallSession, resolveRecallBudget, resolveRecallReference } from "./recall.js";
 import { DEFAULT_MAX_SEARCH_HITS, HYBRID_RANK_MODES, InvalidSearchPatternError, RANK_MODES, searchSessionHybrid } from "./search.js";
 import { resolveVectorConfig } from "./vectors.js";
+import { embedBackfill } from "./command.js";
 
 const name = "tool-lcm-expand";
 const inject = ["tools"];
+/**
+ * Texts one incremental embedding pass may embed. Two batches of 32.
+ *
+ * lcm-x schedules "one batch per corpus" in its background pass; the bound exists
+ * so an idle moment cannot turn into a full backfill competing with live requests.
+ * `/lcm-embed backfill --apply` remains the way to drain a corpus deliberately.
+ */
+const DEFAULT_EMBED_MAINTENANCE_LIMIT = 64;
 
 /** Validate and default the tool plugin configuration. */
 function resolveConfig(config = {}) {
@@ -37,12 +46,14 @@ function resolveConfig(config = {}) {
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("ToolRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("ToolRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("ToolRecallConfig: legacyNames must be a boolean");
+  const embedMaintenanceLimit = config.embedMaintenanceLimit ?? DEFAULT_EMBED_MAINTENANCE_LIMIT;
+  if (typeof embedMaintenanceLimit !== "number" || !Number.isInteger(embedMaintenanceLimit) || embedMaintenanceLimit <= 0) throw new Error("ToolRecallConfig: embedMaintenanceLimit must be a positive integer");
   if (typeof rank !== "string" || !RANK_MODES.includes(rank) && !HYBRID_RANK_MODES.includes(rank)) {
     throw new Error("ToolRecallConfig: rank must be one of " + [...RANK_MODES, ...HYBRID_RANK_MODES].join(", ") + " (vector/hybrid need vectorEnabled)");
   }
   // The vector keys ride along so the search handler can read them; they are
   // inert unless `vectorEnabled` is true and `rank` names a vector mode.
-  return { maxRecallTokens, maxSearchHits, legacyNames, rank, ...resolveVectorConfig(config) };
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank, embedMaintenanceLimit, ...resolveVectorConfig(config) };
 }
 
 /**
@@ -77,6 +88,7 @@ const Config = z.object({
   maxSearchHits: z.number().step(1).min(1),
   maxRecallTokens: z.number().step(1).min(1),
   legacyNames: z.boolean(),
+  embedMaintenanceLimit: z.number().step(1).min(1),
   // The vector block rides along for the search handler; inert unless
   // `vectorEnabled` is true and `rank` names a vector mode (same as
   // resolveConfig, which spreads these through resolveVectorConfig).
@@ -246,10 +258,48 @@ function defineSearchTool(resolved, toolName = "lcm_search") {
  */
 function apply(ctx, config) {
   const resolved = resolveConfig(config);
+  // Sessions with an incremental embedding pass in flight.
+  const embedPasses = new Set();
   ctx.effect(() => {
     const disposers = [
       ctx.tools.register(defineRecallTool(resolved, "lcm_expand")),
-      ctx.tools.register(defineSearchTool(resolved, "lcm_search"))
+      ctx.tools.register(defineSearchTool(resolved, "lcm_search")),
+      // ── incremental embedding maintenance ────────────────────────────────
+      // lcm-x schedules one bounded pass per corpus in the background after a leaf
+      // is published and on session bind, "active exactly when embeddings_enabled".
+      // The gate here is the same switch that turns the semantic route on, and the
+      // bound is `embedMaintenanceLimit` — one or two batches, not a corpus drain.
+      //
+      // Why it belongs on THIS row: the engine row deliberately carries no vector
+      // keys (nothing in the compaction path reads them), so the row that owns the
+      // embedding configuration is the only one that can decide this.
+      //
+      // Why idle: a pass embeds texts the search route may look up, and doing that
+      // mid-turn would compete with the request for the endpoint.
+      ctx.on("agent/status", ({ agent, status }) => {
+        if (status !== "idle") return;
+        // resolveVectorConfig renames the switch to `enabled` when it freezes the
+        // record, so the resolved field is not `vectorEnabled`. Reading the wrong one
+        // here would make the pass dead code that still logs nothing.
+        if (resolved.enabled !== true) return;
+        const session = agent?.session;
+        if (session === undefined) return;
+        if (embedPasses.has(session.id)) return;
+        embedPasses.add(session.id);
+        void (async () => {
+          try {
+            const { report } = await embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit });
+            if (report.embedded > 0) {
+              ctx.logger.info(`lcm-embed maintenance: embedded ${report.embedded} text(s), ${report.remaining} remaining`);
+            }
+          } catch (error) {
+            // No turn to fail: the next idle tries again, and the cache is the state.
+            ctx.logger.warn(`lcm-embed maintenance skipped: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            embedPasses.delete(session.id);
+          }
+        })();
+      })
     ];
     // The original backend's names stay available so anything already written
     // against `recall` / `search` keeps working after switching backends.

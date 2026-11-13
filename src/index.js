@@ -28,6 +28,8 @@ import {
   resolveTargetPolicy
 } from "./config.js";
 import { LeafPrepCache, preparedLeafKey } from "./prep.js";
+import { appendAssertions, buildAssertionInstruction, markMined, parseAssertions, readMined, unminedCheckpoints } from "./assertion.js";
+import { appendRollup, buildRollupInstruction, buildRollupRecord, pendingRollups, planDayRollups, readRollups } from "./rollup.js";
 import { assertNoActiveCompaction, compactSurfaceRegion, prepareCompaction, selectCompactableRange, validateSurfaceRegion } from "./region.js";
 import { SUMMARY_SKELETON, summarizeLeaf } from "./summarize.js";
 
@@ -351,6 +353,16 @@ export class LcmCompactionEngine extends CompactionEngine {
     anchorPointers: z.boolean(),
     emptySummaryRetries: compactionRetriesSchema,
     backgroundLeafPrep: z.boolean(),
+    temporalRollups: z.boolean(),
+    rollupBuildsPerPass: fullSweepMaxPassesSchema,
+    rollupMaintenanceBudgetMs: fullSweepMaxPassesSchema,
+    rollupDailyTargetTokens: fullSweepMaxPassesSchema,
+    rollupDailyMaxTokens: fullSweepMaxPassesSchema,
+    rollupDir: z.string(),
+    assertionExtraction: z.boolean(),
+    assertionMaxSourcesPerPass: fullSweepMaxPassesSchema,
+    assertionTimeoutSeconds: fullSweepMaxPassesSchema,
+    assertionDir: z.string(),
     debug: z.boolean(),
     debugLogPath: z.string(),
     // ── optional vector recall layer (inert unless vectorEnabled) ──
@@ -397,6 +409,10 @@ export class LcmCompactionEngine extends CompactionEngine {
   leafPrep = new LeafPrepCache();
   /** Sessions with a background prep pass in flight, same role as `idlePasses`. */
   prepPasses = new Set();
+  /** Sessions with a rollup maintenance pass in flight. */
+  rollupPasses = new Set();
+  /** Sessions with an assertion extraction pass in flight. */
+  assertionPasses = new Set();
   overflowAgents = new WeakMap();
   constructor(ctx, config = {}) {
     super(ctx);
@@ -501,6 +517,12 @@ export class LcmCompactionEngine extends CompactionEngine {
       // Prep is the opposite case to the idle sweep: it runs when the session is
       // still UNDER threshold, so the next crossing has a leaf already written.
       if (status === "idle") this._prepareNextLeaf(agent);
+      // Rollups are time-indexed, not pressure-driven: idle is the only moment they
+      // can be built without competing with a request for the model.
+      if (status === "idle") this._maintainRollups(agent);
+      // Assertions are derived from checkpoints, so they run after the rollup pass and
+      // never compete with it: both are idle-only and both are bounded.
+      if (status === "idle") this._extractAssertions(agent);
     }));
     // A model switch is a pressure event: the next request runs on a DIFFERENT
     // window, and if the new one is smaller the history that comfortably fit the
@@ -767,6 +789,124 @@ export class LcmCompactionEngine extends CompactionEngine {
       rawOutput: result.rawOutput
     };
   }
+  /**
+   * Mine the checkpoints that have no assertions yet. lcm-x's
+   * `assertion_extraction_enabled`, off by default.
+   *
+   * A checkpoint is prose, so "which host did we flash and when" is a reading
+   * comprehension task over a paragraph. An assertion is the same fact as a triple
+   * with the seq it came from, which makes that question a scan over short rows and
+   * keeps the citation: every row names the checkpoint that `lcm_expand` can open.
+   *
+   * Bounded on both axes like the reference (`assertion_max_sources_per_pass: 4`,
+   * `assertion_extraction_timeout_seconds: 30`), and it stamps the deadline into the
+   * abort signal so a slow model cannot hold the pass open past its budget.
+   * @param agent - the agent that just went idle.
+   */
+  _extractAssertions(agent) {
+    if (this.config.assertionExtraction !== true) return;
+    const session = agent?.session;
+    if (session === undefined) return;
+    if (this.assertionPasses.has(session.id)) return;
+    this.assertionPasses.add(session.id);
+    void (async () => {
+      try {
+        const mined = readMined(this.config.assertionDir, session.id);
+        const pending = unminedCheckpoints(session.events ?? [], mined).slice(0, this.config.assertionMaxSourcesPerPass);
+        if (pending.length === 0) return;
+        const deadline = AbortSignal.timeout(this.config.assertionTimeoutSeconds * 1000);
+        let extracted = 0;
+        for (const event of pending) {
+          if (deadline.aborted) break;
+          const body = (event.data?.summary ?? []).map((block) => block.text ?? "").join("");
+          if (body.trim().length === 0) continue;
+          const prepared = {
+            session,
+            shadowedSeqs: [event.seq],
+            shadowedTokenCount: estimateEntryTokens(body),
+            start: event.seq,
+            end: event.seq
+          };
+          const result = await summarizeLeaf(this.ctx, this.config, prepared, agent, 1024, deadline, undefined,
+            buildAssertionInstruction(event.seq));
+          const rows = parseAssertions(summaryBodyOf(result), event.seq);
+          appendAssertions(this.config.assertionDir, session.id, rows);
+          // An empty extraction is a real answer, so it is recorded in the LEDGER,
+          // not as a sentinel row: a fake fact in the store would surface in every
+          // search, and leaving the seq unrecorded would pay for the same nothing on
+          // every idle.
+          markMined(this.config.assertionDir, session.id, event.seq, rows.length);
+          extracted += 1;
+        }
+        if (extracted > 0) engineDebug(this.config, `assertions mined from ${extracted} checkpoint(s)`);
+      } catch (error) {
+        engineDebug(this.config, `assertion pass skipped: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.assertionPasses.delete(session.id);
+      }
+    })();
+  }
+
+  /**
+   * Build the day rollups that are missing or stale, bounded by the two knobs
+   * lcm-x uses: `rollupBuildsPerPass` and `rollupMaintenanceBudgetMs`.
+   *
+   * A checkpoint has no time semantics: its seq range describes WHICH span it
+   * replaced, not when the work happened. So "what did we do on the 11th" cannot be
+   * answered by walking the DAG — it needs a view over a time slice, which is what
+   * this builds and stores in `rollupDir`.
+   *
+   * Off is available (`temporalRollups: false`) but the default is on, matching
+   * `temporal_rollups_enabled: bool = True`. The pass is bounded on both axes, so
+   * "on" costs at most two calls and five seconds per idle, only when a day is
+   * actually new or its checkpoints changed.
+   * @param agent - the agent that just went idle.
+   */
+  _maintainRollups(agent) {
+    if (this.config.temporalRollups !== true) return;
+    const session = agent?.session;
+    if (session === undefined) return;
+    if (this.rollupPasses.has(session.id)) return;
+    this.rollupPasses.add(session.id);
+    const startedAt = Date.now();
+    void (async () => {
+      try {
+        const planned = planDayRollups(session.events ?? []);
+        if (planned.length === 0) return;
+        const stored = readRollups(this.config.rollupDir, session.id);
+        const pending = pendingRollups(planned, stored);
+        if (pending.length === 0) return;
+        const header = session.requestHeader();
+        const target = header?.config;
+        if (target === undefined || target.provider.length === 0 || target.model.length === 0) return;
+        let built = 0;
+        for (const day of pending) {
+          if (built >= this.config.rollupBuildsPerPass) break;
+          if (Date.now() - startedAt >= this.config.rollupMaintenanceBudgetMs) break;
+          const budget = Math.min(this.config.rollupDailyTargetTokens, this.config.rollupDailyMaxTokens);
+          const prepared = {
+            session,
+            shadowedSeqs: day.entries.map((entry) => entry.seq),
+            shadowedTokenCount: day.tokens,
+            start: day.entries[0].seq,
+            end: day.entries[day.entries.length - 1].seq
+          };
+          const result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, undefined, undefined,
+            buildRollupInstruction(day.periodStart, budget));
+          const text = summaryBodyOf(result).trim();
+          if (text.length === 0) continue;
+          appendRollup(this.config.rollupDir, session.id, buildRollupRecord(day, text));
+          built += 1;
+          engineDebug(this.config, `rollup built ${day.periodStart} seqs=${prepared.shadowedSeqs.length} source=${day.tokens}`);
+        }
+      } catch (error) {
+        engineDebug(this.config, `rollup pass skipped: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.rollupPasses.delete(session.id);
+      }
+    })();
+  }
+
   /**
    * Pre-compute the leaf the NEXT compaction would need, while the session is idle
    * and still below its threshold. lcm-x's `background_leaf_prep_enabled`, off by

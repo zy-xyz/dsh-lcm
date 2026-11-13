@@ -219,6 +219,47 @@ const DEFAULT_EMPTY_SUMMARY_RETRIES = 2;
  * crossing; both are defensible, so it is a switch rather than a decision.
  */
 const DEFAULT_BACKGROUND_LEAF_PREP = false;
+/**
+ * Build day-level temporal rollups in the background. On by default, like lcm-x
+ * (`temporal_rollups_enabled: bool = True`).
+ *
+ * This one ships enabled because it is cheap relative to what it buys: a pass is
+ * bounded by `rollupMaintenanceBudgetMs` and `rollupBuildsPerPass`, and the
+ * result is the only index that can answer "what did we do on the 11th" without
+ * scanning a log whose checkpoints have no time semantics of their own.
+ */
+const DEFAULT_TEMPORAL_ROLLUPS = true;
+/** How many rollups one maintenance pass may build (lcm-x ships 2). */
+const DEFAULT_ROLLUP_BUILDS_PER_PASS = 2;
+/** Wall-clock budget for one rollup pass (lcm-x ships 5 000 ms). */
+const DEFAULT_ROLLUP_BUDGET_MS = 5000;
+/** Target size of one day rollup (lcm-x ships 5 000). */
+const DEFAULT_ROLLUP_TARGET_TOKENS = 5000;
+/** Hard bound on one day rollup (lcm-x ships 15 000). */
+const DEFAULT_ROLLUP_MAX_TOKENS = 15000;
+/**
+ * Where rollup sidecars live. Outside the session log on purpose: a rollup
+ * committed AS a session event would become a surface node and be compacted
+ * again, which grows the thing it is meant to compress.
+ */
+const DEFAULT_ROLLUP_DIR = ".lcm-rollups";
+/**
+ * Extract typed assertions from checkpoints. Off by default, like lcm-x
+ * (`assertion_extraction_enabled: bool = False`; its store switch
+ * `assertions_enabled` is also `False`).
+ *
+ * A checkpoint is prose; an assertion is the same fact as a triple with the seq
+ * it came from. It costs a model call per checkpoint and the store has to be kept
+ * in step with the log, so nothing else depends on it: `lcm_search` and
+ * `lcm_expand` work whether or not one assertion has ever been extracted.
+ */
+const DEFAULT_ASSERTION_EXTRACTION = false;
+/** Checkpoints one extraction pass may read (lcm-x ships 4). */
+const DEFAULT_ASSERTION_MAX_SOURCES_PER_PASS = 4;
+/** Wall-clock budget for one extraction pass (lcm-x ships 30 s). */
+const DEFAULT_ASSERTION_TIMEOUT_SECONDS = 30;
+/** Where assertion sidecars live; outside the session log for the same reason as rollups. */
+const DEFAULT_ASSERTION_DIR = ".lcm-assertions";
 
 /** Fields shared by top-level defaults and exact-target overrides (== basic). */
 const POLICY_KEYS = [
@@ -256,6 +297,16 @@ const LCM_KEYS = [
   "anchorPointers",
   "emptySummaryRetries",
   "backgroundLeafPrep",
+  "temporalRollups",
+  "rollupBuildsPerPass",
+  "rollupMaintenanceBudgetMs",
+  "rollupDailyTargetTokens",
+  "rollupDailyMaxTokens",
+  "rollupDir",
+  "assertionExtraction",
+  "assertionMaxSourcesPerPass",
+  "assertionTimeoutSeconds",
+  "assertionDir",
   "debug",
   "debugLogPath",
   "vectorEnabled",
@@ -367,6 +418,16 @@ export function resolveConfig(config = {}) {
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
     backgroundLeafPrep: config.backgroundLeafPrep ?? DEFAULT_BACKGROUND_LEAF_PREP,
+    temporalRollups: config.temporalRollups ?? DEFAULT_TEMPORAL_ROLLUPS,
+    rollupBuildsPerPass: config.rollupBuildsPerPass ?? DEFAULT_ROLLUP_BUILDS_PER_PASS,
+    rollupMaintenanceBudgetMs: config.rollupMaintenanceBudgetMs ?? DEFAULT_ROLLUP_BUDGET_MS,
+    rollupDailyTargetTokens: config.rollupDailyTargetTokens ?? DEFAULT_ROLLUP_TARGET_TOKENS,
+    rollupDailyMaxTokens: config.rollupDailyMaxTokens ?? DEFAULT_ROLLUP_MAX_TOKENS,
+    rollupDir: config.rollupDir ?? DEFAULT_ROLLUP_DIR,
+    assertionExtraction: config.assertionExtraction ?? DEFAULT_ASSERTION_EXTRACTION,
+    assertionMaxSourcesPerPass: config.assertionMaxSourcesPerPass ?? DEFAULT_ASSERTION_MAX_SOURCES_PER_PASS,
+    assertionTimeoutSeconds: config.assertionTimeoutSeconds ?? DEFAULT_ASSERTION_TIMEOUT_SECONDS,
+    assertionDir: config.assertionDir ?? DEFAULT_ASSERTION_DIR,
     debug,
     debugLogPath,
     // ── optional vector recall (inert unless vectorEnabled) ──
@@ -558,6 +619,16 @@ function validatePolicy(config, name) {
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);
   if (config.backgroundLeafPrep !== undefined && typeof config.backgroundLeafPrep !== "boolean") throw new Error(`${name}.backgroundLeafPrep must be a boolean`);
+  if (config.temporalRollups !== undefined && typeof config.temporalRollups !== "boolean") throw new Error(`${name}.temporalRollups must be a boolean`);
+  if (config.rollupBuildsPerPass !== undefined) assertPositiveInteger(`${name}.rollupBuildsPerPass`, config.rollupBuildsPerPass);
+  if (config.rollupMaintenanceBudgetMs !== undefined) assertPositiveInteger(`${name}.rollupMaintenanceBudgetMs`, config.rollupMaintenanceBudgetMs);
+  if (config.rollupDailyTargetTokens !== undefined) assertPositiveInteger(`${name}.rollupDailyTargetTokens`, config.rollupDailyTargetTokens);
+  if (config.rollupDailyMaxTokens !== undefined) assertPositiveInteger(`${name}.rollupDailyMaxTokens`, config.rollupDailyMaxTokens);
+  if (config.rollupDir !== undefined) assertNonEmptyString(`${name}.rollupDir`, config.rollupDir);
+  if (config.assertionExtraction !== undefined && typeof config.assertionExtraction !== "boolean") throw new Error(`${name}.assertionExtraction must be a boolean`);
+  if (config.assertionMaxSourcesPerPass !== undefined) assertPositiveInteger(`${name}.assertionMaxSourcesPerPass`, config.assertionMaxSourcesPerPass);
+  if (config.assertionTimeoutSeconds !== undefined) assertPositiveInteger(`${name}.assertionTimeoutSeconds`, config.assertionTimeoutSeconds);
+  if (config.assertionDir !== undefined) assertNonEmptyString(`${name}.assertionDir`, config.assertionDir);
   if (config.debug !== undefined && typeof config.debug !== "boolean") throw new Error(`${name}.debug must be a boolean`);
   if (config.debugLogPath !== undefined && typeof config.debugLogPath !== "string") throw new Error(`${name}.debugLogPath must be a string`);
   if (config.vectorEnabled !== undefined && typeof config.vectorEnabled !== "boolean") throw new Error(`${name}.vectorEnabled must be a boolean`);

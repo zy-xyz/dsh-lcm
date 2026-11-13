@@ -150,6 +150,26 @@ emptySummaryRetries: 2
 # 主要收益——一次 sweep 用尽预算，agent 转 idle 时接着压。开它是用空闲调用换更便宜的阈值穿越。
 backgroundLeafPrep: false
 
+# ── 时间 rollup（lcm-x temporal_rollups_enabled，默认开）──
+# 按 UTC 天把 checkpoint 汇总成时间线，回答「11 号那天做了什么」。
+# checkpoint 本身没有时间语义（seq 区间说的是替换了哪段，不是何时发生），
+# 所以这个索引无法用 DAG 推导，只能单独建。
+temporalRollups: true
+rollupBuildsPerPass: 2          # 一次维护最多建几个（lcm-x rollup_builds_per_pass）
+rollupMaintenanceBudgetMs: 5000 # 一次维护的墙钟预算（lcm-x rollup_maintenance_budget_ms）
+rollupDailyTargetTokens: 5000
+rollupDailyMaxTokens: 15000
+rollupDir: ".lcm-rollups"       # JSONL 边车，不写进会话日志（否则会成为 surface 节点再被压缩）
+
+# ── 断言抽取（lcm-x assertion_extraction_enabled，默认关）──
+# 把 checkpoint 里的持久事实抽成（主语, 谓语, 宾语, seq）三元组，查询走 lcm_assert。
+# 每个 checkpoint 一次模型调用，且存储需要与日志保持同步，所以默认关；
+# lcm_search / lcm_expand 不依赖它。
+assertionExtraction: false
+assertionMaxSourcesPerPass: 4   # lcm-x assertion_extraction_max_sources_per_pass
+assertionTimeoutSeconds: 30     # lcm-x assertion_extraction_timeout_seconds
+assertionDir: ".lcm-assertions"
+
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 

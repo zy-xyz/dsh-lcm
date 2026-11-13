@@ -239,7 +239,7 @@ function maxTokensTruncation() {
  *   therefore byte-identical to the historical prompt) on every other attempt.
  * @returns summary blocks plus provenance and usage.
  */
-export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, signal, instructionSuffix) {
+export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, signal, instructionSuffix, instructionOverride) {
   signal?.throwIfAborted();
   const { session } = prepared;
 
@@ -317,7 +317,13 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   // model without being the thing that cuts it off. It still earns its place — a
   // model told "roughly 2400 tokens" writes a 2400-token summary instead of a
   // 400-token stub or a 40k-token transcript.
-  const instructionText = buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth);
+  // An override replaces the leaf contract entirely; the rollup pass uses it to ask
+  // for a chronology instead of the six-section checkpoint. Nothing else does: the
+  // leaf contract is what makes a checkpoint recoverable, so only a caller with a
+  // DIFFERENT job (indexing a day, not freeing context) should move off it.
+  const instructionText = typeof instructionOverride === "string" && instructionOverride.length > 0
+    ? instructionOverride
+    : buildInstruction(budgetTokens, prepared.shadowedTokenCount, priorDepth);
   const instruction = createUserMessage({
     content: [
       {

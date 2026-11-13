@@ -120,6 +120,11 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
     emptySummaryRetries: 2     # retry a response with no text block (a truncated-but-textual one is never retried)
     backgroundLeafPrep: false  # pre-compute the next leaf while idle; off, like lcm-x
+    temporalRollups: true      # day-level timeline index; ON, like lcm-x
+    rollupBuildsPerPass: 2
+    rollupMaintenanceBudgetMs: 5000
+    assertionExtraction: false # mine (subject, predicate, object) triples; off, like lcm-x
+    assertionMaxSourcesPerPass: 4
 
 # The semantic route lives on the SEARCH row, not on the engine. The engine
 # declares and resolves the vector keys but the compaction path never reads one,

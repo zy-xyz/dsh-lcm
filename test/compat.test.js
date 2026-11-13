@@ -27,7 +27,11 @@ function recorder() {
         return typeof dispose === "function" ? dispose : () => {};
       },
       tools: { register: (definition) => { tools.push(definition.name); return () => {}; } },
-      commands: { register: (definition) => { commands.push(definition.name); return () => {}; } }
+      commands: { register: (definition) => { commands.push(definition.name); return () => {}; } },
+      // The tool row also registers the idle embedding-maintenance listener, so a
+      // recorder without `on` fails before any registration is asserted.
+      on: () => () => {},
+      logger: { info: () => {}, warn: () => {} }
     }
   };
 }
@@ -93,7 +97,7 @@ test("a tool definition can be built under either name", () => {
 // schema, so a key that one layer knows and the other does not fails here.
 
 /** The keys both rows read. Declared once; every other list is derived from it. */
-const LEXICAL_KEYS = ["legacyNames", "maxRecallTokens", "maxSearchHits", "rank"];
+const LEXICAL_KEYS = ["embedMaintenanceLimit", "legacyNames", "maxRecallTokens", "maxSearchHits", "rank"];
 
 /**
  * The `vector*` keys the tool row spreads from `resolveVectorConfig`, derived
@@ -163,9 +167,14 @@ test("the command row declares every key its resolveConfig reads, both command f
   // changes a setting, then reverts the embed row to the default `search`
   // family, which re-registers /lcm-search on a row where the search row
   // already owns the name and the command registry aborts.
+  // `embedMaintenanceLimit` is NOT here: it belongs to the tool row, which is the
+  // row that schedules the embedding pass. The command row only formats a manual
+  // backfill the operator asked for, so a limit it never reads must not be declared
+  // — an extra key is the mirror of a missing one, and simplify() would keep it.
+  const commandLexical = LEXICAL_KEYS.filter((key) => key !== "embedMaintenanceLimit");
   assert.deepEqual(
     Object.keys(command.Config.dict).sort(),
-    [...LEXICAL_KEYS, "commandSet", ...VECTOR_KEYS].sort()
+    [...commandLexical, "commandSet", ...VECTOR_KEYS].sort()
   );
   // The measured difference between the two schemastery entry points, which is
   // why an undeclared key is a silent time bomb rather than a hard failure.

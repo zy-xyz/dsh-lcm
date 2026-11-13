@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.19.0 — 2026-11-13 — the other three background passes, with lcm-x's switches
+
+The previous entry added leaf preparation and said it was the only background pass
+that matters. That was true for COMPACTION and false as an inventory: lcm-x runs
+four background jobs, and three of them are now here with their switches copied
+from `config.py`.
+
+| pass | lcm-x switch | default | this engine |
+|---|---|---|---|
+| leaf preparation | `background_leaf_prep_enabled` | `False` | `backgroundLeafPrep` `false` |
+| temporal rollups | `temporal_rollups_enabled` | **`True`** | `temporalRollups` **`true`** |
+| embedding maintenance | `embeddings_enabled` | off | gated on `vectorEnabled` |
+| assertion extraction | `assertion_extraction_enabled` | `False` | `assertionExtraction` `false` |
+
+### Added — temporal rollups (on)
+
+A checkpoint has no time semantics: its seq range says WHICH span it replaced, not
+when the work happened. So "what did we do on the 11th" cannot be derived from the
+DAG — it needs a view over a time slice. Day periods only; lcm-x also aggregates
+week and month, which exist to keep a year queryable in one call, and `lcm_search`
+over the whole log already does that here.
+
+The store is a JSONL sidecar in `rollupDir`, not a session event. A rollup appended
+to the log would become a surface node and be compacted again, growing the thing it
+exists to compress. Staleness is computed, not stored: `rollupFingerprint` covers
+the seqs and their token counts, so a day whose checkpoints were replaced by a
+deeper one is rebuilt and a day that merely got older is not.
+
+Bounds are lcm-x's: `rollupBuildsPerPass: 2`, `rollupMaintenanceBudgetMs: 5000`,
+`rollupDailyTargetTokens: 5000`, `rollupDailyMaxTokens: 15000`.
+
+### Added — incremental embedding maintenance (gated on `vectorEnabled`)
+
+lcm-x schedules one bounded pass per corpus "active exactly when
+`embeddings_enabled`". The gate here is the switch that already turns the semantic
+route on, and the bound is `embedMaintenanceLimit` (64, two batches) so an idle
+moment cannot become a full backfill competing with a live request.
+
+It lives on the TOOL row, not the engine row, because the engine row deliberately
+carries no vector keys — nothing in the compaction path reads one, so the row that
+owns the embedding configuration is the only one that can decide this.
+
+### Added — assertion extraction (off)
+
+A checkpoint is prose; an assertion is the same fact as a triple with the seq it
+came from. `parseAssertions` accepts a fenced JSON array, drops rows with a blank
+field, and returns `[]` for anything unparseable rather than throwing — derived
+data must not fail the pass that produced it.
+
+Rows and the mined ledger are SEPARATE files. A checkpoint that yielded nothing is
+a real answer, and recording it as a sentinel row would put a fake fact in the
+store and surface it in every search; leaving the seq unrecorded would instead pay
+a model call for the same nothing on every idle. So `markMined` writes to
+`<session>.mined.jsonl` and `readAssertions` never sees it.
+
+Bounds are lcm-x's: `assertionMaxSourcesPerPass: 4`,
+`assertionTimeoutSeconds: 30` — stamped into an `AbortSignal.timeout` so a slow
+model cannot hold the pass past its budget.
+
+### Fixed while wiring it
+
+- `resolveVectorConfig` renames its switch to `enabled` when it freezes the record,
+  so a gate reading `resolved.vectorEnabled` would have been dead code that also
+  logged nothing. The embedding pass reads `enabled`.
+- `embedMaintenanceLimit` had schema validation but no runtime validation, so the
+  two layers disagreed on every bad value. Both refuse now, which is what the
+  shared-surface test exists to catch.
+
+Tests: 295 → 305.
 ## 0.18.0 — 2026-11-13 — background leaf preparation, off by default
 
 Answers a question the earlier notes got half-wrong: **lcm-x does have background
