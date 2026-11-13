@@ -328,7 +328,16 @@ export class LcmCompactionEngine extends CompactionEngine {
     thresholdFullSweep: z.boolean(),
     fullSweepMaxPasses: fullSweepMaxPassesSchema,
     fullSweepMaxSeconds: fullSweepMaxPassesSchema,
-    fullSweepSoftSeconds: fullSweepMaxPassesSchema,
+    // `min(0)`, not `min(1)`: 0 DISABLES the soft stop and is the shipped default.
+    // Declared with the shared positive-integer schema, the value 0 was refused at
+    // composition time and `compaction-lcm` never loaded at all — measured:
+    //
+    //   compaction-lcm (dsh-lcm): ValidationError: invalid config:
+    //     $.fullSweepSoftSeconds expected number >= 1 but got 0
+    //
+    // The engine was absent for a whole session while every offline check passed,
+    // because `resolveConfig` in ./config.js accepts 0 and only the schema did not.
+    fullSweepSoftSeconds: compactionRetriesSchema,
     fullSweepTargetShare: z.number().min(0).max(1),
     fullSweepReserveSeconds: fullSweepMaxPassesSchema,
     leafEstimateFloorSeconds: fullSweepMaxPassesSchema,

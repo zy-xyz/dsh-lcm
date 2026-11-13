@@ -218,7 +218,10 @@ test("the sweep is on by default, and its clocks are the arithmetic this backend
 });
 
 test("the sweep keys are typed identically in both configuration layers", () => {
-  const cases = [["thresholdFullSweep", "no"], ["fullSweepMaxPasses", 1.5], ["fullSweepMaxSeconds", 0], ["fullSweepSoftSeconds", 0], ["fullSweepReserveSeconds", -1], ["leafEstimateFloorSeconds", 1.5]];
+    // `fullSweepSoftSeconds: 0` used to be in this list, contradicting the default of
+  // the same key two tests above. It is a legal value (0 disables the stop), so the
+  // bad sample is a negative now.
+  const cases = [["thresholdFullSweep", "no"], ["fullSweepMaxPasses", 1.5], ["fullSweepMaxSeconds", 0], ["fullSweepSoftSeconds", -1], ["fullSweepReserveSeconds", -1], ["leafEstimateFloorSeconds", 1.5]];
   for (const [key, bad] of cases) {
     assert.throws(() => resolveConfig({ [key]: bad }), new RegExp(key, "u"), `config.js must refuse ${key}=${JSON.stringify(bad)}`);
     assert.throws(() => LcmCompactionEngine.Config({ [key]: bad }), `the composition schema must refuse ${key}=${JSON.stringify(bad)} too`);

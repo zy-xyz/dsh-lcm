@@ -686,7 +686,10 @@ function validatePolicy(config, name) {
   if (config.thresholdFullSweep !== undefined && typeof config.thresholdFullSweep !== "boolean") throw new Error(`${name}.thresholdFullSweep must be a boolean`);
   if (config.fullSweepMaxPasses !== undefined) assertPositiveInteger(`${name}.fullSweepMaxPasses`, config.fullSweepMaxPasses);
   if (config.fullSweepMaxSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepMaxSeconds`, config.fullSweepMaxSeconds);
-  if (config.fullSweepSoftSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepSoftSeconds`, config.fullSweepSoftSeconds);
+  // 0 disables the soft stop; see DEFAULT_FULL_SWEEP_SOFT_SECONDS. A positive floor
+  // here would reject the shipped default and take the whole engine down at
+  // composition time, which is exactly what happened in 0.22.1.
+  if (config.fullSweepSoftSeconds !== undefined) assertNonNegativeInteger(`${name}.fullSweepSoftSeconds`, config.fullSweepSoftSeconds);
   if (config.fullSweepTargetShare !== undefined) assertRatio(`${name}.fullSweepTargetShare`, config.fullSweepTargetShare);
   if (config.fullSweepReserveSeconds !== undefined) assertNonNegativeInteger(`${name}.fullSweepReserveSeconds`, config.fullSweepReserveSeconds);
   if (config.leafEstimateFloorSeconds !== undefined) assertPositiveInteger(`${name}.leafEstimateFloorSeconds`, config.leafEstimateFloorSeconds);

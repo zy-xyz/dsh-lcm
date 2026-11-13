@@ -246,7 +246,11 @@ const KEY_SAMPLES = {
   thresholdFullSweep: { config: { thresholdFullSweep: false }, bad: { thresholdFullSweep: "no" } },
   fullSweepMaxPasses: { config: { fullSweepMaxPasses: 6 }, bad: { fullSweepMaxPasses: 1.5 } },
   fullSweepMaxSeconds: { config: { fullSweepMaxSeconds: 60 }, bad: { fullSweepMaxSeconds: 0 } },
-  fullSweepSoftSeconds: { config: { fullSweepSoftSeconds: 30 }, bad: { fullSweepSoftSeconds: 0 } },
+  // `main` is 0 — it DISABLES the soft stop and is the shipped default — so a zero
+  // cannot be the "bad" sample. It was, and that is how 0.22.1 shipped an engine
+  // that never loaded: the composition schema refused the default and
+  // `compaction-lcm` was absent for a whole session while these tests were green.
+  fullSweepSoftSeconds: { config: { fullSweepSoftSeconds: 30 }, bad: { fullSweepSoftSeconds: -1 } },
   fullSweepReserveSeconds: { config: { fullSweepReserveSeconds: 5 }, bad: { fullSweepReserveSeconds: -1 } },
   fullSweepTargetShare: { config: { fullSweepTargetShare: 0.3 }, bad: { fullSweepTargetShare: 2 } },
   backgroundLeafPrep: { config: { backgroundLeafPrep: true }, bad: { backgroundLeafPrep: "yes" } },
