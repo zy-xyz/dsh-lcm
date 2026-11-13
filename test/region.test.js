@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { compactSurfaceRegion, selectCompactableRange, assertNoActiveCompaction } from "../src/region.js";
+import { resolveConfig } from "../src/config.js";
 
 let foldSurface;
 let snapshotJsonValue;
@@ -266,7 +267,12 @@ test("compactNow compacts an idle session and returns a durable result", { skip 
   // A real /compact used to throw ReferenceError (an out-of-scope `spec`) that
   // the catch-all then rewrote as ManualCompactionError("busy"), so manual
   // compaction was 100% broken while looking like a lock contention.
-  engine.config = { auto: false };
+  // A REAL resolved config, not `{ auto: false }`: the manual path is now a
+  // leaf loop (lcm-x's `compress(force=True)`), so it reads `leafSpanTokens`,
+  // `condensationFanin` and `fullSweepMaxSeconds`. A bare object left those
+  // undefined and the second iteration selected a range over seqs the first
+  // compaction had already removed.
+  engine.config = resolveConfig({ auto: false });
   engine.ctx = {
     tokenMeter: {
       measure: (s) => ({ nodes: s.surface.nodes.map((seq) => ({ seq, tokens: 100 })), totalTokens: s.surface.nodes.length * 100 }),

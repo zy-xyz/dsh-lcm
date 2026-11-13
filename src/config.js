@@ -40,12 +40,37 @@ import {
 
 // ── defaults (basic-compatible values are marked) ──────────────────────────
 
-/** Request-pressure fraction, matching basic's 0.8. */
-const DEFAULT_THRESHOLD_RATIO = 0.8;
+/**
+ * Request-pressure fraction: start compacting at 75% of the window.
+ *
+ * lcm-x's `context_threshold` default (`config.py:1092`). It was basic's 0.8, and
+ * the difference is not cosmetic: on a 1M window the threshold moves from 800 000
+ * to 750 000, which is 50 000 tokens of request headroom bought back at the cost
+ * of compacting slightly earlier. Measured on the macOS build session, the 80%
+ * setting left it hovering at 97% of threshold with 20 sweeps in two days.
+ */
+const DEFAULT_THRESHOLD_RATIO = 0.75;
 /** Capacity reserved for the next completion, matching basic's 65536. */
 const DEFAULT_HEADROOM_TOKENS = 65536;
-/** Verbatim-tail fraction of the message budget, matching basic's 0.16. */
-const DEFAULT_RETAIN_RATIO = 0.16;
+/**
+ * Verbatim-tail fraction of the message budget: ~47 000 tokens on a 1M window.
+ *
+ * Three candidates were measured against the same arithmetic on a 1M window:
+ *
+ * | ratio | tail | floor | compactable band |
+ * |---|---|---|---|
+ * | 0.16 (basic) | 149 514 | 250 055 | 499 945 |
+ * | 0.05 | 46 723 | 147 264 | 602 736 |
+ * | 0.026 (lcm-x's own 24 000) | 24 296 | 124 837 | 625 163 |
+ *
+ * 0.16 is basic's and it was inherited, not chosen: it leaves the smallest band
+ * and the highest floor. lcm-x keeps `fresh_tail_max_tokens = 24_000` verbatim,
+ * which is 0.026 here. 0.05 sits between them deliberately — twice lcm-x's tail,
+ * because this engine's leaf summaries are coarser than lcm-x's chunked ones and
+ * more verbatim recent context compensates, while still buying back 20% of the
+ * compactable band that 0.16 gave away.
+ */
+const DEFAULT_RETAIN_RATIO = 0.05;
 /** Summary budget as a fraction of the shadowed span (LCM-only). */
 const DEFAULT_SUMMARY_RATIO = 0.12;
 /** Lower bound for one summary, so a small span still yields a usable note. */

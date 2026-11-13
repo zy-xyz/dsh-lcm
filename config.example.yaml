@@ -16,17 +16,19 @@
 
 # ── 与 basic 共享的键（语义 + 默认值完全相同）──────────────────────────
 
-# 触发压缩的压力占比。默认 0.8。
+# 触发压缩的压力占比。默认 0.75（lcm-x 的 context_threshold）。
 # 实际触发点 = floor(min(contextWindow × thresholdRatio, messageBudget − headroomTokens))
-thresholdRatio: 0.8
+thresholdRatio: 0.75
 
 # 为下一次补全预留的 token 容量。默认 65536。
 # 也是摘要「目标长度」上限 maxTokens 的默认值来源。
 headroomTokens: 65536
 
-# 原样保留的最近尾部占「消息预算」的比例。默认 0.16。
+# 原样保留的最近尾部占「消息预算」的比例。默认 0.05（1M 窗口下约 46 723 token）。
+# 三种取值的实测算术（1M 窗口）：basic 的 0.16 → 尾部 149514 / 地板 250055 / 可压 499945；
+# 0.05 → 46723 / 147264 / 602736；lcm-x 的 24000（≈0.026）→ 24296 / 124837 / 625163。
 # 与 retainTokens 互斥；两者都设会直接报错。
-retainRatio: 0.16
+retainRatio: 0.05
 
 # 原样保留的最近尾部 token 绝对上限。设了它就忽略 retainRatio。
 # 默认不设（走 retainRatio）。

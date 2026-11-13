@@ -1110,29 +1110,54 @@ export class LcmCompactionEngine extends CompactionEngine {
         try {
           operationSignal.throwIfAborted();
           const measurement = this.ctx.tokenMeter.measure(agent.session);
-          // Manual /compact follows basic: retain 0 tokens, i.e. compact the whole
-          // history except the trailing node, independent of the pressure policy.
+          // Manual /compact is lcm-x's `compress(force=True)`, and that means LEAF
+          // granularity with the SOFT target off — not one call over everything.
           //
-          // The fanin is the ONE shape knob manual compaction keeps, and passing it
-          // is not cosmetic: `fanin > 1` is the only branch in ./region.js that
-          // skips the checkpoints already on the surface. With fanin 0 every manual
-          // run started its leaf at the oldest surface node, which is the previous
-          // checkpoint, so each /compact re-summarised its own last summary -- the
-          // surface held exactly one checkpoint and depth grew 1,2,3,... per repeat.
-          // "Do not re-summarise my own summary" is not a guard an operator would
-          // ever waive, so the floor/min-span/leaf-cap stays off and this stays on:
-          // the manual path still compacts whatever the surface allows, minus the
-          // bytes it has already summarised.
-          const range = selectCompactableRange(agent.session, measurement, 0, 0, 0, this.config.condensationFanin);
-          if (range === null) return null;
-          return await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
-            owner: null,
-            stability: "selected-span",
-            ...sourceCommandId === undefined ? {} : { sourceCommandId },
-            flush: async () => {
-              await this.ctx.sessions.flush(agent.session);
-            }
-          }, operationSignal);
+          // `force` changes exactly one clock in the reference (`compaction.py:2250`):
+          //
+          //     if force or state.force_overflow:
+          //         state.budget.soft = 0.0   # soft is for AUTOMATIC compactions
+          //
+          // Leaf selection is untouched, so a manual pass still walks
+          // `_select_oldest_leaf_chunk(candidate_raw, leaf_chunk_tokens)` with
+          // `leaf_chunk_tokens = 24_000`. Only `force_overflow` — the provider-refused
+          // request — takes `leaf.to_compact = candidate_raw`, i.e. the whole span in
+          // one call.
+          //
+          // We had that backwards: the manual path passed a leaf cap of 0, so it sent
+          // the entire surface as one summarizer prompt. Measured on the macOS build
+          // session: 2 506 nodes / 686 174 tokens in one call, capped at 120 anchor
+          // lines — 0.05 anchors per node against 2.67 for a leaf, 36x fewer pointers
+          // back into the log, and 95% of the window consumed at 950k with nothing
+          // left for output.
+          //
+          // So: leaves, and the hard clock bounds the pass. The soft target is 0
+          // because the operator asked for this explicitly, and `retain 0` because
+          // "compact what you can" is the whole meaning of the command.
+          //
+          // The fanin is the one shape knob manual compaction keeps, and passing it is
+          // not cosmetic: `fanin > 1` is the only branch in ./region.js that skips the
+          // checkpoints already on the surface. With fanin 0 every manual run started
+          // its leaf at the oldest surface node — the previous checkpoint — so each
+          // /compact re-summarised its own last summary and depth grew 1,2,3,... per
+          // repeat.
+          const deadline = Date.now() + this.config.fullSweepMaxSeconds * 1000;
+          let result = null;
+          for (;;) {
+            operationSignal.throwIfAborted();
+            const current = this.ctx.tokenMeter.measure(agent.session);
+            const range = selectCompactableRange(agent.session, current, 0, 0, this.config.leafSpanTokens, this.config.condensationFanin);
+            if (range === null) return result;
+            result = await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
+              owner: null,
+              stability: "selected-span",
+              ...sourceCommandId === undefined ? {} : { sourceCommandId },
+              flush: async () => {
+                await this.ctx.sessions.flush(agent.session);
+              }
+            }, operationSignal);
+            if (Date.now() >= deadline) return result;
+          }
         } catch (error) {
           if (agentSignal.aborted && operationSignal.reason === agentSignal.reason) throw new ManualCompactionError("cancelled", "manual compaction was cancelled", { cause: error });
           operationSignal.throwIfAborted();

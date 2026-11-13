@@ -19,11 +19,15 @@ import { buildInstruction, deriveDag, maxAbsorbedDepth, summarizeLeaf } from "..
 
 // ── config: basic parity ───────────────────────────────────────────────────
 
-test("defaults match dsh-compaction-basic", () => {
+test("defaults match lcm-x, not basic, on the two ratios that set the floor", () => {
   const c = resolveConfig({});
-  assert.equal(c.thresholdRatio, 0.8, "basic default thresholdRatio");
+  // 0.75 and a ~24k tail are lcm-x's (`context_threshold`, `fresh_tail_max_tokens`).
+  // Basic's 0.8 / 0.16 put the non-compactable floor at 250 055 on a 1M window and
+  // left 499 945 tokens of compactable band; lcm-x's numbers leave 625 163. The
+  // macOS build session hovered at 97% of an 0.8 threshold across 20 sweeps.
+  assert.equal(c.thresholdRatio, 0.75, "lcm-x context_threshold");
   assert.equal(c.headroomTokens, 65536, "basic default headroomTokens");
-  assert.equal(c.retainRatio, 0.16, "basic default retainRatio");
+  assert.equal(c.retainRatio, 0.05, "between basic's 0.16 and lcm-x's 0.026, chosen on the band arithmetic");
   assert.equal(c.maxTokens, 65536, "basic defaults maxTokens to headroomTokens");
   assert.equal(c.compactionRetries, 1);
   assert.equal(c.maxOverflowRetries, 1);
@@ -90,8 +94,8 @@ test("resolveCompactSpec reproduces basic's pressure formula", () => {
   // threshold = min(200000*0.8, 134464) = 134464
   assert.equal(resolveCompactSpec(policy, 200000).thresholdTokens, 134464);
 
-  // W=1M: pressureBudget=934464, min(800000, 934464) = 800000 (ratio wins)
-  assert.equal(resolveCompactSpec(policy, 1000000).thresholdTokens, 800000);
+  // W=1M: pressureBudget=934464, min(750000, 934464) = 750000 (ratio wins)
+  assert.equal(resolveCompactSpec(policy, 1000000).thresholdTokens, 750000);
 
   // W=128K, O=8192: messageBudget=122880, pressureBudget=57344, min(104858, 57344)
   assert.equal(resolveCompactSpec(policy, 131072, 8192).thresholdTokens, 57344);
@@ -102,8 +106,8 @@ test("resolveCompactSpec reproduces basic's pressure formula", () => {
 test("retainTokens derives from retainRatio x messageBudget", () => {
   const config = resolveConfig({});
   const policy = resolveTargetPolicy(config, { provider: "p", model: "m" });
-  // 200000 * 0.16 = 32000
-  assert.equal(resolveCompactSpec(policy, 200000).retainTokens, 32000);
+  // 200000 * 0.05 = 10000
+  assert.equal(resolveCompactSpec(policy, 200000).retainTokens, 10000);
 });
 
 test("retainTokens wins over retainRatio when both could apply", () => {
@@ -413,12 +417,12 @@ test("budget math matches dsh-compaction-basic for a matrix of windows", async (
       assert.ok(spec.retainTokens < spec.thresholdTokens, "retention stays under pressure");
       assert.equal(
         spec.thresholdTokens,
-        Math.floor(Math.min(W * 0.8, W - O - 65536)),
+        Math.floor(Math.min(W * 0.75, W - O - 65536)),
         `threshold formula drift at W=${W} O=${O}`
       );
       assert.equal(
         spec.retainTokens,
-        Math.floor((W - O) * 0.16),
+        Math.floor((W - O) * 0.05),
         `retention formula drift at W=${W} O=${O}`
       );
     }
@@ -467,18 +471,20 @@ test("resolveCompactSpec honours the routed output reservation (audit D2)", () =
   const config = resolveConfig({});
   const policy = resolveTargetPolicy(config, { provider: "p", model: "m" });
 
-  // Numbers taken from an independent line-by-line audit of basic's source:
-  //   W=128000 O=8192 -> threshold 54272, retain 19169
-  //   W=200000 O=8192 -> threshold 126272, retain 30689
-  //   W=1000000 O=16384 -> threshold 800000, retain 157378
+  // The ROUTED reservation still bounds the threshold exactly as it did under
+  // basic's formula; only the ratio moved (0.8 -> 0.75, lcm-x's default) and the
+  // tail fraction (0.16 -> 0.026, lcm-x's 24 000 tokens).
+  //   W=128000 O=8192 -> min(96000, 119808-65536=54272) = 54272, retain floor(119808*0.05)=5990
+  //   W=200000 O=8192 -> min(150000, 191808-65536=126272) = 126272, retain floor(191808*0.05)=9590
+  //   W=1000000 O=16384 -> min(750000, 983616-65536=918080) = 750000, retain floor(983616*0.05)=49180
   assert.equal(resolveCompactSpec(policy, 128000, 8192).thresholdTokens, 54272);
-  assert.equal(resolveCompactSpec(policy, 128000, 8192).retainTokens, 19169);
+  assert.equal(resolveCompactSpec(policy, 128000, 8192).retainTokens, 5990);
   assert.equal(resolveCompactSpec(policy, 200000, 8192).thresholdTokens, 126272);
-  assert.equal(resolveCompactSpec(policy, 200000, 8192).retainTokens, 30689);
-  assert.equal(resolveCompactSpec(policy, 1000000, 16384).thresholdTokens, 800000);
-  assert.equal(resolveCompactSpec(policy, 1000000, 16384).retainTokens, 157378);
+  assert.equal(resolveCompactSpec(policy, 200000, 8192).retainTokens, 9590);
+  assert.equal(resolveCompactSpec(policy, 1000000, 16384).thresholdTokens, 750000);
+  assert.equal(resolveCompactSpec(policy, 1000000, 16384).retainTokens, 49180);
 
-  // No reservation reproduces the old value: 128000 - 65536 = 62464
+  // No reservation: min(96000, 128000-65536=62464) = 62464
   assert.equal(resolveCompactSpec(policy, 128000, 0).thresholdTokens, 62464);
 });
 

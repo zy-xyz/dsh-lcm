@@ -54,9 +54,9 @@
   name: dsh-lcm
   config:
     # ── 与 dsh-compaction-basic 完全相同 ──
-    thresholdRatio: 0.8        # 触发点 = min(W*ratio, W-O-headroom)
+    thresholdRatio: 0.75       # 触发点 = min(W*ratio, W-O-headroom)；lcm-x 的 context_threshold
     headroomTokens: 65536
-    retainRatio: 0.16          # 与 retainTokens 互斥
+    retainRatio: 0.05          # 与 retainTokens 互斥；1M 窗口下约 47k
     summarizationProvider: ""  # "" = 走当前路由的模型
     summarizationModel: ""
     maxTokens: 65536           # 限制摘要目标；请求上限是目标的 2 倍

@@ -63,10 +63,24 @@ this guard is in the source as the incident string `span=1 seqs=24-24
 shadowedTokens=428 budget=512`. A single large node is not refused on count: one
 40 000-token tool result is exactly what compaction is for, and it does shrink.
 
-Manual `/compact` deliberately passes none of these size guards
-(`src/index.js:796`): floor 0, no leaf cap, retain 0. An operator who asks for a
-compaction gets whatever the surface allows, including the shape the engine would
-have refused on its own.
+Manual `/compact` is lcm-x's `compress(force=True)`, and that means LEAF
+granularity with the soft target off — not one call over everything.
+
+`force` changes exactly one clock in the reference (`compaction.py:2250`):
+`if force or state.force_overflow: state.budget.soft = 0.0`, because the soft
+target exists for AUTOMATIC compaction. Leaf selection is untouched, so a manual
+pass still walks `_select_oldest_leaf_chunk(candidate_raw, leaf_chunk_tokens)`
+with `leaf_chunk_tokens = 24_000`. Only `force_overflow` — a provider-refused
+request — takes `leaf.to_compact = candidate_raw`, the whole span in one call.
+
+This engine had that backwards: the manual path passed a leaf cap of 0, so it
+sent the entire surface as one summarizer prompt. Measured on the macOS build
+session, `seq 30477`: 2 506 nodes / 686 174 tokens in one call, capped at the
+120-line anchor budget — 0.05 anchors per node against 2.67 for a leaf, 36x fewer
+pointers back into the log, and 95% of the window consumed at 950k with nothing
+left for output. The loop now walks leaves under the hard clock, with retain 0
+and the floor off: "compact what you can" is the whole meaning of the command,
+and the operator asked for it explicitly.
 
 The condensation fanin is the one knob it keeps, and that is not a compromise. The
 `fanin > 1` branch is the only place that also skips the checkpoints already on the
@@ -77,13 +91,14 @@ depth-1 node to one depth-2 node; a repeat with nothing new at all threw
 `ManualCompactionError("summary")` on the shrink gate (`337 >= 337`), spending a
 model call to be told the summary could not be smaller than itself. "Do not
 re-summarise my own summary" is not a guard an operator would ever waive, so the
-manual path passes the configured fanin and nothing else: floor, leaf cap and
-retention stay off. What that buys on the same session: two compactions leave two
-depth-1 checkpoints, not one at depth 2.
+manual path keeps the configured fanin. What that buys on the same session: two
+compactions leave two depth-1 checkpoints, not one at depth 2.
 
 The cost is honest: a 147k span becomes 7 calls, and the production-scale 436k span
 would become about 19, run serially, so wall clock grows with the span even though
-each call is smaller (`bench/REPORT.md` section 32).
+each call is smaller (`bench/REPORT.md` section 32). The hard clock
+(`fullSweepMaxSeconds`) bounds the pass; whatever is left is picked up by the next
+`/compact` or by an automatic sweep.
 
 **A leaf call sends the span and the instruction, and nothing else.** It does not
 replay the conversation's own system prompt. `dsh-compaction-basic` replays it,
@@ -623,9 +638,9 @@ configuration drops in without noticing (`src/config.js:188`).
 
 | key | default | why |
 |---|---|---|
-| `thresholdRatio` | 0.8 | inherited from basic, unchanged |
+| `thresholdRatio` | 0.75 | lcm-x's `context_threshold`, not basic's 0.8. On a 1M window this moves the trigger from 800 000 to 750 000 — 50 000 tokens of request headroom bought back for compacting slightly earlier |
 | `headroomTokens` | 65536 | inherited from basic, unchanged |
-| `retainRatio` | 0.16 | inherited from basic, unchanged; the verbatim tail stays original text |
+| `retainRatio` | 0.05 | between basic's 0.16 and lcm-x's 24 000 tokens. The band arithmetic on a 1M window: 0.16 → tail 149 514 / floor 250 055 / compactable 499 945; **0.05 → 46 723 / 147 264 / 602 736**; 0.026 (lcm-x) → 24 296 / 124 837 / 625 163 |
 | `summaryRatio` | 0.12 | target is 12% of the span, clamped below |
 | `summaryFloorTokens` | 512 | a small span still gets a usable target, and this is also the selector's floor |
 | `checkpointCap` | 16384 | ceiling on the target, not a request cap |
@@ -637,13 +652,25 @@ configuration drops in without noticing (`src/config.js:188`).
 | `compactionRetries` | 1 | one extra pressure attempt, then the real diagnosis |
 | `maxOverflowRetries` | 1 | one forced reduction per confirmed overflow |
 
-The budget math is basic's, verbatim:
+The FORMULA is basic's, verbatim — the two ratios feeding it are lcm-x's:
 
 ```
 messageBudget    = contextWindow - reservedCompletionTokens
 pressureBudget   = messageBudget - headroomTokens
-thresholdTokens  = floor(min(contextWindow * thresholdRatio, pressureBudget))
-retainTokens     = retainTokens ?? floor(messageBudget * retainRatio)
+thresholdTokens  = floor(min(contextWindow * 0.75, pressureBudget))   # was min(..., * 0.8)
+retainTokens     = retainTokens ?? floor(messageBudget * 0.05)         # was floor(messageBudget * 0.16)
+```
+
+Why those two and not basic's: the macOS build session sat at 97% of an 0.8
+threshold across 20 sweeps in two days, because a 60 s soft target only runs 3-4
+leaves per crossing while the band it has to drain was the smallest of the three
+candidates. 0.75 buys 50 000 tokens of headroom on the request; 0.05 buys back
+103 000 tokens of compactable band without going all the way to lcm-x's 24 000,
+which this engine's coarser leaf summaries are not tuned for.
+
+The rest of the formula, unchanged:
+
+```
 targetTokens     = min(clamp(shadowed * summaryRatio, summaryFloorTokens, checkpointCap), maxTokens)
 ```
 

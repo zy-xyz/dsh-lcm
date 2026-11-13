@@ -101,9 +101,9 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
   name: dsh-lcm
   config:
     # ── identical to dsh-compaction-basic ──
-    thresholdRatio: 0.8        # trigger = min(W*ratio, W-O-headroom)
+    thresholdRatio: 0.75       # trigger = min(W*ratio, W-O-headroom); lcm-x's context_threshold
     headroomTokens: 65536
-    retainRatio: 0.16          # mutually exclusive with retainTokens
+    retainRatio: 0.05          # mutually exclusive with retainTokens; ~47k on a 1M window
     summarizationProvider: ""  # "" = the routed model
     summarizationModel: ""
     maxTokens: 65536           # caps the summary target; the request ceiling is 2 x the target

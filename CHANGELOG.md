@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.17.0 — 2026-11-13 — lcm-x's two ratios, and a manual path that respects leaves
+
+Three corrections, all found by comparing against the reference instead of
+assuming basic's numbers were neutral.
+
+### Changed — `thresholdRatio` 0.8 → 0.75
+
+lcm-x's `context_threshold` (`config.py:1092`). On a 1M window this moves the
+trigger from 800 000 to 750 000: 50 000 tokens of request headroom, bought back
+by compacting slightly earlier. Measured on the macOS build session, the 0.8
+setting left it at 97% of threshold across 20 sweeps in two days.
+
+### Changed — `retainRatio` 0.16 → 0.05
+
+Basic's 0.16 was inherited, never chosen, and it is the parameter that sets the
+floor. The band arithmetic on a 1M window:
+
+| ratio | verbatim tail | non-compactable floor | compactable band |
+|---|---:|---:|---:|
+| 0.16 (basic) | 149 514 | 250 055 | 499 945 |
+| **0.05 (new)** | **46 723** | **147 264** | **602 736** |
+| 0.026 (lcm-x's 24 000) | 24 296 | 124 837 | 625 163 |
+
+0.05 sits between the two deliberately: twice lcm-x's tail, because this engine's
+leaf summaries are coarser than lcm-x's chunked ones and more verbatim recent
+context compensates — while still buying back 103 000 tokens of compactable band.
+
+### Fixed — manual `/compact` sent the whole surface as one prompt
+
+This is lcm-x's `compress(force=True)`, and `force` changes exactly one thing
+there (`compaction.py:2250`): `if force or state.force_overflow:
+state.budget.soft = 0.0` — the soft target exists for AUTOMATIC compaction. Leaf
+selection is untouched, so a manual pass still walks
+`_select_oldest_leaf_chunk(candidate_raw, leaf_chunk_tokens = 24 000)`. Only
+`force_overflow` (a provider-refused request) takes the whole span in one call.
+
+We had it backwards: the manual path passed a leaf cap of 0. Measured on the macOS
+session at `seq 30477` — 2 506 nodes / 686 174 tokens in ONE call, capped at the
+120-line anchor budget:
+
+| | avg nodes | avg anchors | anchors per node |
+|---|---:|---:|---:|
+| leaf (≤120 nodes) | 39 | 104 | **2.67** |
+| manual /compact | 1 727 | 120 | **0.07** |
+
+36× fewer pointers back into the log, and 95% of the window consumed at 950k with
+nothing left for output. The path is now a leaf loop under the hard clock, with
+`retain 0` and the floor off — "compact what you can" is what the command means.
+
+### Verified
+
+`291/291` tests. Six assertions moved with the new ratios (the defaults test now
+says lcm-x, not basic; the pressure formula, the `retainTokens` derivation, the
+window matrix and the D2 audit row all carry the new numbers). The manual-path
+test needed a RESOLVED config rather than `{ auto: false }`: the loop reads
+`leafSpanTokens`, `condensationFanin` and `fullSweepMaxSeconds`, and a bare object
+left them undefined so the second iteration selected seqs the first had removed.
 ## 0.16.0 — 2026-11-11 — an empty response escalates the ceiling, and a Chinese README
 
 ### Fixed — the empty-response retry repeated the request that had just failed
