@@ -130,8 +130,8 @@ Three bounds replace the threshold test:
 |---|---|---|
 | `thresholdFullSweep` | `true` | the sweep itself; `false` restores one-leaf-per-crossing |
 | `fullSweepMaxPasses` | `12` | lcm-x's constant; 12 × 24 000 is 28.8% of a 1M window |
-| `fullSweepMaxSeconds` | `120` | the HARD ceiling, lcm-x's own number. Affordable only because `_continueOnIdle` resumes a partial sweep on idle — see below |
-| `fullSweepSoftSeconds` | `60` | stop STARTING leaves here. Half the ceiling, lcm-x's `foreground_soft_seconds` — the BACKSTOP, not the stop |
+| `fullSweepMaxSeconds` | `300` | NOT lcm-x's 120. The target is 0.25 × 750 000 = 187 500 and one leaf reclaims ~22 200, so 9 leaves at the measured 19.9 s median is ~180 s. A 120 s ceiling makes `target_reached` unreachable by construction |
+| `fullSweepSoftSeconds` | `0` | 0 disables the soft stop, as lcm-x does for `force`. Measured: one 72.9 s leaf against a 60 s soft target ended a sweep after one leaf with a 187 500-token target untouched — a clock shorter than one leaf is the binding constraint, not a backstop |
 | `fullSweepTargetShare` | `0.25` | what a sweep aims to reclaim: `threshold × 0.25` (lcm-x `_DEFAULT_SWEEP_TARGET_THRESHOLD_SHARE`). This is the stop condition; the soft clock only bounds a pass that cannot reach it |
 | `fullSweepReserveSeconds` | `10` | slice of the hard ceiling kept for the commit and re-measure, lcm-x's `finalize_reserve` (theirs is `clamp(p90, 5, 20)`) |
 | `leafEstimateFloorSeconds` | `15` | floor for the measured leaf cost the soft test uses, lcm-x's `_THRESHOLD_FULL_SWEEP_MIN_CALL_SECONDS` |

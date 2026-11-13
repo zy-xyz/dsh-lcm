@@ -112,12 +112,16 @@ fullSweepMaxPasses: 12
 # 抽干的总量不变：地板 = 系统提示 100541 + 保留尾部 149514 = 250055，
 # 从阈值 800000 抽到地板需 31 个叶、实测 17.3 秒/叶 → 合计 522 秒，
 # 现在分摊到几轮空闲 pass，而不是一次阻塞十分钟。
-fullSweepMaxSeconds: 120
+# 300 不是 lcm-x 的 120：目标是 0.25×750000=187500，一个叶回收约 22200，需要 9 个叶，
+# 按实测中位 19.9s/叶算约 180s。120s 装不下这个目标，`target_reached` 永远到不了。
+fullSweepMaxSeconds: 300
 
 # 软目标（秒）：到了就不再**开**新叶，把剩下的一半留给正在跑的那个叶和收尾。
 # 默认 60，即硬上限的一半 —— 与 lcm-x 的 foreground_soft_seconds 一致。
 # 没有这一层时，剩 5 秒也会开一个 17 秒的叶，实际超支 12 秒才停。
-fullSweepSoftSeconds: 60
+# 0 = 不设软目标。实测反例：一个 72.9s 的叶撞上 60s 软目标，sweep 一个叶就停，
+# 187500 的目标分文未动。比目标还短的时钟不是兜底，是主约束。
+fullSweepSoftSeconds: 0
 
 # 一次 sweep 要回收多少 = threshold × 这个比例（lcm-x _DEFAULT_SWEEP_TARGET_THRESHOLD_SHARE = 0.25）。
 #
