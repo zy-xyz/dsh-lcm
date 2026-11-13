@@ -244,9 +244,31 @@ export async function summarizeLeaf(ctx, config, prepared, agent, budgetTokens, 
   const { session } = prepared;
 
   const regionMessages = [];
-  for (const seq of prepared.shadowedSeqs) {
-    const message = nodeMessage(session, seq);
-    if (message !== null) regionMessages.push(message);
+  // Two ways a span becomes a prompt, and the difference is not cosmetic:
+  //
+  //   message span  the leaf path. Each seq is a `user/message` or
+  //                 `assistant/message` event and `deriveEventMessage` gives the
+  //                 real role and content, which is what a checkpoint of a
+  //                 CONVERSATION has to see.
+  //
+  //   documents     the rollup path (and anything else indexing derived text).
+  //                 A `compaction/summary` event is NOT a message event:
+  //                 `deriveEventMessage` returns null for it, so a span of
+  //                 checkpoints produced ZERO messages and the pass threw
+  //                 "selected span produced no model-visible messages" on every
+  //                 idle. Measured: the rollup pass never wrote a single file.
+  //                 The caller supplies the bodies explicitly instead.
+  if (Array.isArray(prepared.documents) && prepared.documents.length > 0) {
+    for (const document of prepared.documents) {
+      const text = typeof document === "string" ? document : document?.text;
+      if (typeof text !== "string" || text.trim().length === 0) continue;
+      regionMessages.push(createUserMessage({ content: [{ type: "text", text }] }));
+    }
+  } else {
+    for (const seq of prepared.shadowedSeqs) {
+      const message = nodeMessage(session, seq);
+      if (message !== null) regionMessages.push(message);
+    }
   }
   if (regionMessages.length === 0) throw new Error("lcm: selected span produced no model-visible messages");
 

@@ -820,8 +820,11 @@ export class LcmCompactionEngine extends CompactionEngine {
           if (deadline.aborted) break;
           const body = (event.data?.summary ?? []).map((block) => block.text ?? "").join("");
           if (body.trim().length === 0) continue;
+          // Same shape as the rollup path and for the same reason: a checkpoint seq is
+          // not a message event, so the body has to travel as a DOCUMENT.
           const prepared = {
             session,
+            documents: [{ seq: event.seq, text: body }],
             shadowedSeqs: [event.seq],
             shadowedTokenCount: estimateEntryTokens(body),
             start: event.seq,
@@ -884,8 +887,19 @@ export class LcmCompactionEngine extends CompactionEngine {
           if (built >= this.config.rollupBuildsPerPass) break;
           if (Date.now() - startedAt >= this.config.rollupMaintenanceBudgetMs) break;
           const budget = Math.min(this.config.rollupDailyTargetTokens, this.config.rollupDailyMaxTokens);
+          // The bodies go in as DOCUMENTS. A checkpoint seq is not a message event,
+          // so deriving the prompt from seqs produced zero messages and this pass
+          // threw on every idle without ever writing a file.
+          const documents = [];
+          for (const entry of day.entries) {
+            const event = session.eventAt?.(entry.seq);
+            const text = (event?.data?.summary ?? []).map((block) => block.text ?? "").join("");
+            if (text.trim().length > 0) documents.push({ seq: entry.seq, text });
+          }
+          if (documents.length === 0) continue;
           const prepared = {
             session,
+            documents,
             shadowedSeqs: day.entries.map((entry) => entry.seq),
             shadowedTokenCount: day.tokens,
             start: day.entries[0].seq,
