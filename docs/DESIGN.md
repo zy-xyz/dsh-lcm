@@ -649,6 +649,7 @@ configuration drops in without noticing (`src/config.js:188`).
 | `stallCooldownMs` | 60000 | hold deadline for a stalled session (section 5); 0 disables |
 | `anchorPointers` | true | local computation over events already in memory, no request |
 | `emptySummaryRetries` | 2 | three attempts on the same prompt before the ladder's bottom rung |
+| `backgroundLeafPrep` | false | pre-compute the next leaf while idle; lcm-x's `background_leaf_prep_enabled`, which also ships `False` |
 | `compactionRetries` | 1 | one extra pressure attempt, then the real diagnosis |
 | `maxOverflowRetries` | 1 | one forced reduction per confirmed overflow |
 

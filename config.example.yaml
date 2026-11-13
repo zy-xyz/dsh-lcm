@@ -144,6 +144,12 @@ anchorPointers: true
 # 默认 2（最多 3 次尝试）；设 0 关闭重试。
 emptySummaryRetries: 2
 
+# 空闲时预先把下一个叶的摘要算好并缓存，下次压缩直接取用、不再付模型调用。
+# 默认 false（与 lcm-x 的 background_leaf_prep_enabled 一致，它默认也是 False）。
+# 打开后会为「可能永远不压缩」的会话花掉模型调用；关掉时 _continueOnIdle 已经覆盖了
+# 主要收益——一次 sweep 用尽预算，agent 转 idle 时接着压。开它是用空闲调用换更便宜的阈值穿越。
+backgroundLeafPrep: false
+
 # 引擎调试日志。默认 false；也可以设 DSH_COMPACTION_DEBUG=1 打开。
 debug: false
 

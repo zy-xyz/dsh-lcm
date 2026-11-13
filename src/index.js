@@ -27,7 +27,8 @@ import {
   resolveSummaryBudget,
   resolveTargetPolicy
 } from "./config.js";
-import { assertNoActiveCompaction, compactSurfaceRegion, selectCompactableRange } from "./region.js";
+import { LeafPrepCache, preparedLeafKey } from "./prep.js";
+import { assertNoActiveCompaction, compactSurfaceRegion, prepareCompaction, selectCompactableRange, validateSurfaceRegion } from "./region.js";
 import { SUMMARY_SKELETON, summarizeLeaf } from "./summarize.js";
 
 export { TargetPressureConfigError, resolveCompactSpec, resolveConfig, resolveTargetPolicy };
@@ -349,6 +350,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     // the single source for resolved defaults.
     anchorPointers: z.boolean(),
     emptySummaryRetries: compactionRetriesSchema,
+    backgroundLeafPrep: z.boolean(),
     debug: z.boolean(),
     debugLogPath: z.string(),
     // ── optional vector recall layer (inert unless vectorEnabled) ──
@@ -384,6 +386,17 @@ export class LcmCompactionEngine extends CompactionEngine {
    * re-measure the same surface and lose the race to the first.
    */
   idlePasses = new Set();
+  /**
+   * Prepared leaf summaries, keyed by span + route. Empty unless
+   * `backgroundLeafPrep` is on.
+   *
+   * lcm-x keeps its equivalent queue in SQLite so it survives a restart and serves
+   * several conversations from one bank. Here the scope is deliberately narrower:
+   * memory only, and a restart simply means the next crossing pays a model call.
+   */
+  leafPrep = new LeafPrepCache();
+  /** Sessions with a background prep pass in flight, same role as `idlePasses`. */
+  prepPasses = new Set();
   overflowAgents = new WeakMap();
   constructor(ctx, config = {}) {
     super(ctx);
@@ -485,6 +498,9 @@ export class LcmCompactionEngine extends CompactionEngine {
       // next. Failures go to the debug log only — an idle pass that cannot make
       // progress must never surface as an error the operator has to dismiss.
       if (status === "idle") this._continueOnIdle(agent);
+      // Prep is the opposite case to the idle sweep: it runs when the session is
+      // still UNDER threshold, so the next crossing has a leaf already written.
+      if (status === "idle") this._prepareNextLeaf(agent);
     }));
     // A model switch is a pressure event: the next request runs on a DIFFERENT
     // window, and if the new one is smaller the history that comfortably fit the
@@ -624,8 +640,17 @@ export class LcmCompactionEngine extends CompactionEngine {
     // target and is absent when no call produced the body at all.
     let identity;
     let sentCeiling;
+    // A prepared leaf, if the background pass already computed this exact span on
+    // this exact route. Taking it removes one model call from the foreground and
+    // the summary it carries was written by the same summarizer under the same
+    // instruction — the only thing that changed is WHEN it was paid for.
+    const prepKey = this.config.backgroundLeafPrep === true
+      ? preparedLeafKey(prepared, resolveSummarizationTarget(this.config, agent))
+      : undefined;
+    const preparedResult = prepKey === undefined ? undefined : this.leafPrep.take(prepKey);
     try {
-      result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
+      result = preparedResult ?? await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal);
+      if (preparedResult !== undefined) engineDebug(this.config, `summarize used a prepared leaf span=${prepared.shadowedSeqs.length} (${this.leafPrep.describe()})`);
       // The cap the call actually SENT. It is no longer always the base ceiling:
       // an empty response escalates it (see `ceilingFor`), and the record has to
       // name the number in force or an operator judging "could this have been cut
@@ -742,6 +767,74 @@ export class LcmCompactionEngine extends CompactionEngine {
       rawOutput: result.rawOutput
     };
   }
+  /**
+   * Pre-compute the leaf the NEXT compaction would need, while the session is idle
+   * and still below its threshold. lcm-x's `background_leaf_prep_enabled`, off by
+   * default.
+   *
+   * The point is the clock, not the tokens: a sweep is bounded at 60 s soft / 120 s
+   * hard, and one leaf costs ~17 s, so a crossing spends its entire budget writing
+   * summaries it could have written earlier. Preparing one leaf ahead means the
+   * next crossing promotes it and spends its clock on the leaf AFTER that.
+   *
+   * Refuses to run over threshold: there a sweep is already owed, and pre-computing
+   * a leaf would compete with the pass that is supposed to commit it.
+   *
+   * Never throws — the caller is a status notification with no turn to fail.
+   * @param agent - the agent that just went idle.
+   */
+  _prepareNextLeaf(agent) {
+    if (this.config.backgroundLeafPrep !== true) return;
+    if (!this.leafPrep.hasCapacity) return;
+    const session = agent?.session;
+    if (session === undefined) return;
+    // One prep at a time per session: two would select the same leaf and pay twice.
+    if (this.prepPasses.has(session.id)) return;
+    this.prepPasses.add(session.id);
+    void (async () => {
+      try {
+        const header = session.requestHeader();
+        const target = header?.config;
+        if (target === undefined || target.provider.length === 0 || target.model.length === 0) return;
+        const policy = resolveTargetPolicy(this.config, target);
+        const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model);
+        const context = info.context;
+        if (context === undefined) return;
+        const spec = resolveCompactSpec(policy, context.contextWindow, reservedCompletionTokens(header, info.defaultMaxTokens));
+        const measurement = this.ctx.tokenMeter.measure(session, header);
+        // Over threshold means a sweep is owed; leave the leaf for it.
+        if (measurement.totalTokens >= spec.thresholdTokens) return;
+        const range = selectCompactableRange(session, measurement, spec.retainTokens, this.config.summaryFloorTokens, this.config.leafSpanTokens, this.config.condensationFanin);
+        if (range === null) return;
+        // The same two steps `compactSurfaceRegion` takes before it compiles, minus
+        // the transaction: this pass writes nothing, it only pays for a summary the
+        // foreground may later promote.
+        const selection = validateSurfaceRegion(session, range.start, range.end);
+        const prepared = prepareCompaction(this.regionDependencies(), session, selection);
+        if (prepared === null) return;
+        const route = resolveSummarizationTarget(this.config, agent);
+        const key = preparedLeafKey(prepared, route);
+        if (this.leafPrep.has(key)) return;
+        const budget = this.effectiveMaxTokens(prepared.shadowedTokenCount);
+        const result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, undefined);
+        // The same guard the foreground applies: a body at least as long as the span
+        // cannot survive the shrink gate, so caching it would only turn a paid call
+        // into a paid call plus a wasted slot.
+        const kept = estimateEntryTokens(summaryBodyOf(result));
+        if (kept <= 0 || kept >= prepared.shadowedTokenCount) {
+          engineDebug(this.config, `prep discarded a body that cannot shrink kept=${kept} span=${prepared.shadowedTokenCount}`);
+          return;
+        }
+        this.leafPrep.put(key, result);
+        engineDebug(this.config, `prep stored a leaf seqs=${range.start}-${range.end} kept=${kept} (${this.leafPrep.describe()})`);
+      } catch (error) {
+        engineDebug(this.config, `prep skipped: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.prepPasses.delete(session.id);
+      }
+    })();
+  }
+
   /**
    * Continue a sweep that stopped on its soft target, once the agent is idle.
    *

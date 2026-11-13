@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.18.0 — 2026-11-13 — background leaf preparation, off by default
+
+Answers a question the earlier notes got half-wrong: **lcm-x does have background
+compression**, and it is a daemon thread called `lcm-leaf-prep`. It ships
+**disabled**.
+
+```python
+# config.py:1494
+background_leaf_prep_enabled: bool = False
+
+# engine.py:2442 — the gate
+if not getattr(self._config, "background_leaf_prep_enabled", False): return
+leaf_prep.enqueue_after_turn(self, history)
+```
+
+The worker (`_LeafPrep._prepare_on`) selects the oldest leaf chunk, serialises it,
+calls `summarize_leaf_chunk_with_rescue`, and stores the body. The foreground pass
+then finds `leaf.prepared is not None` and promotes it without spending a call.
+That is why a 60 s soft / 120 s hard budget is enough in the reference: the clock
+only has to pay for the leaf the background has not computed yet.
+
+### Added — `backgroundLeafPrep`, default `false`
+
+Same shape here, with a narrower scope:
+
+| | lcm-x | this engine |
+|---|---|---|
+| storage | SQLite, survives restarts, shared across conversations | in memory |
+| trigger | `enqueue_after_turn` | `agent/status === idle`, and only below threshold |
+| key | frontier + coverage digest + route fingerprint | `sha256(route, seqs, every body)` |
+| default | `False` | `false` |
+
+Memory instead of SQLite is deliberate: a restart just means the next crossing
+pays a call, which is the behaviour every deployment had before this existed, and a
+stale entry cannot outlive the process that computed it. Refusing to run over
+threshold matters too — there a sweep is already owed, and pre-computing would
+compete with the pass that is supposed to commit the leaf.
+
+The key covers the route, the seq list, and a digest of every message body in the
+span, so a rewritten or reordered surface misses instead of promoting a summary of
+different text. `take` removes the entry: a checkpoint commits once, and a second
+promotion would replace another span with the first one's summary.
+
+A prepared body that could not shrink (at least as long as its span) is discarded
+at prep time rather than cached — caching it would only convert a paid call into a
+paid call plus a wasted slot.
+
+### Note on the harness contract
+
+`@deepseek-ai/dsh-compaction` declares exactly three abstract methods
+(`compactIfNeeded`, `compactNow`, `compactRegion`) and no timer or scheduler, and
+the two shipped engines register no interval. So dsh provides **no** background
+compaction seam — an engine that wants one must own the trigger itself, which is
+what `_continueOnIdle` (event-driven) and this prep pass (idle-driven) do.
+
+Tests: 291 → 295.
 ## 0.17.0 — 2026-11-13 — lcm-x's two ratios, and a manual path that respects leaves
 
 Three corrections, all found by comparing against the reference instead of

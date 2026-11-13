@@ -208,6 +208,17 @@ const DEFAULT_ANCHOR_POINTERS = true;
  * route stay fixed so the failure stays reproducible.
  */
 const DEFAULT_EMPTY_SUMMARY_RETRIES = 2;
+/**
+ * Pre-compute the next leaf summary in the background. Off by default.
+ *
+ * lcm-x ships the same feature disabled (`config.py:1494`
+ * `background_leaf_prep_enabled: bool = False`). It spends a model call on a
+ * session that may never compact, and `_continueOnIdle` already covers the case
+ * this was built for — a sweep that stopped on its clock resumes when the agent
+ * goes idle. Turning it on trades idle model calls for a cheaper threshold
+ * crossing; both are defensible, so it is a switch rather than a decision.
+ */
+const DEFAULT_BACKGROUND_LEAF_PREP = false;
 
 /** Fields shared by top-level defaults and exact-target overrides (== basic). */
 const POLICY_KEYS = [
@@ -244,6 +255,7 @@ const LCM_KEYS = [
   "stallCooldownMs",
   "anchorPointers",
   "emptySummaryRetries",
+  "backgroundLeafPrep",
   "debug",
   "debugLogPath",
   "vectorEnabled",
@@ -354,6 +366,7 @@ export function resolveConfig(config = {}) {
     stallCooldownMs: config.stallCooldownMs ?? DEFAULT_STALL_COOLDOWN_MS,
     anchorPointers: config.anchorPointers ?? DEFAULT_ANCHOR_POINTERS,
     emptySummaryRetries: config.emptySummaryRetries ?? DEFAULT_EMPTY_SUMMARY_RETRIES,
+    backgroundLeafPrep: config.backgroundLeafPrep ?? DEFAULT_BACKGROUND_LEAF_PREP,
     debug,
     debugLogPath,
     // ── optional vector recall (inert unless vectorEnabled) ──
@@ -544,6 +557,7 @@ function validatePolicy(config, name) {
   if (config.summaryRatio !== undefined) assertRatio(`${name}.summaryRatio`, config.summaryRatio);
   if (config.anchorPointers !== undefined && typeof config.anchorPointers !== "boolean") throw new Error(`${name}.anchorPointers must be a boolean`);
   if (config.emptySummaryRetries !== undefined) assertNonNegativeInteger(`${name}.emptySummaryRetries`, config.emptySummaryRetries);
+  if (config.backgroundLeafPrep !== undefined && typeof config.backgroundLeafPrep !== "boolean") throw new Error(`${name}.backgroundLeafPrep must be a boolean`);
   if (config.debug !== undefined && typeof config.debug !== "boolean") throw new Error(`${name}.debug must be a boolean`);
   if (config.debugLogPath !== undefined && typeof config.debugLogPath !== "string") throw new Error(`${name}.debugLogPath must be a string`);
   if (config.vectorEnabled !== undefined && typeof config.vectorEnabled !== "boolean") throw new Error(`${name}.vectorEnabled must be a boolean`);

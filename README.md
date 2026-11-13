@@ -119,6 +119,7 @@ Full annotated file: [`config.example.yaml`](config.example.yaml).
     condensationFanin: 4       # same-depth checkpoints merge into one higher node at this fanin
     anchorPointers: true       # post-hoc (seq N) on each verbatim anchor
     emptySummaryRetries: 2     # retry a response with no text block (a truncated-but-textual one is never retried)
+    backgroundLeafPrep: false  # pre-compute the next leaf while idle; off, like lcm-x
 
 # The semantic route lives on the SEARCH row, not on the engine. The engine
 # declares and resolves the vector keys but the compaction path never reads one,

@@ -72,6 +72,7 @@
     condensationFanin: 4       # 同深度 checkpoint 凑够这个数就合并成上一层的一个节点
     anchorPointers: true       # 事后给每条逐字锚点补 (seq N)
     emptySummaryRetries: 2     # 无文本块的响应重试；有文本但被截断的从不重试
+    backgroundLeafPrep: false  # 空闲时预计算下一个叶；默认关，与 lcm-x 一致
     # ── sweep 的两个时钟与收尾预留 ──
     fullSweepMaxSeconds: 120       # 硬上限（lcm-x 的 _THRESHOLD_FULL_SWEEP_MAX_SECONDS）
     fullSweepSoftSeconds: 60       # 到了就不再开新叶，把剩下的一半留给收尾
