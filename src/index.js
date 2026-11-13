@@ -329,6 +329,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     fullSweepMaxPasses: fullSweepMaxPassesSchema,
     fullSweepMaxSeconds: fullSweepMaxPassesSchema,
     fullSweepSoftSeconds: fullSweepMaxPassesSchema,
+    fullSweepTargetShare: z.number().min(0).max(1),
     fullSweepReserveSeconds: fullSweepMaxPassesSchema,
     leafEstimateFloorSeconds: fullSweepMaxPassesSchema,
     stallCooldownMs: maxTokensSchema,
@@ -1207,6 +1208,24 @@ export class LcmCompactionEngine extends CompactionEngine {
     // started with 5 s left still ran, landing 12 s past the budget. The soft
     // target is what makes the stop predictable, and the reserve is what keeps
     // the finalize (commit + re-measure) inside the ceiling.
+    // The sweep TARGET, which is what decides when to stop — the clock only bounds
+    // a pass that cannot reach it. lcm-x works the same way and that is why its 60 s
+    // soft target is enough: `sweep_target_tokens = min(leaf_chunk_tokens,
+    // threshold * 0.25)` (`compaction.py:2258-2260`) and the loop runs until the
+    // summary prefix is under it.
+    //
+    // We had the clock alone. Measured consequence: a session at 705 375 tokens
+    // owed 26 leaves to reach its floor, and at 3-4 leaves per crossing that is 8
+    // crossings — the reported "compacted 3 times and still at 70%".
+    //
+    // The target is a TOKEN BUDGET TO RECLAIM, not a summary-frontier size, because
+    // this engine has no separate frontier: the surface is the frontier. So a sweep
+    // stops when it has reclaimed this much, which is the same thing expressed in
+    // the quantity the loop can actually measure.
+    const sweepTargetTokens = sweep
+      ? Math.floor(spec.thresholdTokens * this.config.fullSweepTargetShare)
+      : 0;
+    const sweepFloorTokens = sweep ? measurement.totalTokens - sweepTargetTokens : 0;
     const softDeadline = sweep ? sweepStart + this.config.fullSweepSoftSeconds * 1000 : Number.POSITIVE_INFINITY;
     // How long one leaf takes, so "is there room for another one" is a question
     // the loop can answer. Seeded from the config floor and replaced by the
@@ -1240,8 +1259,20 @@ export class LcmCompactionEngine extends CompactionEngine {
         sweepStop = "time_budget_exhausted";
         break;
       }
+      // ── the target test, which is what actually ends a productive sweep ──
+      // Ahead of the soft clock on purpose: a pass that has reclaimed its share is
+      // done, and saying so is more honest than reporting a clock stop for work that
+      // finished. lcm-x's loop is shaped the same way — `sweep_summary_prefix_before
+      // > sweep_target_tokens` is the continuation condition, the clock is the
+      // backstop beneath it.
+      if (passes > 0 && sweep && measurement.totalTokens <= sweepFloorTokens) {
+        sweepStop = "target_reached";
+        break;
+      }
       if (passes > 0 && now + leafWallMs > softDeadline) {
-        sweepStop = "soft_target_reached";
+        // A clock stop with the target still unmet is a PARTIAL pass, and the report
+        // says so rather than implying the backlog is gone.
+        sweepStop = measurement.totalTokens <= sweepFloorTokens ? "target_reached" : "soft_target_reached";
         break;
       }
       // The span floor is what stops the "span=1 seqs=24-24 shadowedTokens=428
@@ -1320,7 +1351,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     if (sweep && result !== null) {
       engineDebug(
         this.config,
-        `sweep stopped (${sweepStop.length > 0 ? sweepStop : "pass_budget_exhausted"}) after ${passes} leaf pass(es) at ${measurement.totalTokens} >= ${spec.thresholdTokens}; the next turn continues`
+        `sweep stopped (${sweepStop.length > 0 ? sweepStop : "pass_budget_exhausted"}) after ${passes} leaf pass(es): ${measurement.totalTokens} tokens, target ${sweepFloorTokens}, threshold ${spec.thresholdTokens}; ${measurement.totalTokens <= sweepFloorTokens ? "target met" : "the next pass continues"}`
       );
       return result;
     }

@@ -248,6 +248,7 @@ const KEY_SAMPLES = {
   fullSweepMaxSeconds: { config: { fullSweepMaxSeconds: 60 }, bad: { fullSweepMaxSeconds: 0 } },
   fullSweepSoftSeconds: { config: { fullSweepSoftSeconds: 30 }, bad: { fullSweepSoftSeconds: 0 } },
   fullSweepReserveSeconds: { config: { fullSweepReserveSeconds: 5 }, bad: { fullSweepReserveSeconds: -1 } },
+  fullSweepTargetShare: { config: { fullSweepTargetShare: 0.3 }, bad: { fullSweepTargetShare: 2 } },
   backgroundLeafPrep: { config: { backgroundLeafPrep: true }, bad: { backgroundLeafPrep: "yes" } },
   temporalRollups: { config: { temporalRollups: false }, bad: { temporalRollups: "no" } },
   rollupBuildsPerPass: { config: { rollupBuildsPerPass: 3 }, bad: { rollupBuildsPerPass: 0 } },

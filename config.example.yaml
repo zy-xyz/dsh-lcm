@@ -119,6 +119,15 @@ fullSweepMaxSeconds: 120
 # 没有这一层时，剩 5 秒也会开一个 17 秒的叶，实际超支 12 秒才停。
 fullSweepSoftSeconds: 60
 
+# 一次 sweep 要回收多少 = threshold × 这个比例（lcm-x _DEFAULT_SWEEP_TARGET_THRESHOLD_SHARE = 0.25）。
+#
+# 这是「什么时候停」的主判据，软目标只是它的兜底 —— lcm-x 的循环条件是
+# sweep_summary_prefix_before > sweep_target_tokens，时钟只拦「到不了目标」的那一轮。
+#
+# 我们原先只有时钟：一次穿越 3-4 个叶就停，而一个 705,375 token 的会话抽到地板要 26 个叶，
+# 于是需要 8 次穿越 —— 这就是「压了 3 次还剩 70%」的算术来源。
+fullSweepTargetShare: 0.25
+
 # 硬上限里为「提交 + 重新测量」预留的秒数。默认 10，取 lcm-x
 # finalize_reserve 区间（5–20）的中点：最后一个叶返回后还要落盘和重测，
 # 不留这一块，硬上限就是循环兑现不了的承诺。

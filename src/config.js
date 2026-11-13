@@ -156,8 +156,34 @@ const DEFAULT_FULL_SWEEP_MAX_SECONDS = 120;
  * Half is the ratio that keeps a sweep from ending on a truncated leaf; the
  * remaining half pays for the leaf already in flight plus the finalize.
  * Same ratio, same numbers: 60 of 120.
+ *
+ * This is the BACKSTOP, not the stop. What normally ends a productive sweep is
+ * `fullSweepTargetShare`: once a pass has reclaimed its share of the threshold it
+ * is done, and the clock only bounds a pass that cannot get there. Reading the two
+ * together matters — with the clock alone a crossing stopped after 3-4 leaves
+ * however much was owed, which is why a session at 705 375 tokens reported
+ * "compacted 3 times and still at 70%".
  */
 const DEFAULT_FULL_SWEEP_SOFT_SECONDS = 60;
+/**
+ * Fraction of the threshold that one sweep aims to drain, when the backlog is
+ * bigger than one leaf.
+ *
+ * lcm-x bounds a sweep by a TARGET, not by the clock: `sweep_target_tokens =
+ * min(leaf_chunk_tokens, threshold * 0.25)` (`compaction.py:2258-2260`) and the
+ * loop runs until the summary prefix is under it. The clock is only what stops a
+ * pass that cannot reach the target, which is why a 60 s soft target is enough
+ * there — the target is what decides when to stop, the clock is the backstop.
+ *
+ * We had the clock alone, so a crossing stopped after 3-4 leaves however much was
+ * owed: measured on a session at 705 375 tokens, draining to the floor needs 26
+ * leaves, and at 3-4 per crossing that is 8 crossings — which is exactly the
+ * "compacted 3 times and still at 70%" report.
+ *
+ * 0.25 is lcm-x's share. Applied to `thresholdTokens`, so the target scales with
+ * the window instead of being a second fixed number to keep in step.
+ */
+const DEFAULT_FULL_SWEEP_TARGET_SHARE = 0.25;
 /**
  * Slice of the hard ceiling reserved for the commit and the re-measure.
  *
@@ -313,6 +339,7 @@ const LCM_KEYS = [
   "fullSweepMaxPasses",
   "fullSweepMaxSeconds",
   "fullSweepSoftSeconds",
+  "fullSweepTargetShare",
   "fullSweepReserveSeconds",
   "leafEstimateFloorSeconds",
   "stallCooldownMs",
@@ -434,6 +461,7 @@ export function resolveConfig(config = {}) {
     fullSweepMaxPasses: config.fullSweepMaxPasses ?? DEFAULT_FULL_SWEEP_MAX_PASSES,
     fullSweepMaxSeconds: config.fullSweepMaxSeconds ?? DEFAULT_FULL_SWEEP_MAX_SECONDS,
     fullSweepSoftSeconds: config.fullSweepSoftSeconds ?? DEFAULT_FULL_SWEEP_SOFT_SECONDS,
+    fullSweepTargetShare: config.fullSweepTargetShare ?? DEFAULT_FULL_SWEEP_TARGET_SHARE,
     fullSweepReserveSeconds: config.fullSweepReserveSeconds ?? DEFAULT_FULL_SWEEP_RESERVE_SECONDS,
     leafEstimateFloorSeconds: config.leafEstimateFloorSeconds ?? DEFAULT_LEAF_ESTIMATE_FLOOR_SECONDS,
     stallCooldownMs: config.stallCooldownMs ?? DEFAULT_STALL_COOLDOWN_MS,
@@ -628,6 +656,7 @@ function validatePolicy(config, name) {
   if (config.fullSweepMaxPasses !== undefined) assertPositiveInteger(`${name}.fullSweepMaxPasses`, config.fullSweepMaxPasses);
   if (config.fullSweepMaxSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepMaxSeconds`, config.fullSweepMaxSeconds);
   if (config.fullSweepSoftSeconds !== undefined) assertPositiveInteger(`${name}.fullSweepSoftSeconds`, config.fullSweepSoftSeconds);
+  if (config.fullSweepTargetShare !== undefined) assertRatio(`${name}.fullSweepTargetShare`, config.fullSweepTargetShare);
   if (config.fullSweepReserveSeconds !== undefined) assertNonNegativeInteger(`${name}.fullSweepReserveSeconds`, config.fullSweepReserveSeconds);
   if (config.leafEstimateFloorSeconds !== undefined) assertPositiveInteger(`${name}.leafEstimateFloorSeconds`, config.leafEstimateFloorSeconds);
   // The stall hold's deadline was the ONE key of the 28 declared in the schema
