@@ -53,20 +53,26 @@
       # A "vectorEnabled: true" here looked enabled in --dump-config while
       # "search" quietly stayed lexical.
       config:
-        # Two clocks and a reserve, exactly lcm-x's ForegroundBudget numbers.
+        # A budget sized by the TARGET it has to reach, not copied from lcm-x.
         #
-        # These are affordable only because a sweep no longer has to finish in one
-        # turn: _continueOnIdle resumes it when the agent goes idle, which is the
-        # gap lcm-x fills with its next pre-step. The drain is unchanged — one
-        # leaf reclaims 18 216, the floor is system prompt 100 541 + retained tail
-        # 149 514 = 250 055, so 800 000 -> 250 055 needs 31 leaves and 522 s at the
-        # measured 17.3 s each — it is now paid over a few idle passes instead of
-        # one ten-minute block.
-        fullSweepMaxSeconds: 120
-        # Stop STARTING leaves here, keeping the other half to finish the leaf in
-        # flight plus the finalize. lcm-x uses the same ratio (60 of 120): without
-        # it a leaf admitted with 5 s left overruns the ceiling by its own length.
-        fullSweepSoftSeconds: 60
+        # The target is fullSweepTargetShare (default 0.25) of the threshold:
+        # 0.25 x 750 000 = 187 500 tokens. One leaf reclaims ~22 200, so reaching
+        # it costs 9 leaves, and the measured leaf wall is median 19.9 s / max 72.9 s
+        # (40 leaves) — about 180 s at the median.
+        #
+        # lcm-x's 120 s was sized for ITS leaf cost and ITS target. Copied here it
+        # made target_reached unreachable: measured on a live sweep, one 72.9 s leaf
+        # ended the pass against a 187 500-token target having reclaimed 22 220.
+        fullSweepMaxSeconds: 300
+        # 0 DISABLES the soft stop, which is what lcm-x does for `force`
+        # (state.budget.soft = 0.0) and guards with `soft > 0`.
+        #
+        # The same measurement is why: a soft target SHORTER THAN ONE LEAF cannot
+        # bound a sweep, it ends it. 60 s against a 72.9 s leaf refused the second
+        # admission immediately, every time. A clock that can end a sweep before its
+        # target is reachable is the binding constraint, not a backstop — so the
+        # target ends a sweep and the hard ceiling bounds it.
+        fullSweepSoftSeconds: 0
         # Slice of the hard ceiling kept for the commit and re-measure after the
         # last leaf returns, lcm-x's finalize_reserve (theirs is clamp(p90, 5, 20)).
         fullSweepReserveSeconds: 10
