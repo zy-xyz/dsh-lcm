@@ -120,6 +120,22 @@ test("the profile report survives an unreadable session", () => {
   assert.equal(app.totals.count, 1, "and the readable one still contributes");
 });
 
+test("the vector layer is detected from the RESOLVED field name", () => {
+  // Measured defect: the panel reported "the vector layer is off" while the layer
+  // was on and filling its cache. `resolveVectorConfig` renames the switch — the raw
+  // key is `vectorEnabled`, the resolved field is `enabled` — and reading the raw
+  // one on a resolved object is silently `undefined`, which is falsy, which reads
+  // as "disabled". The idle maintenance pass documents the same trap at its own
+  // call site; this pins the read for the panel.
+  const resolved = resolveConfig({ vectorEnabled: true, vectorModel: "m", vectorDim: 4 });
+  assert.equal(resolved.vectorEnabled, undefined, "the resolved object does NOT carry the raw key");
+  assert.equal(resolved.enabled, true, "it carries \"enabled\" instead");
+
+  const source = fs.readFileSync(path.join(ROOT, "src", "insight.js"), "utf8");
+  assert.match(source, /resolved\.enabled === true/u, "the panel must read the resolved name");
+  assert.doesNotMatch(source, /resolved\.vectorEnabled/u, "and must never read the raw one");
+});
+
 test("the routes are built from config and refuse a non-GET", async () => {
   const routes = insightRoutes({ get: () => undefined }, resolveConfig({}));
   assert.equal(routes.length, 2, "one route per view");

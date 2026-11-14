@@ -778,7 +778,12 @@ export function insightRoutes(ctx, resolved) {
   // The vector layer's own resolution, so coverage is measured against the exact
   // model and width the search route uses. Off means the panel reports the layer as
   // disabled instead of showing a coverage of zero.
-  const vector = resolved.vectorEnabled === true ? resolveVectorConfig(resolved) : null;
+  // `resolveVectorConfig` RENAMES the switch: the raw key is `vectorEnabled`, the
+  // resolved field is `enabled`. Reading the wrong one made this line always false,
+  // so the panel reported "the vector layer is off" while the layer was on and
+  // filling its cache. Same trap the idle maintenance pass documents at its own
+  // call site; the fix is to read the resolved name.
+  const vector = resolved.enabled === true ? resolveVectorConfig(resolved) : null;
   const digests = vector === null ? null : cachedDigests(vectorCacheDirOf(vector));
 
   return [
