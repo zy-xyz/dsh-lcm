@@ -1,13 +1,17 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-lcm/insight',
+  // The id MUST be the package name: client-modules keys the module graph by
+  // `graphRow(packageName, ...)` and resolves `<id>/client` to that same row. A
+  // subpath here left the bundle unregisterable and the row never activated.
+  id: 'dsh-lcm',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
     const { useState, useEffect, useMemo, useCallback } = React;
 
-    // The module id is the package plus a subpath so the Web app can tell this half
-    // apart from the host row; the slot key matches the sidebar entry id.
-    const PLUGIN = 'dsh-lcm/insight';
+    // Slot keys are this plugin's own namespace; they are NOT the module id. The
+    // sidebar entry id and the `main` panel key must match each other so selecting
+    // the entry opens the panel.
+    const PLUGIN = 'lcm-insight';
     const NS = 'lcmInsight';
     // The Session header row (breadcrumb, actions, utilities) is the row meant by
     // "the top bar of the trajectory/context line"; `utilities` is its right-aligned

@@ -120,3 +120,40 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.match(source, /conversation\.session\.header\.utilities/u, "the header readout targets the session header row");
   assert.match(source, /sidebar\.panellist/u, "and the panel has a sidebar entry");
 });
+
+test("the client bundle registers under the PACKAGE NAME, which is how the graph keys it", () => {
+  // Measured failure: the id was "dsh-lcm/insight", the row reported
+  //   web boot: 1 entry did not activate
+  //   dsh-lcm: import failed
+  // because client-modules builds its graph with `graphRow(packageName, ...)` and
+  // resolves "<id>/client" onto that same row. A subpath is not a package name, so
+  // the bundle never registered.
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  const source = fs.readFileSync(path.join(ROOT, "client.js"), "utf8");
+  const registration = {};
+  globalThis.window = { __ModuleLoader__: { load(value) { Object.assign(registration, value); } } };
+  try {
+    // The bundle is a script, not a module: it registers by running.
+    new Function(source)();
+  } finally {
+    delete globalThis.window;
+  }
+  assert.equal(registration.id, manifest.name, "the registration id must equal the package name");
+  assert.equal(typeof registration.factory, "function", "and the loader calls this factory");
+
+  // The factory's face is what the module system mounts; a missing `apply` is a row
+  // that activates and does nothing.
+  const stubReact = {
+    createElement: () => ({}),
+    useState: () => [null, () => {}],
+    useEffect: () => {},
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn()
+  };
+  const face = registration.factory((specifier) => {
+    if (specifier === "react") return stubReact;
+    throw new Error("unexpected external: " + specifier);
+  });
+  assert.equal(typeof face.apply, "function", "the face must expose apply");
+  assert.ok(Array.isArray(face.inject), "and declare what it injects");
+});
