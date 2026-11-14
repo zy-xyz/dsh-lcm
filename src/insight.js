@@ -53,19 +53,45 @@ export function isCheckpoint(event) {
  * @param events - the session log in seq order.
  * @returns a map from checkpoint seq to depth.
  */
-export function checkpointDepths(events) {
-  const depths = new Map();
-  const checkpointSeqs = new Set(events.filter(isCheckpoint).map((event) => event.seq));
+/**
+ * The seq that identifies a checkpoint ON THE SURFACE.
+ *
+ * A checkpoint is two events: `compaction/summary` carrying the body, then a
+ * `user/message` that REPLACES the absorbed range. `deriveDag` keys its nodes by
+ * the message seq, and `shadowedSeqs` records absorbed MESSAGE seqs — so a
+ * condensation lists earlier checkpoints' message seqs, never their summary seqs.
+ *
+ * This was measured the hard way: a survey that compared `shadowedSeqs` against the
+ * set of SUMMARY seqs reported "zero condensations in 268 sessions" and sent the
+ * investigation after a bug that did not exist. The real count is 87.
+ * @param events - the session log in seq order.
+ * @returns `Map<messageSeq, summaryEvent>`.
+ */
+export function surfaceCheckpoints(events) {
+  const bySeq = new Map(events.map((event) => [event.seq, event]));
+  const found = new Map();
   for (const event of events) {
     if (!isCheckpoint(event)) continue;
-    const absorbed = (event.data?.shadowedSeqs ?? []).filter((seq) => checkpointSeqs.has(seq));
+    const next = bySeq.get(event.seq + 1);
+    if (next !== undefined && next.type === "user/message" && next.data?.source !== undefined) {
+      found.set(next.seq, event);
+    }
+  }
+  return found;
+}
+
+export function checkpointDepths(events) {
+  const surface = surfaceCheckpoints(events);
+  const depths = new Map();
+  for (const [messageSeq, summary] of surface) {
+    const absorbed = (summary.data?.shadowedSeqs ?? []).filter((seq) => surface.has(seq));
     if (absorbed.length === 0) {
-      depths.set(event.seq, 1);
+      depths.set(messageSeq, 1);
       continue;
     }
     let deepest = 0;
     for (const seq of absorbed) deepest = Math.max(deepest, depths.get(seq) ?? 1);
-    depths.set(event.seq, deepest + 1);
+    depths.set(messageSeq, deepest + 1);
   }
   return depths;
 }
@@ -77,19 +103,27 @@ export function checkpointDepths(events) {
  */
 export function checkpointRows(events) {
   const depths = checkpointDepths(events);
+  const surface = surfaceCheckpoints(events);
   const rows = [];
   for (const event of events) {
     if (!isCheckpoint(event)) continue;
     const body = event.data?.summary ?? [];
     const text = body.map((block) => block?.text ?? "").join("");
+    // Report the SURFACE seq, matching what the tree and the depth walk use, and
+    // keep the summary seq alongside so a reader can find the raw record too.
+    let messageSeq = null;
+    for (const [seq, summary] of surface) {
+      if (summary === event) { messageSeq = seq; break; }
+    }
     rows.push({
       seq: event.seq,
+      surfaceSeq: messageSeq,
       at: typeof event.time === "number" ? event.time : null,
       span: event.data?.shadowedTokenCount ?? 0,
       kept: estimateTokens(text),
       nodes: (event.data?.shadowedSeqs ?? []).length,
       cap: event.data?.maxTokens ?? null,
-      depth: depths.get(event.seq) ?? 1,
+      depth: messageSeq === null ? 1 : (depths.get(messageSeq) ?? 1),
       fallback: text.includes(FALLBACK_MARKER),
       model: event.data?.model ?? null,
       anchors: (text.match(/\(seq \d+\)/gu) ?? []).length
@@ -221,28 +255,30 @@ export function spanHistogram(rows) {
  */
 export function checkpointTree(events) {
   const depths = checkpointDepths(events);
-  const bySeq = new Map();
-  for (const event of events) {
-    if (!isCheckpoint(event)) continue;
-    const body = (event.data?.summary ?? []).map((block) => block?.text ?? "").join("");
-    bySeq.set(event.seq, {
-      seq: event.seq,
-      at: typeof event.time === "number" ? event.time : null,
-      span: event.data?.shadowedTokenCount ?? 0,
+  const surface = surfaceCheckpoints(events);
+  const bySurfaceSeq = new Map();
+  for (const [messageSeq, summary] of surface) {
+    const body = (summary.data?.summary ?? []).map((block) => block?.text ?? "").join("");
+    bySurfaceSeq.set(messageSeq, {
+      seq: messageSeq,
+      summarySeq: summary.seq,
+      at: typeof summary.time === "number" ? summary.time : null,
+      span: summary.data?.shadowedTokenCount ?? 0,
       kept: estimateTokens(body),
-      nodes: (event.data?.shadowedSeqs ?? []).length,
+      nodes: (summary.data?.shadowedSeqs ?? []).length,
       rawMessages: 0,
       fallback: body.includes(FALLBACK_MARKER),
-      depth: depths.get(event.seq) ?? 1,
+      depth: depths.get(messageSeq) ?? 1,
       children: []
     });
   }
-  // Link each checkpoint to the checkpoints it absorbed; count the rest as raw.
+  // Link by SURFACE seq: that is the identity `shadowedSeqs` records for a
+  // checkpoint it absorbed. Anything not in that map was a raw message.
   const absorbed = new Set();
-  for (const [seq, node] of bySeq) {
-    const source = events.find((event) => event.seq === seq);
-    for (const childSeq of source?.data?.shadowedSeqs ?? []) {
-      const child = bySeq.get(childSeq);
+  for (const [messageSeq, summary] of surface) {
+    const node = bySurfaceSeq.get(messageSeq);
+    for (const childSeq of summary.data?.shadowedSeqs ?? []) {
+      const child = bySurfaceSeq.get(childSeq);
       if (child === undefined) {
         node.rawMessages += 1;
         continue;
@@ -251,11 +287,11 @@ export function checkpointTree(events) {
       absorbed.add(childSeq);
     }
   }
-  for (const node of bySeq.values()) node.children.sort((a, b) => a.seq - b.seq);
+  for (const node of bySurfaceSeq.values()) node.children.sort((a, b) => a.seq - b.seq);
   // A checkpoint nothing else absorbed is a root: it is still standing on the
   // surface. Everything else is reachable through a parent.
-  const roots = [...bySeq.values()].filter((node) => !absorbed.has(node.seq)).sort((a, b) => a.seq - b.seq);
-  return { roots, total: bySeq.size };
+  const roots = [...bySurfaceSeq.values()].filter((node) => !absorbed.has(node.seq)).sort((a, b) => a.seq - b.seq);
+  return { roots, total: bySurfaceSeq.size };
 }
 
 export function analyzeSession(events) {

@@ -17,13 +17,32 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DAY = 86400000;
 const T0 = Date.parse("2026-11-13T10:00:00Z");
 
+/**
+ * One checkpoint as the engine actually writes it: a `compaction/summary`, then a
+ * `user/message` that REPLACES the absorbed range and carries `data.source`.
+ *
+ * The message is not decoration. `deriveDag` keys its nodes by the MESSAGE seq and
+ * `shadowedSeqs` records absorbed MESSAGE seqs, so a fixture with only the summary
+ * made every checkpoint look like a root — which is exactly the wrong conclusion this
+ * suite once produced ("zero condensations in 268 sessions"; the real count is 87).
+ * @param seq - the summary's seq; the message takes seq + 1.
+ * @returns the two events, in order.
+ */
 function checkpoint(seq, time, span, text, extra = {}) {
-  return { type: "compaction/summary", seq, time, data: { shadowedSeqs: [seq - 1], shadowedTokenCount: span, summary: [{ type: "text", text }], maxTokens: 4096, ...extra } };
+  return [
+    { type: "compaction/summary", seq, time, data: { shadowedSeqs: [seq - 2], shadowedTokenCount: span, summary: [{ type: "text", text }], maxTokens: 4096, ...extra } },
+    { type: "user/message", seq: seq + 1, time, data: { message: { role: "user", content: [] }, source: { kind: "checkpoint" } } }
+  ];
+}
+
+/** Flatten the pairs `checkpoint` returns. */
+function log(...parts) {
+  return parts.flat(Infinity);
 }
 
 test("a checkpoint body is priced and the span is taken from the record", () => {
   // The body is an ESTIMATE (chars / 3.9); the span is what the engine recorded.
-  const report = analyzeSession([checkpoint(2, T0, 24000, "x".repeat(3900))]);
+  const report = analyzeSession(log(checkpoint(2, T0, 24000, "x".repeat(3900))));
   assert.equal(report.totals.count, 1);
   assert.equal(report.totals.span, 24000, "the span is engine-recorded, not estimated");
   assert.equal(report.totals.kept, 1000, "3900 chars / 3.9");
@@ -31,42 +50,39 @@ test("a checkpoint body is priced and the span is taken from the record", () => 
 });
 
 test("a deterministic body counts as degraded", () => {
-  const report = analyzeSession([
+  const report = analyzeSession(log(
     checkpoint(2, T0, 1000, "DETERMINISTIC fallback body"),
-    checkpoint(3, T0 + 1000, 1000, "(seq 2) a real chronology")
-  ]);
+    checkpoint(4, T0 + 1000, 1000, "(seq 2) a real chronology")
+  ));
   assert.equal(report.totals.fallbacks, 1);
   assert.equal(report.totals.fallbackRate, 0.5);
 });
 
 test("depth is derived from what each checkpoint absorbed", () => {
-  // A condensation cites an earlier checkpoint; a leaf cites raw messages.
-  const events = [
-    checkpoint(2, T0, 1000, "leaf one"),
-    checkpoint(4, T0 + 1, 1000, "leaf two"),
-    { type: "compaction/summary", seq: 6, time: T0 + 2, data: { shadowedSeqs: [2, 4], shadowedTokenCount: 2000, summary: [{ type: "text", text: "merged" }] } }
-  ];
-  const depths = checkpointDepths(events);
-  assert.equal(depths.get(2), 1, "a leaf is depth 1");
-  assert.equal(depths.get(6), 2, "a merge of two leaves is depth 2");
+  // A condensation cites the SURFACE seqs of earlier checkpoints (their replacement
+  // message seqs), which is the identity deriveDag uses.
+  const first = checkpoint(2, T0, 1000, "leaf one");   // message seq 3
+  const second = checkpoint(4, T0 + 1, 1000, "leaf two"); // message seq 5
+  const merged = checkpoint(6, T0 + 2, 2000, "merged", { shadowedSeqs: [3, 5] }); // message seq 7
+  const depths = checkpointDepths(log(first, second, merged));
+  assert.equal(depths.get(3), 1, "a leaf is depth 1");
+  assert.equal(depths.get(5), 1);
+  assert.equal(depths.get(7), 2, "a merge of two leaves is depth 2");
 });
 
 test("the tree links a condensation to the checkpoints it absorbed", () => {
   // The structure view needs parenthood, not just depth. A condensation absorbs
   // earlier CHECKPOINTS; a leaf absorbs raw messages and only their count survives,
   // because listing 24 000 messages would bury the structure it is meant to explain.
-  const events = [
-    { type: "user/message", seq: 1, time: T0 },
-    checkpoint(2, T0, 1000, "leaf one"),
-    { type: "user/message", seq: 3, time: T0 + 1 },
-    checkpoint(4, T0 + 2, 1000, "leaf two"),
-    { type: "compaction/summary", seq: 6, time: T0 + 3, data: { shadowedSeqs: [2, 4], shadowedTokenCount: 2000, summary: [{ type: "text", text: "merged" }] } }
-  ];
-  const tree = checkpointTree(events);
+  const first = checkpoint(2, T0, 1000, "leaf one");
+  const second = checkpoint(4, T0 + 1, 1000, "leaf two");
+  const merged = checkpoint(6, T0 + 2, 2000, "merged", { shadowedSeqs: [3, 5] });
+  const tree = checkpointTree(log(first, second, merged));
   assert.equal(tree.total, 3, "three checkpoints");
   assert.equal(tree.roots.length, 1, "the condensation is the only root; the leaves hang under it");
-  assert.equal(tree.roots[0].seq, 6);
-  assert.deepEqual(tree.roots[0].children.map((child) => child.seq), [2, 4], "oldest sibling first");
+  assert.equal(tree.roots[0].seq, 7, "the root is the replacement MESSAGE seq");
+  assert.equal(tree.roots[0].summarySeq, 6, "and the summary seq travels alongside");
+  assert.deepEqual(tree.roots[0].children.map((child) => child.seq), [3, 5], "oldest sibling first");
   assert.equal(tree.roots[0].rawMessages, 0, "it absorbed checkpoints, not messages");
 });
 
@@ -75,7 +91,7 @@ test("a leaf counts its absorbed messages instead of listing them", () => {
     { type: "user/message", seq: 1, time: T0 },
     { type: "assistant/message", seq: 2, time: T0 + 1 },
     { type: "user/message", seq: 3, time: T0 + 2 },
-    { type: "compaction/summary", seq: 5, time: T0 + 3, data: { shadowedSeqs: [1, 2, 3], shadowedTokenCount: 900, summary: [{ type: "text", text: "(seq 1) done" }] } }
+    ...checkpoint(5, T0 + 3, 900, "(seq 1) done", { shadowedSeqs: [1, 2, 3] })
   ];
   const tree = checkpointTree(events);
   assert.equal(tree.roots.length, 1);
@@ -95,7 +111,7 @@ test("span buckets keep one oversized leaf from flattening the chart", () => {
 test("the profile report survives an unreadable session", () => {
   // One bad log must be a gap in the totals, not a failed panel.
   const app = analyzeApplication([
-    { id: "a", report: analyzeSession([checkpoint(2, T0, 1000, "x".repeat(390))]), tokens: null, threshold: null },
+    { id: "a", report: analyzeSession(log(checkpoint(2, T0, 1000, "x".repeat(390)))), tokens: null, threshold: null },
     { id: "b", report: null, tokens: null, threshold: null }
   ]);
   assert.equal(app.sessions, 2);
