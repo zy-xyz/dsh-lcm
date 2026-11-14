@@ -16,6 +16,12 @@ window.__ModuleLoader__.load({
     // removed — a chip in the session header row (competes with the host's own
     // navigation) and a floating overlay (covers the conversation it describes).
     const VIEW_SLOT = 'conversation.view';
+    // The sidebar's panel list is built from `ctx.slots.entriesOfSlot("sidebar.panellist")`
+    // (ui-sidebar's `syncPanels`), one row per registration, and selecting a row
+    // dispatches `main` by that same id. So a sidebar entry needs BOTH rows, under one
+    // id: the entry supplies the label, the panel supplies the body.
+    const ENTRY_SLOT = 'sidebar.panellist';
+    const PANEL_SLOT = 'main';
     const REFRESH_MS = 5000;
 
     // ── palette ────────────────────────────────────────────────────────────
@@ -163,6 +169,15 @@ window.__ModuleLoader__.load({
         display: flex; flex-direction: column; gap: 18px;
         padding: 16px 20px 28px;
         color: var(--dsw-alias-label-primary);
+        font-size: 13px; line-height: 1.45;
+      }
+      /* The "main" panel IS the page: it owns the scroll and the height. */
+      .lcmi-panel {
+        --lcmi-radius: 6px;
+        display: flex; flex-direction: column; gap: 18px;
+        height: 100%; overflow-y: auto; padding: 20px 22px 28px;
+        color: var(--dsw-alias-label-primary);
+        background: var(--dsw-alias-bg-base);
         font-size: 13px; line-height: 1.45;
       }
       .lcmi-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -626,6 +641,27 @@ window.__ModuleLoader__.load({
     // ── the panel ──────────────────────────────────────────────────────────
 
     /**
+     * The sidebar entry's glyph.
+     *
+     * `sidebar.panellist` renders this in a fixed-size box with `{ size, active }`, so
+     * the icon must be pure SVG on `currentColor` and must not bring its own label:
+     * the sidebar draws the label beside it when the column is wide.
+     */
+    function SidebarGlyph(props) {
+      const size = typeof props?.size === 'number' ? props.size : 16;
+      return h('svg', {
+        viewBox: '0 0 24 24', width: size, height: size, fill: 'none',
+        stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round',
+        'aria-hidden': true, style: { display: 'block' }
+      },
+        h('path', { d: 'M3 20h18' }),
+        h('rect', { x: 5, y: 12, width: 3, height: 8, rx: 0.5 }),
+        h('rect', { x: 10.5, y: 7, width: 3, height: 13, rx: 0.5 }),
+        h('rect', { x: 16, y: 3, width: 3, height: 17, rx: 0.5 })
+      );
+    }
+
+    /**
      * The View tab's body.
      *
      * This is the ONLY surface the plugin renders. A header chip and a floating
@@ -638,6 +674,10 @@ window.__ModuleLoader__.load({
      */
     function Panel(props) {
       const t = props.t;
+      // Two containers render this: the View tab (inside the conversation column,
+      // which owns the scroll) and the `main` panel behind the sidebar entry (its own
+      // full-height page). `variant` picks the root class; the body is identical.
+      const variant = props.variant ?? 'view';
       // The View registration's `inject(sessionId)` hands this in; the store lookup
       // stays as a fallback for a host that does not pass it.
       const sessionId = props.sessionId ?? useActiveSessionId(props.sessions);
@@ -645,8 +685,19 @@ window.__ModuleLoader__.load({
       const session = useEndpoint(sessionUrl);
       const app = useEndpoint('/lcm-insight/app');
       // A View tab renders INSIDE the conversation column, which already owns the
-      // scroll and the padding: no fixed height, no own scroll container, and no
-      // second title bar competing with the tab label.
+      // scroll and the padding: no fixed height and no second title bar competing
+      // with the tab label. A `main` panel is the whole page, so it gets the height
+      // and the heading back.
+      if (variant === 'panel') {
+        return h('div', { className: 'lcmi-panel' },
+          h(Style),
+          h('div', { className: 'lcmi-head' },
+            h('h2', null, t('title')),
+            h('span', { className: 'lcmi-sub' }, t('description'))
+          ),
+          h(PanelBody, { t, sessionId, session, app })
+        );
+      }
       return h('div', { className: 'lcmi-view' },
         h(Style),
         h(PanelBody, { t, sessionId, session, app })
@@ -747,7 +798,21 @@ window.__ModuleLoader__.load({
               label: () => t('view'),
               inject: (sessionId) => ({ sessionId })
             },
-            (props) => h(Panel, { ...props, t })
+            (props) => h(Panel, { ...props, t, variant: 'view' })
+          ));
+
+          // The sidebar entry and its panel. ui-sidebar's `syncPanels` reads
+          // `entriesOfSlot("sidebar.panellist")` and needs `id`, `order` and `label`;
+          // selecting the row then dispatches `main` by that same `id`. Two rows, one
+          // id — an entry alone opens nothing and a panel alone has no row.
+          yield ctx.slots.inject(ENTRY_SLOT, () => ctx.slots.register(
+            { name: ENTRY_SLOT, id: PLUGIN, order: 30, label: () => t('view'), locale: NS },
+            SidebarGlyph
+          ));
+
+          yield ctx.slots.inject(PANEL_SLOT, () => ctx.slots.register(
+            { name: PANEL_SLOT, key: PLUGIN, locale: NS },
+            (props) => h(Panel, { ...props, t, variant: 'panel', sessions: ctx.sessions })
           ));
         });
       }

@@ -173,7 +173,16 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.match(source, /inject: \(sessionId\) => \(\{ sessionId \}\)/u, "and receives its session from the host");
   assert.doesNotMatch(source, /shell\.overlay/u, "no floating overlay");
   assert.doesNotMatch(source, /conversation\.session\.header\.utilities/u, "no header chip");
-  assert.doesNotMatch(source, /'sidebar\.panellist'/u, "no separate sidebar entry: the tab row is the navigation");
+
+  // The sidebar entry is a PAIR. ui-sidebar builds its panel list from
+  // `entriesOfSlot("sidebar.panellist")` and selecting a row dispatches `main` by the
+  // same id, so an entry alone opens nothing and a panel alone has no row.
+  assert.match(source, /ENTRY_SLOT = 'sidebar\.panellist'/u, "the entry registers in the sidebar list");
+  assert.match(source, /name: ENTRY_SLOT, id: PLUGIN, order: 30, label:/u,
+    "with an id, an order and a label — syncPanels needs all three");
+  assert.match(source, /name: PANEL_SLOT, key: PLUGIN/u, "and the panel answers under the same id");
+  assert.match(source, /variant: 'panel'/u, "the main panel gets its own full-height root");
+  assert.match(source, /variant: 'view'/u, "the tab keeps the flow-layout root");
 });
 
 test("every component the bundle registers is actually defined", () => {
