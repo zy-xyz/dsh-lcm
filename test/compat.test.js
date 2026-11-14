@@ -39,13 +39,15 @@ function recorder() {
 test("tools register both the LCM names and the original ones", () => {
   const { ctx, tools } = recorder();
   tool.apply(ctx, {});
-  assert.deepEqual(tools.sort(), ["lcm_expand", "lcm_search", "recall", "search"]);
+  // `lcm_timeline` has no legacy twin: it is a new reader for the rollup store, and
+  // the store did not exist when the original names were chosen.
+  assert.deepEqual(tools.sort(), ["lcm_expand", "lcm_search", "lcm_timeline", "recall", "search"]);
 });
 
 test("legacyNames: false drops the original names", () => {
   const { ctx, tools } = recorder();
   tool.apply(ctx, { legacyNames: false });
-  assert.deepEqual(tools.sort(), ["lcm_expand", "lcm_search"]);
+  assert.deepEqual(tools.sort(), ["lcm_expand", "lcm_search", "lcm_timeline"]);
 });
 
 test("commands register both /lcm-search and /recall", () => {
@@ -97,7 +99,7 @@ test("a tool definition can be built under either name", () => {
 // schema, so a key that one layer knows and the other does not fails here.
 
 /** The keys both rows read. Declared once; every other list is derived from it. */
-const LEXICAL_KEYS = ["embedMaintenanceLimit", "legacyNames", "maxRecallTokens", "maxSearchHits", "rank"];
+const LEXICAL_KEYS = ["embedMaintenanceLimit", "legacyNames", "maxRecallTokens", "maxSearchHits", "rank", "rollupDir"];
 
 /**
  * The `vector*` keys the tool row spreads from `resolveVectorConfig`, derived
@@ -171,7 +173,11 @@ test("the command row declares every key its resolveConfig reads, both command f
   // row that schedules the embedding pass. The command row only formats a manual
   // backfill the operator asked for, so a limit it never reads must not be declared
   // — an extra key is the mirror of a missing one, and simplify() would keep it.
-  const commandLexical = LEXICAL_KEYS.filter((key) => key !== "embedMaintenanceLimit");
+  // `embedMaintenanceLimit` and `rollupDir` are TOOL-row keys: the tool row schedules
+  // the embedding pass and reads the rollup sidecar. The command row neither counts
+  // embeddings in the background nor reads rollups, so declaring them there would be
+  // the mirror of a missing key — simplify() would keep a value nothing consumes.
+  const commandLexical = LEXICAL_KEYS.filter((key) => key !== "embedMaintenanceLimit" && key !== "rollupDir");
   assert.deepEqual(
     Object.keys(command.Config.dict).sort(),
     [...commandLexical, "commandSet", ...VECTOR_KEYS].sort()

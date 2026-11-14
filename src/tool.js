@@ -25,6 +25,7 @@ import { DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, recallSession, resolveRec
 import { DEFAULT_MAX_SEARCH_HITS, HYBRID_RANK_MODES, InvalidSearchPatternError, RANK_MODES, searchSessionHybrid } from "./search.js";
 import { resolveVectorConfig } from "./vectors.js";
 import { embedBackfill } from "./command.js";
+import { readRollups } from "./rollup.js";
 
 const name = "tool-lcm-expand";
 const inject = ["tools"];
@@ -46,6 +47,8 @@ function resolveConfig(config = {}) {
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("ToolRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("ToolRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("ToolRecallConfig: legacyNames must be a boolean");
+  const rollupDir = config.rollupDir ?? ".lcm-rollups";
+  if (typeof rollupDir !== "string" || rollupDir.length === 0) throw new Error("ToolRecallConfig: rollupDir must be a non-empty string");
   const embedMaintenanceLimit = config.embedMaintenanceLimit ?? DEFAULT_EMBED_MAINTENANCE_LIMIT;
   if (typeof embedMaintenanceLimit !== "number" || !Number.isInteger(embedMaintenanceLimit) || embedMaintenanceLimit <= 0) throw new Error("ToolRecallConfig: embedMaintenanceLimit must be a positive integer");
   if (typeof rank !== "string" || !RANK_MODES.includes(rank) && !HYBRID_RANK_MODES.includes(rank)) {
@@ -53,7 +56,7 @@ function resolveConfig(config = {}) {
   }
   // The vector keys ride along so the search handler can read them; they are
   // inert unless `vectorEnabled` is true and `rank` names a vector mode.
-  return { maxRecallTokens, maxSearchHits, legacyNames, rank, embedMaintenanceLimit, ...resolveVectorConfig(config) };
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank, embedMaintenanceLimit, rollupDir, ...resolveVectorConfig(config) };
 }
 
 /**
@@ -89,6 +92,9 @@ const Config = z.object({
   maxRecallTokens: z.number().step(1).min(1),
   legacyNames: z.boolean(),
   embedMaintenanceLimit: z.number().step(1).min(1),
+  // Where the engine writes its day rollups. The tool row reads the same sidecar the
+  // engine row writes, so the default matches ./config.js.
+  rollupDir: z.string().min(1),
   // The vector block rides along for the search handler; inert unless
   // `vectorEnabled` is true and `rank` names a vector mode (same as
   // resolveConfig, which spreads these through resolveVectorConfig).
@@ -203,6 +209,93 @@ function defineRecallTool(resolved, toolName = "lcm_expand") {
   });
 }
 
+/** Description for the `lcm_timeline` tool. */
+const TIMELINE_DESCRIPTION = "Read the day-level timeline this session's compaction engine has already built. A rollup is a chronology of one UTC day assembled from that day's checkpoints, with (seq N) citations into the log, so this answers \"what happened on the 11th\" without scanning the log or re-summarising anything. Local and free: no model call, no network. Returns the most recent days by default; pass `period` for one specific day, or `period: \"list\"` for just the available days.";
+
+/**
+ * Build the `lcm_timeline` tool definition: the read side of the rollup store.
+ *
+ * Rollups were written and never read. The pass runs on every idle, costs up to
+ * `rollupBuildsPerPass` model calls, and nothing exposed the result — lcm-x serves
+ * the same data through its `lcm_recent` tool, which is the piece this mirrors.
+ * @param resolved - validated config; `rollupDir` is where the sidecar lives.
+ * @returns a registry-ready ToolDefinition.
+ */
+function defineTimelineTool(resolved, toolName = "lcm_timeline") {
+  return defineTool({
+    name: toolName,
+    description: TIMELINE_DESCRIPTION,
+    parameters: {
+      period: {
+        type: "string",
+        description: 'Optional. A UTC day as "YYYY-MM-DD" to read that day only, or "list" to return just the available days and their sizes.'
+      },
+      limit: {
+        type: "integer",
+        description: "Optional number of most-recent days to return when `period` is omitted. Defaults to 3."
+      }
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text: { type: "string", required: true },
+          days: { type: "array", required: true, items: { type: "string" } },
+          returned: { type: "integer", required: true },
+          available: { type: "integer", required: true }
+        }
+      }
+    },
+    execute(args, exec) {
+      const agent = exec.agent;
+      if (agent === undefined || agent.session === undefined) {
+        throw new HarnessError("lcm_timeline requires a calling agent with a session", "TIMELINE_AGENT_REQUIRED");
+      }
+      const stored = readRollups(resolved.rollupDir, agent.session.id);
+      if (stored.length === 0) {
+        return {
+          text: "lcm: no timeline has been built for this session yet. Rollups are written on idle, after a checkpoint exists for the day.",
+          days: [],
+          returned: 0,
+          available: 0
+        };
+      }
+      const days = stored.map((record) => record.periodStart).sort();
+      const period = typeof args.period === "string" ? args.period.trim() : "";
+      if (period === "list") {
+        return { text: days.join("\n"), days, returned: days.length, available: stored.length };
+      }
+      const wanted = period.length > 0
+        ? stored.filter((record) => record.periodStart === period)
+        : stored.slice().sort((a, b) => (a.periodStart < b.periodStart ? 1 : -1)).slice(0, Math.max(1, args.limit ?? 3));
+      if (wanted.length === 0) {
+        return {
+          text: "lcm: no timeline for " + period + ". Available: " + days.join(", "),
+          days,
+          returned: 0,
+          available: stored.length
+        };
+      }
+      const body = wanted
+        .map((record) => "## " + record.periodStart + "  (" + record.sourceTokens + " tokens -> " + record.tokens + ")\n" + record.text)
+        .join("\n\n");
+      return {
+        text: body,
+        days: wanted.map((record) => record.periodStart),
+        returned: wanted.length,
+        available: stored.length
+      };
+    },
+    presentCall: (args) => ({
+      card: "generic",
+      title: "Read timeline",
+      kind: "read",
+      rawInput: args.period ?? "recent"
+    })
+  });
+}
+
 /**
  * Build the `search` (grep) tool definition against one resolved config.
  * @param resolved - validated `{ maxRecallTokens, maxSearchHits }`.
@@ -264,6 +357,9 @@ function apply(ctx, config) {
     const disposers = [
       ctx.tools.register(defineRecallTool(resolved, "lcm_expand")),
       ctx.tools.register(defineSearchTool(resolved, "lcm_search")),
+      // The read side of the rollup store: the pass wrote chronologies nothing could
+      // reach, which made every idle's model calls unread output.
+      ctx.tools.register(defineTimelineTool(resolved, "lcm_timeline")),
       // ── incremental embedding maintenance ────────────────────────────────
       // lcm-x schedules one bounded pass per corpus in the background after a leaf
       // is published and on session bind, "active exactly when embeddings_enabled".
@@ -313,4 +409,4 @@ function apply(ctx, config) {
   });
 }
 
-export { Config, DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, RECALL_DESCRIPTION, SEARCH_DESCRIPTION, apply, defineRecallTool, defineSearchTool, inject, name, resolveConfig };
+export { Config, DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, RECALL_DESCRIPTION, SEARCH_DESCRIPTION, TIMELINE_DESCRIPTION, apply, defineRecallTool, defineSearchTool, defineTimelineTool, inject, name, resolveConfig };

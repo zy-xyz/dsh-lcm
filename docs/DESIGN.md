@@ -178,14 +178,21 @@ already trusts for clearing `overflowRetries` — the same automatic path runs o
 more bounded pass. Nothing is mid-turn and no request is in flight, so a
 compaction cannot race a live surface edit; one pass per session is enforced by
 an in-flight set, and a failure is swallowed into the debug log because there is
-no turn to fail. With that in place the clocks are lcm-x's own: **soft 60,
-hard 120, reserve 10** (the midpoint of their 5..20), and the drain happens
-over a few idle passes instead of one ten-minute block.
+no turn to fail. With that in place the budget is **soft 0 (off), hard 120,
+reserve 10**, and a crossing reclaims `fullSweepTargetShare` of the threshold.
 
-Measured: the whole job is still 31 leaves, because the floor is the system
-prompt (100 541) plus the retained tail (149 514) = 250 055 and one leaf
-reclaims 18 216. What changed is that each pass now stops predictably and the
-next one starts on its own.
+Soft is 0, not lcm-x's 60, and that is a measured correction. One leaf costs a
+median of 32.3 s but has been observed at 72.9 s; a 60 s soft target is then
+SHORTER THAN ONE LEAF, so the estimate after the first leaf exceeds the whole
+budget, the second admission is refused, and the sweep ends after exactly one
+leaf. Measured on a live session: one 72.9 s leaf reclaimed 22 220 tokens
+against a 187 500 target and stopped. A clock that can end a sweep before its
+target is reachable is the binding constraint, not a backstop.
+
+So the HARD ceiling bounds a sweep and `fullSweepTargetShare` ends it. At
+0.08 × 750 000 = 60 000 against ~21 479 reclaimed per leaf, three leaves reach
+the target inside the 110 s a 120 s budget leaves usable — which is what makes
+`target_reached` a stop reason that can actually fire.
 
 ## 3. Condensation at fanin 4
 
@@ -664,8 +671,9 @@ retainTokens     = retainTokens ?? floor(messageBudget * 0.05)         # was flo
 ```
 
 Why those two and not basic's: the macOS build session sat at 97% of an 0.8
-threshold across 20 sweeps in two days, because a 60 s soft target only runs 3-4
-leaves per crossing while the band it has to drain was the smallest of the three
+threshold across 20 sweeps in two days, because the 60 s soft target of the time
+only ran 3-4 leaves per crossing (that target is 0 now — see the budget note above)
+while the band it had to drain was the smallest of the three
 candidates. 0.75 buys 50 000 tokens of headroom on the request; 0.05 buys back
 103 000 tokens of compactable band without going all the way to lcm-x's 24 000,
 which this engine's coarser leaf summaries are not tuned for.
