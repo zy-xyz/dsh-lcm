@@ -156,6 +156,7 @@ const Config = z.object({
   vectorCandidateTokens: z.number().step(1).min(1),
   vectorCandidateLimit: z.number().step(1).min(1),
   vectorTimeoutMs: z.number().step(1).min(1),
+  vectorConcurrency: z.number().step(1).min(1),
   vectorCacheDir: z.string().min(1),
   vectorApiKeyEnv: z.string()
 });
@@ -585,38 +586,59 @@ async function embedBackfill(session, cfg, options = {}) {
     // derives the size from the same rule the ceiling uses, so the two can never
     // disagree.
     const batchSize = batchSizeFor(cfg);
+    // ── concurrent batches, bounded ───────────────────────────────────────
+    // Measured on this endpoint: four 1-text requests took 107.6 s sequentially
+    // and 8.3 s concurrently — 13x, because the bottleneck is per-request
+    // latency, not throughput. The loop below was strictly sequential, so it paid
+    // that latency once per batch for no benefit.
+    //
+    // The bound matters: this row shares a gateway with the search route, and a
+    // pass that fires every batch at once would starve an interactive query.
+    // `cfg.concurrency` is the measured 4.
+    const batches = [];
     for (let start = 0; start < pending.length; start += batchSize) {
-      const batch = pending.slice(start, start + batchSize);
-      let result;
-      try {
-        result = await embedTextsTolerant(cfg, batch);
-        consecutiveFailures = 0;
-      } catch (error) {
-        // The endpoint refused the whole batch (auth, routing, a dead server).
-        // Those texts stay uncached and are counted, not silently dropped. The
-        // pass stops at the breaker rather than walking the window at this row's
-        // long ceiling: nothing here is lost, because every earlier batch is
-        // already on disk and a re-run resumes from the cache.
-        failed += batch.length;
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= BACKFILL_FAILURE_LIMIT) {
-          stopped = "failures";
-          break;
-        }
-        continue;
-      }
-      for (let index = 0; index < batch.length; index += 1) {
-        const vector = result.vectors[index];
-        if (vector === undefined) {
-          failed += 1;
+      batches.push(pending.slice(start, start + batchSize));
+    }
+    let cursor = 0;
+    // One worker drains the batch list; `concurrency` of them run at a time.
+    // Writes go to the content-addressed cache one file at a time, so parallel
+    // workers cannot collide: the key is the text, not the position.
+    const worker = async () => {
+      for (;;) {
+        if (stopped !== "") return;
+        const index = cursor;
+        cursor += 1;
+        if (index >= batches.length) return;
+        const batch = batches[index];
+        let result;
+        try {
+          result = await embedTextsTolerant(cfg, batch);
+          consecutiveFailures = 0;
+        } catch (error) {
+          // The endpoint refused the whole batch (auth, routing, a dead server).
+          // Those texts stay uncached and are counted, not silently dropped. The
+          // pass stops at the breaker rather than walking the window at this
+          // row's long ceiling: nothing here is lost, because every earlier batch
+          // is already on disk and a re-run resumes from the cache.
+          failed += batch.length;
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= BACKFILL_FAILURE_LIMIT) stopped = "failures";
           continue;
         }
-        // The cache file is the entire product of a backfill; a write that
-        // silently vanished would report a pass that did not happen.
-        await cache.set(batch[index], vector);
-        embedded += 1;
+        for (let index2 = 0; index2 < batch.length; index2 += 1) {
+          const vector = result.vectors[index2];
+          if (vector === undefined) {
+            failed += 1;
+            continue;
+          }
+          // The cache file is the entire product of a backfill; a write that
+          // silently vanished would report a pass that did not happen.
+          await cache.set(batch[index2], vector);
+          embedded += 1;
+        }
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(cfg.concurrency ?? 1, batches.length)) }, worker));
   }
   // `remaining` is what a capped pass leaves behind, so an operator can see that
   // another `--apply` has work to do instead of assuming one pass drained the

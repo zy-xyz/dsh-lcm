@@ -131,13 +131,12 @@
         # costs nothing anyway. Raise it again on a local endpoint.
         vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
-        # PER TEXT. Measured on this endpoint: 8.9 s for one text, 37.2 s for eight
-        # (~4.7 s each). 12 s is roughly 2.5x the measured cost, so a text slower
-        # than that is genuinely slow rather than unlucky. The request ceiling is
-        # derived from it (12 s x batch + 5 s, capped at 240 s), so a large batch is
-        # never given a ceiling sized for a small one — that mismatch is what made
-        # every 32-text batch time out while the endpoint was healthy.
-        vectorTimeoutMs: 12000
+        # PER REQUEST, and it must cover a whole batch. Measured on this endpoint:
+        # 8.9 s for one text, 37.2 s for eight (~4.7 s each) — cost per text FALLS
+        # with batch size, so a small batch is the expensive shape and the ceiling
+        # has to fit 32 texts, not one. 30 s could never do that, which is why every
+        # batch timed out. 150 s covers 32 texts at the measured cost with headroom.
+        vectorTimeoutMs: 150000
     - id: command-lcm-search
       name: dsh-lcm/command
     # The vector-cache surface, a second row of the same module. It must be a
@@ -170,11 +169,10 @@
         # currently agree; keep them that way.
         vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
-        # PER TEXT. A backfill is offline work, so it tolerates the endpoint's tail:
-        # 25 s per text against a measured 4.7 s. The request ceiling still scales
-        # with batch size and is still capped at 240 s, so this row waits longer per
-        # text without ever waiting unbounded on one request.
-        vectorTimeoutMs: 25000
+        # PER REQUEST. An offline pass tolerates the endpoint's tail, so this row
+        # waits longer than the search row: 240 s covers 32 texts at 4.7 s each plus
+        # a stall. The batch shrinks automatically if the ceiling cannot cover 32.
+        vectorTimeoutMs: 240000
     - id: lcm-compaction-gate
       name: dsh-lcm/gate
 

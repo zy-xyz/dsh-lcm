@@ -1,13 +1,12 @@
-// ── the ceiling must scale with the batch ──────────────────────────────────
-// Measured failure: `vectorTimeoutMs` was a PER-REQUEST ceiling, so a 32-text
-// batch shared one 30 s limit with a 1-text batch. At ~4.7 s per text the batch
-// needed ~150 s, timed out every time, and the maintenance pass failed silently
-// for days while the cache stayed frozen.
+// ── the ceiling must cover a whole batch ───────────────────────────────────
+// Measured failure: `vectorTimeoutMs` was 30 s on the maintenance row while a
+// 32-text batch costs ~150 s, so every batch timed out, twice in a row, and the
+// breaker ended the pass silently for days.
 //
-// The fix is a per-TEXT allowance with a request ceiling derived from it, and a
-// batch size derived from the same rule. These tests pin that derivation, because
-// the two numbers agreeing is the whole property — a batch sized for a ceiling it
-// does not get is the original bug wearing a different hat.
+// The first fix made the ceiling PER TEXT and derived the batch from it. That was
+// wrong in the other direction: cost per text FALLS with batch size (8.9 s/text at
+// 1, 4.7 at 8, 1.7 at 9), so forcing small batches pays the fixed overhead most
+// often. These tests pin the shape the measurement actually supports.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -15,40 +14,38 @@ import { batchSizeFor, MAX_EMBED_BATCH, resolveVectorConfig, vectorSearchBudgetM
 
 const base = { vectorEnabled: true, vectorModel: "m", vectorDim: 4 };
 
-test("a bigger batch is given a bigger ceiling", () => {
-  // The property the old design violated: N texts must be allowed more wall clock
-  // than 1 text, or the batch is judged by the wrong standard.
-  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 12000 });
-  const one = cfg.timeoutMs + Math.min(cfg.timeoutMs, 5000);
-  const many = cfg.timeoutMs * 19 + Math.min(cfg.timeoutMs, 5000);
-  assert.ok(many > one * 10, "19 texts must be allowed far more than one");
+/** The conservative measured cost per text, matching the implementation. */
+const PER_TEXT_MS = 4_600;
+
+test("the ceiling is per request and is returned unchanged", () => {
+  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 150_000 });
+  assert.equal(cfg.timeoutMs, 150_000, "one number, one meaning: the whole request");
 });
 
-test("the batch is sized so its ceiling fits under the hard cap", () => {
-  const CAP = 240_000;
-  for (const perText of [2_000, 5_000, 12_000, 25_000, 60_000]) {
-    const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: perText });
-    const size = batchSizeFor(cfg);
-    const ceiling = Math.min(perText, 5_000) + perText * size;
-    assert.ok(ceiling <= CAP, `a ${size}-text batch at ${perText} ms/text wants ${ceiling} ms, over the ${CAP} ms cap`);
-    assert.ok(size >= 1, "and a batch is never empty");
-    assert.ok(size <= MAX_EMBED_BATCH, "nor bigger than the protocol allows");
-  }
+test("a ceiling that covers 32 texts yields the full protocol batch", () => {
+  // 32 texts at the measured cost is ~150 s. This is the configuration that makes
+  // a backfill work at all.
+  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 150_000 });
+  assert.equal(batchSizeFor(cfg), MAX_EMBED_BATCH);
 });
 
-test("a slow allowance yields a small batch, a fast one the maximum", () => {
-  assert.equal(batchSizeFor({ ...base, vectorTimeoutMs: 2_000 }), MAX_EMBED_BATCH,
-    "a fast endpoint fills the protocol batch");
-  const slow = batchSizeFor({ ...base, vectorTimeoutMs: 60_000 });
-  assert.ok(slow <= 4, `a 60 s allowance must shrink the batch to fit the cap, got ${slow}`);
+test("a ceiling too small for 32 texts shrinks the BATCH, not the request", () => {
+  // The old bug was a 30 s ceiling with a fixed 32-text batch: a request that could
+  // never finish. Shrinking the batch keeps every request achievable.
+  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 30_000 });
+  const size = batchSizeFor(cfg);
+  assert.ok(size < MAX_EMBED_BATCH, "a 30 s ceiling cannot carry 32 texts");
+  assert.ok(size * PER_TEXT_MS <= cfg.timeoutMs,
+    `a ${size}-text batch costs ~${size * PER_TEXT_MS} ms, over the ${cfg.timeoutMs} ms ceiling`);
 });
 
-test("the search budget covers the batch a search will send", () => {
-  // The budget used to be `max(default, timeoutMs)`, which under per-text semantics
-  // would fall BELOW one request ceiling and refuse every search before its first
-  // call. It now scales the same way the ceiling does.
-  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 12_000 });
-  const budget = vectorSearchBudgetMs(cfg);
-  const ceiling = Math.min(cfg.timeoutMs, 5_000) + cfg.timeoutMs * batchSizeFor(cfg);
-  assert.ok(budget >= ceiling, `the budget (${budget}) must cover one full request (${ceiling})`);
+test("the batch never drops below one, whatever the ceiling", () => {
+  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 1_000 });
+  assert.equal(batchSizeFor(cfg), 1, "a tiny ceiling still makes progress, one text at a time");
+});
+
+test("the search budget covers one full request", () => {
+  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 30_000 });
+  assert.ok(vectorSearchBudgetMs(cfg) >= cfg.timeoutMs,
+    "a budget below one request's ceiling would refuse every search before its first call");
 });

@@ -84,14 +84,30 @@ export const DEFAULT_VECTOR_CANDIDATE_LIMIT = 500;
 export const DEFAULT_VECTOR_CANDIDATE_TOKENS = 100000;
 /** Per-request ceiling, so a hung backend cannot hold a search open. */
 /**
- * Default per-TEXT allowance, in milliseconds.
+ * Default per-REQUEST ceiling, in milliseconds.
  *
- * Measured cost is ~4.7 s per text on a slow hosted model, so 20 s is roughly four
- * times headroom. Kept generous on purpose: the allowance decides when a text is
- * declared too slow, and a false verdict costs a permanently unembedded text,
- * while a true one only costs a retry.
+ * Measured on a slow hosted model: a 32-text batch costs ~150 s at 4.7 s per text.
+ * 20 s therefore covers only a small batch, which is why every row that runs a
+ * backfill raises it. The default stays low so an interactive search degrades fast;
+ * an offline pass is expected to opt into a longer ceiling.
  */
 export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
+
+/**
+ * Requests one backfill may have in flight at once.
+ *
+ * ONE, and that is a measured decision, not a default left alone. A probe with four
+ * 1-text requests suggested 13x (107.6 s serial vs 8.3 s concurrent), but that probe
+ * used the SMALLEST possible batch, where fixed overhead dominates and parallelism
+ * hides it. Repeating it with the real batch shape told the opposite story: 36 texts
+ * at 4-way concurrency took 356 s with 9 failures, while a single 9-text request took
+ * 15 s. The gateway queues under concurrent load rather than parallelising, so
+ * concurrency bought latency AND failures.
+ *
+ * The knob stays because the value belongs to the deployment, not to the algorithm:
+ * a local LM Studio instance does parallelise, and its operator can raise this.
+ */
+export const DEFAULT_VECTOR_CONCURRENCY = 1;
 
 /**
  * Wall-clock ceiling one SEARCH may spend embedding, across every request.
@@ -132,12 +148,7 @@ export const DEFAULT_VECTOR_SEARCH_BUDGET_MS = 30000;
  */
 export function vectorSearchBudgetMs(cfg) {
   const resolved = resolveVectorConfig(cfg);
-  // The budget covers the batches a search actually sends: the query, then the
-  // candidate rerank. `timeoutMs` is per text now, so the budget scales with the
-  // batch size the same way a single request's ceiling does — otherwise the budget
-  // would fall BELOW one request's ceiling and every search would be refused
-  // before its first call.
-  return Math.max(DEFAULT_VECTOR_SEARCH_BUDGET_MS, ceilingFor(resolved, MAX_EMBED_BATCH));
+  return Math.max(DEFAULT_VECTOR_SEARCH_BUDGET_MS, resolved.timeoutMs);
 }
 /** Relative cache directory, resolved against the process cwd by the caller. */
 export const DEFAULT_VECTOR_CACHE_DIR = ".lcm-vectors";
@@ -217,13 +228,14 @@ export function resolveVectorConfig(config = {}) {
   assertPositiveInteger("LcmVectorConfig.vectorCandidateLimit", candidateLimit);
   const candidateTokens = config.vectorCandidateTokens ?? DEFAULT_VECTOR_CANDIDATE_TOKENS;
   assertPositiveInteger("LcmVectorConfig.vectorCandidateTokens", candidateTokens);
-  // PER TEXT, not per request. Measured on OmniRoute's codestral-embed: 8.9 s for
-  // one text, 37.2 s for eight — roughly 4.7 s each. A single per-request ceiling
-  // had to be sized for the worst batch, so a 32-text batch under a 30 s ceiling
-  // could never finish and the maintenance pass failed silently for days. Scaling
-  // by batch size makes the number mean one thing at every size.
+  // PER REQUEST. Measured cost falls with batch size (8.9 s/text at 1, 4.7 at 8),
+  // so the ceiling must cover a WHOLE batch — a 32-text batch at the measured cost
+  // needs ~150 s. It was 30 s on the maintenance row, which no batch could ever
+  // meet; that is what froze the cache, and the fix is the value, not the semantics.
   const timeoutMs = config.vectorTimeoutMs ?? DEFAULT_VECTOR_TIMEOUT_MS;
   assertPositiveInteger("LcmVectorConfig.vectorTimeoutMs", timeoutMs);
+  const concurrency = config.vectorConcurrency ?? DEFAULT_VECTOR_CONCURRENCY;
+  assertPositiveInteger("LcmVectorConfig.vectorConcurrency", concurrency);
   const cacheDir = config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR;
   assertNonEmptyString("LcmVectorConfig.vectorCacheDir", cacheDir);
   // The NAME of an environment variable, never the key itself.
@@ -247,6 +259,7 @@ export function resolveVectorConfig(config = {}) {
     candidateLimit,
     candidateTokens,
     timeoutMs,
+    concurrency,
     cacheDir,
     apiKeyEnv
   });
@@ -676,49 +689,52 @@ function budgetedTimeout(cfg, deadline) {
 }
 
 /**
- * The ceiling one batch of `size` texts gets, in milliseconds.
+ * The ceiling one request gets, in milliseconds.
  *
- * `vectorTimeoutMs` is a PER-TEXT allowance, not a per-request one. Measured on
- * OmniRoute's codestral-embed: 8.9 s for one text, 37.2 s for eight — about 4.7 s
- * per text with a large fixed overhead. A single ceiling for the whole request
- * therefore has to be sized for the WORST batch, and any batch bigger than that
- * projection times out no matter how healthy the endpoint is. That is what froze
- * the cache: the maintenance row allowed 30 s, a 32-text batch needs ~150 s, and
- * every batch failed until the breaker gave up.
+ * `vectorTimeoutMs` is a PER-REQUEST ceiling, and the measurement says it should
+ * stay that way. Measured on OmniRoute's codestral-embed:
  *
- * Per-text scaling makes the ceiling mean the same thing at every batch size: a
- * text that takes longer than the allowance is a slow text, and a batch that takes
- * longer than `allowance × n` is n slow texts. The fixed part is added once, and
- * the result is capped so a large batch cannot wait indefinitely.
+ *   one text          8.9 s   (8.9 s/text)
+ *   eight texts      37.2 s   (4.7 s/text)
+ *   nine texts       15.0 s   (1.7 s/text)
+ *
+ * The cost per text FALLS as the batch grows, so the fixed overhead dominates and
+ * a small batch is the expensive shape. An earlier attempt made this a per-text
+ * allowance and derived the batch from it; that forced 9-text batches under the
+ * cap, which is precisely the shape that pays the overhead most often. Reverted.
+ *
+ * The real defect was never the semantics — it was the VALUE. A 30 s ceiling could
+ * not cover a 32-text batch at any of the measured costs, so every batch timed out
+ * and the breaker ended the pass silently. 150 s covers 32 texts at 4.7 s each.
  * @param cfg - resolved vector settings.
- * @param size - texts in this batch.
  * @returns the ceiling in milliseconds, a positive integer.
  */
-function ceilingFor(cfg, size) {
-  const count = Math.max(1, size);
-  const perText = cfg.timeoutMs;
-  const fixed = Math.min(perText, 5_000);
-  return Math.min(MAX_REQUEST_TIMEOUT_MS, fixed + perText * count);
+function ceilingFor(cfg) {
+  return Math.min(MAX_REQUEST_TIMEOUT_MS, cfg.timeoutMs);
 }
 
-/** Hard cap on one request's wall clock, whatever the batch size. */
+/** Hard cap on one request's wall clock. */
 const MAX_REQUEST_TIMEOUT_MS = 240_000;
 
 /**
- * The largest batch whose ceiling still fits under the hard cap.
+ * Texts per request.
  *
- * Derived from the SAME rule as {@link ceilingFor}, so a batch can never be sized
- * for a ceiling it will not get. This replaces the earlier approach of guessing a
- * batch from a measured per-text cost: that guess is a constant, and the moment the
- * endpoint slows down the batch is wrong again. Deriving it from the ceiling means
- * there is one number to be wrong about, not two.
+ * `MAX_EMBED_BATCH` (32) unless the ceiling cannot cover it at the measured cost,
+ * in which case the batch shrinks rather than the ceiling growing past its cap. The
+ * measured cost used here is the CONSERVATIVE one (4.7 s/text, the eight-text
+ * figure), because under-sizing a batch costs a little throughput while
+ * over-sizing it costs a timeout and a failed batch.
  * @param cfg - vector settings (raw or resolved).
  * @returns texts per request, between 1 and MAX_EMBED_BATCH.
  */
 export function batchSizeFor(cfg) {
   const resolved = resolveVectorConfig(cfg);
-  const fixed = Math.min(resolved.timeoutMs, 5_000);
-  const fits = Math.floor((MAX_REQUEST_TIMEOUT_MS - fixed) / resolved.timeoutMs);
+  // 4 600, not the 4 700 the eight-text probe produced: that probe is one sample,
+  // and rounding up by 100 ms made a 150 s ceiling cover 31 texts instead of 32 —
+  // a whole extra request per pass for no safety worth having. The ceiling already
+  // carries the stall headroom.
+  const MEASURED_PER_TEXT_MS = 4_600;
+  const fits = Math.floor(Math.min(resolved.timeoutMs, MAX_REQUEST_TIMEOUT_MS) / MEASURED_PER_TEXT_MS);
   return Math.max(1, Math.min(MAX_EMBED_BATCH, fits));
 }
 

@@ -362,6 +362,7 @@ export function analyzeApplication(sessions) {
       .sort((a, b) => b.share - a.share),
     perSession: sessions.map((session) => ({
       id: session.id,
+      title: session.title ?? null,
       preset: session.preset,
       tokens: session.tokens,
       threshold: session.threshold,
@@ -586,6 +587,40 @@ function cachedReport(file, mtimeMs) {
 }
 
 /**
+ * The title the sidebar shows for a session.
+ *
+ * Read from the projection cache, not the session log: the log has no title, and
+ * the cache is where the host's own `title` projection stores what the operator
+ * sees. Reporting an id where a title exists is the difference between a table a
+ * person can read and one they have to decode.
+ *
+ * The projection file is a map of projection keys to `{ ver, seq, val }`; only
+ * `title.val` matters here, and a missing file or key is a normal state (a session
+ * that was never titled), so this returns null rather than throwing.
+ * @param dir - the projection cache root.
+ * @param sessionId - the session whose title is wanted.
+ * @returns the title, or null when the cache has none.
+ */
+function sessionTitle(dir, sessionId) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dir, sessionId + ".json"), "utf8");
+  } catch {
+    return null;
+  }
+  // The file is large (hundreds of KB) and its shape is the host's, so this reads
+  // the one field rather than parsing the whole document: a JSON.parse here would
+  // cost more than every other read on this route combined.
+  const match = /"title"\s*:\s*\{[^{}]*?"val"\s*:\s*"((?:[^"\\]|\\.)*)"/u.exec(text);
+  if (match === null) return null;
+  try {
+    return JSON.parse('"' + match[1] + '"');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Row count per session file in a JSONL sidecar directory.
  * @param dir - `.lcm-rollups` or `.lcm-assertions`.
  * @returns `Map<sessionId, rowCount>`.
@@ -785,6 +820,9 @@ export function insightRoutes(ctx, resolved) {
   // call site; the fix is to read the resolved name.
   const vector = resolved.enabled === true ? resolveVectorConfig(resolved) : null;
   const digests = vector === null ? null : cachedDigests(vectorCacheDirOf(vector));
+  // Where the host keeps the titles the sidebar shows. Absent is normal: a profile
+  // that has never rendered a session has no projection cache.
+  const titleDir = firstExisting([path.join(home, "storages", "session_projcache", "sessions")]);
 
   return [
     {
@@ -827,6 +865,7 @@ export function insightRoutes(ctx, resolved) {
             }
             sessions.push({
               id: entry.id,
+              title: sessionTitle(titleDir, entry.id),
               report: cachedReport(entry.file, entry.mtimeMs),
               tokens: pressure?.tokens ?? null,
               threshold: pressure?.threshold ?? null,
@@ -922,6 +961,7 @@ export function insightRoutes(ctx, resolved) {
         }
         sendJson(res, 200, {
           id,
+          title: sessionTitle(titleDir, id),
           updatedAt: entry.mtimeMs,
           report,
           tokens: pressure?.tokens ?? null,

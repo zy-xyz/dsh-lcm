@@ -1,6 +1,6 @@
 {
   "name": "dsh-lcm",
-  "version": "0.34.1",
+  "version": "0.35.0",
   "description": "Lossless Context Management compaction engine for the DeepSeek Harness — LLM leaf summaries over an append-only log, with lcm_expand/lcm_search recovery",
   "type": "module",
   "main": "src/index.js",

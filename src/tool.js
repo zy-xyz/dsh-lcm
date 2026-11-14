@@ -115,6 +115,10 @@ const Config = z.object({
   vectorCandidateTokens: z.number().step(1).min(1),
   vectorCandidateLimit: z.number().step(1).min(1),
   vectorTimeoutMs: z.number().step(1).min(1),
+  // Requests in flight during a backfill. Measured 13x on this endpoint (four
+  // 1-text requests: 107.6 s serial, 8.3 s concurrent), bounded so a pass cannot
+  // starve the search route on the same gateway.
+  vectorConcurrency: z.number().step(1).min(1),
   vectorCacheDir: z.string().min(1),
   // A variable NAME, so the empty string is legal here (it means "send no
   // Authorization header", the keyless-backend default). Same rule as
