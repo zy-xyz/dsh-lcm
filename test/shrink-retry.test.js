@@ -434,6 +434,13 @@ test("a deterministic fallback carries every node, not just the first", async ()
   assert.ok(estimateEntryTokens(body) <= 4000, "and the body still respects the shrink bound");
 });
 
+async function* textReply(text) {
+  yield { type: "block-start", index: 0, blockType: "text" };
+  yield { type: "text-delta", index: 0, text };
+  yield { type: "block-end", index: 0, block: { type: "text", text } };
+  yield { type: "finish", reason: { kind: "stop" }, replayState: undefined };
+}
+
 test("a deterministic fallback says which nodes it left out", async () => {
   // 40 nodes of ~100 tokens each against a ~900-token span: the body can carry a
   // few, so it MUST say how many it dropped and that they are still recoverable.
@@ -460,4 +467,41 @@ test("a deterministic fallback says which nodes it left out", async () => {
   const noteAt = body.indexOf("NOT carried below");
   const firstAnchorAt = body.indexOf("(seq 0)");
   assert.ok(noteAt >= 0 && firstAnchorAt >= 0 && noteAt < firstAnchorAt, "the note precedes the anchors");
+});
+
+test("prose-only summary is re-asked once for the anchor section", async () => {
+  // Measured on disk: a model answered in the host's own prose format
+  // ("## Primary Request Intent"), attributeAnchorPointers matched nothing, and
+  // 1 849 nodes / 533 961 tokens became 7 947 characters with ZERO (seq N)
+  // pointers. A checkpoint with no pointer is a dead end.
+  const specs = Array.from({ length: 6 }, (_, i) => ({ seq: i, text: "needle-" + i + " " + "z".repeat(200) }));
+  const session = multiNodeSession(specs);
+  const prose = "## Primary Request Intent\n- compress the span\n## Next Step\n- continue";
+  const anchored = "## 逐字锚点\n- needle-0\n- needle-1\n## 下一步\n- continue";
+  const responses = [() => textReply(prose), () => textReply(anchored)];
+  const stub = stubLlm(responses);
+  const engine = engineWith(stub);
+  const preparedSpan = { session, start: 0, end: 5, shadowedSeqs: specs.map((s) => s.seq), shadowedTokenCount: 20000 };
+  const out = await engine.compile(preparedSpan, { session, options: undefined });
+  const body = out.entries.map((entry) => entry.text).join("\n");
+  assert.equal(stub.calls.length, 2, "prose bought exactly one corrective retry");
+  assert.match(body, /## 逐字锚点/u, "the retry's anchored body is what landed");
+  assert.doesNotMatch(body, /DETERMINISTIC/u, "no deterministic rung needed");
+});
+
+test("a model that never writes anchors falls through to the deterministic index", async () => {
+  // Retrying is not a guarantee. When the second answer is prose again the
+  // checkpoint must still be recoverable, so the deterministic body lands —
+  // which carries every node and says so.
+  const specs = Array.from({ length: 6 }, (_, i) => ({ seq: i, text: "needle-" + i + " " + "z".repeat(200) }));
+  const session = multiNodeSession(specs);
+  const prose = "## Primary Request Intent\n- compress the span";
+  const stub = stubLlm([() => textReply(prose)]);
+  const engine = engineWith(stub);
+  const preparedSpan = { session, start: 0, end: 5, shadowedSeqs: specs.map((s) => s.seq), shadowedTokenCount: 20000 };
+  const out = await engine.compile(preparedSpan, { session, options: undefined });
+  const body = out.entries.map((entry) => entry.text).join("\n");
+  assert.match(body, /DETERMINISTIC/u, "the deterministic rung is what remains");
+  assert.match(body, /\(seq 0\)/u, "and it carries seq pointers");
+  assert.match(body, /\(seq 5\)/u, "for every node, not just the first");
 });

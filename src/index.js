@@ -204,6 +204,18 @@ function headerTokens(prepared, bodyTokens) {
  * @param budgetTokens - target size for the body.
  * @returns a checkpoint body that always fits and is never empty.
  */
+const summaryTextOf = (result) => (result?.summary ?? []).map((block) => block?.text ?? "").join("\n");
+// A section that carries no (seq N) is the same dead end as no section at all:
+// the reader can see the words but cannot page back to the event they came from.
+const hasAnchorPointer = (text) => /\(seq \d+\)/.test(String(text ?? ""));
+// Measured failure this suffix answers: the model answered in the host's own
+// prose format ("## Primary Request Intent"), so attributeAnchorPointers matched
+// nothing and the checkpoint carried no (seq N) at all — 1 849 nodes / 533 961
+// tokens became 7 947 chars with zero pointers; 35 nodes / 24 125 tokens became
+// one 403-char sentence. A checkpoint with no pointer is a dead end: lcm_search
+// is the only route back and the reader has no reason to take it.
+const ANCHOR_ONLY_SUFFIX = "你上一次的回答没有「## 逐字锚点」一节，压缩后的正文里没有任何 (seq N) 指针，恢复不了原文。请重写：第一节必须是「## 逐字锚点」，每行一条，逐字抄写 span 里出现过的原样字面串（文件路径、命令、URL、错误串、ID/uuid、函数名、变量名、键名、数值阈值、人名、地名、机构名、产品名、型号、每个数字连同单位），不写成句子、不翻译、不改大小写。锚点太多就合并重复项，不要省略整节。";
+
 function deterministicCheckpoint(prepared, budgetTokens) {
   const header = [
     "## 逐字锚点",
@@ -726,6 +738,29 @@ export class LcmCompactionEngine extends CompactionEngine {
       // name the number in force or an operator judging "could this have been cut
       // off?" reads the wrong one.
       sentCeiling = result.maxTokens ?? requestCeilingTokens(budget);
+        // A checkpoint with no (seq N) is a dead end. Retry once demanding the
+        // anchor section; if the model still writes prose, fall through to the
+        // deterministic index, which carries every node and says so.
+        // A short span is expandable node by node from the header alone; a long one
+        // is not, so the pointer requirement only binds where it matters.
+        if ((prepared.shadowedTokenCount ?? 0) >= 4096 && !hasAnchorPointer(summaryTextOf(result))) {
+          engineDebug(this.config, 'summarize produced no (seq N) pointer; retrying with anchor-only instruction span=' + prepared.shadowedSeqs.length);
+          result = await summarizeLeaf(this.ctx, this.config, prepared, agent, budget, signal, ANCHOR_ONLY_SUFFIX);
+          sentCeiling = result.maxTokens ?? sentCeiling;
+          if (!hasAnchorPointer(summaryTextOf(result))) {
+            // Keep the prose AND guarantee a route back. Measured on disk, a
+            // model answering in the host format (## Primary Request Intent)
+            // left 1 849 nodes / 533 961 tokens as 7 947 characters with zero
+            // (seq N): the words survived, the ability to page back did not.
+            // The index goes FIRST because the truncation rung below keeps
+            // the head of the body.
+            const indexBudget = Math.max(96, Math.floor(budget / 2));
+            const index = `[DETERMINISTIC anchor index: the model prose below carried no (seq N) pointer]\n${truncateToBudget(deterministicCheckpoint(prepared, indexBudget), indexBudget)}`;
+            const proseBudget = Math.max(0, (limit > 0 ? limit : budget + indexBudget) - headerTokens(prepared, indexBudget) - estimateEntryTokens(index));
+            const prose = truncateToBudget(summaryBodyOf(result), proseBudget);
+            result = { ...result, summary: [{ type: "text", text: prose.length > 0 ? index + "\n\n" + prose : index }] };
+          }
+        }
     } catch (error) {
       // Two codes are summariser OUTCOMES rather than transport failures: an empty
       // response and a response cut at the provider's cap. A rate limit, a timeout
