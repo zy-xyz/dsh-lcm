@@ -96,18 +96,26 @@ export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
 /**
  * Requests one backfill may have in flight at once.
  *
- * ONE, and that is a measured decision, not a default left alone. A probe with four
- * 1-text requests suggested 13x (107.6 s serial vs 8.3 s concurrent), but that probe
- * used the SMALLEST possible batch, where fixed overhead dominates and parallelism
- * hides it. Repeating it with the real batch shape told the opposite story: 36 texts
- * at 4-way concurrency took 356 s with 9 failures, while a single 9-text request took
- * 15 s. The gateway queues under concurrent load rather than parallelising, so
- * concurrency bought latency AND failures.
+ * Eight, from the deployment's own shape rather than from a benchmark. The gateway
+ * fronts more than ten upstream accounts and each account accepts about one request
+ * per second, so ten requests can be starting at any moment without queuing. Eight
+ * uses most of that without sitting on the limit.
  *
- * The knob stays because the value belongs to the deployment, not to the algorithm:
- * a local LM Studio instance does parallelise, and its operator can raise this.
+ * Two earlier values were measured and both were wrong, for the same reason: the
+ * probe did not represent the workload.
+ *
+ *   1  — set after a probe using the smallest possible batch, where a 13x "win"
+ *        appeared and did not survive the real shape. It also made a single slow
+ *        request look like a stalled pass when it was just one batch retrying.
+ *   4  — set from that same small-batch probe. Not harmful, but it left more than
+ *        half the account capacity unused.
+ *
+ * Concurrency is NOT a fix for timeouts. This endpoint times out on single texts
+ * too (measured: 2.6 s, 8.9 s, 12 s, and 30 s timeouts among five one-text calls),
+ * so a low concurrency still meets them — the retry budget is what absorbs those.
+ * Concurrency is for the throughput the accounts already allow.
  */
-export const DEFAULT_VECTOR_CONCURRENCY = 4;
+export const DEFAULT_VECTOR_CONCURRENCY = 8;
 
 /**
  * Wall-clock ceiling one SEARCH may spend embedding, across every request.
