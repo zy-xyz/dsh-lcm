@@ -13,10 +13,13 @@ window.__ModuleLoader__.load({
     // the entry opens the panel.
     const PLUGIN = 'lcm-insight';
     const NS = 'lcmInsight';
-    // The Session header row (breadcrumb, actions, utilities) is the row meant by
-    // "the top bar of the trajectory/context line"; `utilities` is its right-aligned
-    // list, the one slot there that takes list registrations.
-    const HEADER_SLOT = 'conversation.session.header.utilities';
+    // `shell.overlay` is the frame-wide layer above every column and outside their
+    // scroll containers. A header-slot chip was the first attempt and the wrong one:
+    // the session header row is the host's own breadcrumb line, and a readout there
+    // competes with navigation instead of complementing it. A floating window is
+    // also the only placement that can show charts without taking horizontal room
+    // from the conversation.
+    const OVERLAY_SLOT = 'shell.overlay';
     // The central panel, selected by the sidebar entry's id, and the sidebar entry
     // itself: one installation serves both the readout and the detail.
     const PANEL_SLOT = 'main';
@@ -60,6 +63,9 @@ window.__ModuleLoader__.load({
         unreadable: 'unreadable',
         estimated: 'Estimated from checkpoint bodies; spans are engine-recorded.',
         noPressure: 'No session is loaded in this process, so live pressure is unavailable.',
+        noSession: 'No session is open. Open one and this window follows it.',
+        openWindow: 'Open the LCM statistics window',
+        closeWindow: 'Close the LCM statistics window',
         recent: 'Recent checkpoints',
         nodes: 'nodes',
         colSeq: 'seq',
@@ -99,6 +105,9 @@ window.__ModuleLoader__.load({
         unreadable: '个不可读',
         estimated: '正文 token 为估算，跨度为引擎记录。',
         noPressure: '本进程未加载任何会话，实时压力不可用。',
+        noSession: '当前没有打开的会话。打开一个，本窗口会自动跟随。',
+        openWindow: '打开 LCM 统计悬浮窗',
+        closeWindow: '关闭 LCM 统计悬浮窗',
         recent: '最近的检查点',
         nodes: '节点',
         colSeq: '序号',
@@ -200,6 +209,56 @@ window.__ModuleLoader__.load({
       .lcmi-table td { padding: 5px 8px 5px 0; border-top: 1px solid var(--dsw-alias-border-l1); }
       .lcmi-table td.num { text-align: right; }
       .lcmi-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+      /* The floating window. Fixed to the bottom-right, above the composer, and
+         capped so it never reaches the app frame's own controls. One border, one
+         shadow, no blur: it is a panel, not a decoration. */
+      .lcmi-window {
+        position: fixed; right: 16px; bottom: 16px; z-index: 40;
+        width: min(420px, calc(100vw - 32px));
+        max-height: min(70vh, 640px);
+        display: flex; flex-direction: column;
+        border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--lcmi-radius);
+        background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary);
+        box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+        overflow: hidden;
+      }
+      .lcmi-window-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        padding: 9px 10px 9px 14px;
+        border-bottom: 1px solid var(--dsw-alias-border-l1);
+        background: var(--dsw-alias-bg-layer-1);
+      }
+      .lcmi-window-head h2 { margin: 0; font-size: 13px; font-weight: 600; }
+      .lcmi-close {
+        appearance: none; border: 0; background: none; cursor: pointer;
+        color: var(--dsw-alias-label-secondary); font: inherit; font-size: 17px; line-height: 1;
+        width: 28px; height: 28px; border-radius: var(--lcmi-radius);
+        display: inline-flex; align-items: center; justify-content: center;
+      }
+      .lcmi-close:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
+      .lcmi-close:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+      .lcmi-window > .lcmi-tabs,
+      .lcmi-window > .lcmi-msg,
+      .lcmi-window > .lcmi-grid,
+      .lcmi-window > .lcmi-card,
+      .lcmi-window > div { flex: none; }
+      .lcmi-window > .lcmi-tabs { padding: 0 12px; }
+      .lcmi-window > .lcmi-msg,
+      .lcmi-window > .lcmi-grid { margin: 12px; }
+      .lcmi-window > .lcmi-card { margin: 0 12px 12px; }
+      .lcmi-window > .lcmi-note { margin: 0 12px 12px; }
+      .lcmi-fab {
+        position: fixed; right: 16px; bottom: 16px; z-index: 40;
+        appearance: none; cursor: pointer; font: inherit;
+        display: inline-flex; align-items: center; gap: 6px;
+        min-height: 34px; padding: 0 12px;
+        border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px;
+        background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-secondary);
+        box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
+        font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+      }
+      .lcmi-fab:hover { color: var(--dsw-alias-label-primary); }
+      .lcmi-fab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
     `;
 
     function Style() {
@@ -474,30 +533,130 @@ window.__ModuleLoader__.load({
 
     // ── the panel ──────────────────────────────────────────────────────────
 
-    function Panel(props) {
-      const t = props.t;
-      const [tab, setTab] = useState('session');
-      const sessionId = props.sessionId ?? props.session?.id ?? null;
+    /**
+     * The Session the main view is showing.
+     *
+     * A floating overlay is `root` scope, so it receives no `sessionId` prop — the
+     * earlier header readout took one and got `undefined`, which is why the panel
+     * asked the endpoint for `id=unknown` and the endpoint answered "id must be a
+     * session id". The store is the source: `retainedBy.mainView > 0` marks the
+     * session the conversation column is holding, which is exactly the one a
+     * statistics window should describe.
+     * @param sessions - the client `sessions` service.
+     * @returns the active session id, or null when none is mounted.
+     */
+    function useActiveSessionId(sessions) {
+      const read = useCallback(() => {
+        try {
+          const list = sessions?.list?.getSnapshot?.();
+          if (list === undefined || list === null) return null;
+          const row = Object.values(list.byId ?? {}).find((candidate) => (candidate?.retainedBy?.mainView ?? 0) > 0);
+          return typeof row?.id === 'string' ? row.id : null;
+        } catch {
+          return null;
+        }
+      }, [sessions]);
+      const [id, setId] = useState(read);
+      useEffect(() => {
+        if (sessions?.list?.subscribe === undefined) return undefined;
+        const unsubscribe = sessions.list.subscribe(() => {
+          const next = read();
+          setId((previous) => (previous === next ? previous : next));
+        });
+        setId(read());
+        return unsubscribe;
+      }, [sessions, read]);
+      return id;
+    }
 
-      const sessionUrl = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
-      const session = useEndpoint(sessionUrl ?? '/lcm-insight/session?id=unknown');
+    /**
+     * The floating statistics window.
+     *
+     * `shell.overlay` is the frame-wide layer above every column, outside their
+     * scroll containers — the only place a plugin can put a window that is not
+     * competing with the host's own header rows. Collapsed it is a small pill in the
+     * bottom-right; expanded it is the full panel. The collapsed state is remembered
+     * per browser so a reader who wants it out of the way keeps it out of the way.
+     */
+    function FloatingStats(props) {
+      const t = props.t;
+      const sessionId = props.sessionId;
+      const [open, setOpen] = useState(() => {
+        try {
+          return globalThis.localStorage?.getItem('lcm-insight.open') !== '0';
+        } catch {
+          return true;
+        }
+      });
+      const toggle = useCallback(() => {
+        setOpen((previous) => {
+          const next = !previous;
+          try {
+            globalThis.localStorage?.setItem('lcm-insight.open', next ? '1' : '0');
+          } catch {
+            // A reader with storage disabled keeps the default.
+          }
+          return next;
+        });
+      }, []);
+
+      // Escape closes the window, matching how the host dismisses its own popovers.
+      useEffect(() => {
+        if (!open) return undefined;
+        const onKey = (event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            toggle();
+          }
+        };
+        globalThis.document?.addEventListener('keydown', onKey);
+        return () => globalThis.document?.removeEventListener('keydown', onKey);
+      }, [open, toggle]);
+
+      const url = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
+      const session = useEndpoint(url);
       const app = useEndpoint('/lcm-insight/app');
 
-      // The session endpoint is only meaningful with an id; a null id keeps the
-      // request idle instead of firing one that must 404.
-      useEffect(() => {
-        if (sessionId === null) return;
-        // Nothing to do: useEndpoint already owns the lifecycle for the url.
-      }, [sessionId]);
+      if (!open) {
+        return h('button', {
+          type: 'button',
+          className: 'lcmi-fab',
+          'aria-expanded': 'false',
+          title: t('openWindow'),
+          onClick: toggle
+        },
+          h('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, 'aria-hidden': true },
+            h('path', { d: 'M3 20h18' }),
+            h('rect', { x: 5, y: 12, width: 3, height: 8, rx: 0.5 }),
+            h('rect', { x: 10.5, y: 7, width: 3, height: 13, rx: 0.5 }),
+            h('rect', { x: 16, y: 3, width: 3, height: 17, rx: 0.5 })
+          ),
+          h('span', null, 'LCM')
+        );
+      }
 
+      return h('section', { className: 'lcmi-window', 'aria-label': t('title') },
+        h(Style),
+        h('header', { className: 'lcmi-window-head' },
+          h('h2', null, t('title')),
+          h('button', { type: 'button', className: 'lcmi-close', onClick: toggle, 'aria-label': t('closeWindow'), title: t('closeWindow') }, '×')
+        ),
+        h(WindowBody, { t, sessionId, session, app })
+      );
+    }
+
+    /** The window's tabs and body, split out so the chrome above stays readable. */
+    function WindowBody({ t, sessionId, session, app }) {
+      const [tab, setTab] = useState('session');
       const active = tab === 'session' ? session : app;
+
       const body = (() => {
         if (active.error !== null && active.data === null) {
           return h('div', { className: 'lcmi-msg', 'data-tone': 'error', role: 'alert' }, t('offline') + ' (' + active.error + ')');
         }
         if (active.loading && active.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
         if (tab === 'session') {
-          if (sessionId === null) return h('div', { className: 'lcmi-msg' }, t('emptySession'));
+          if (sessionId === null) return h('div', { className: 'lcmi-msg' }, t('noSession'));
           if (session.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
           return h(SessionView, { data: session.data, t });
         }
@@ -505,12 +664,7 @@ window.__ModuleLoader__.load({
         return h(AppView, { data: app.data, t });
       })();
 
-      return h('div', { className: 'lcmi-root' },
-        h(Style),
-        h('div', { className: 'lcmi-head' },
-          h('h2', null, t('title')),
-          h('span', { className: 'lcmi-sub' }, t('description'))
-        ),
+      return h(React.Fragment, null,
         h('div', { className: 'lcmi-tabs', role: 'tablist' },
           h('button', {
             className: 'lcmi-tab', role: 'tab', type: 'button',
@@ -524,77 +678,6 @@ window.__ModuleLoader__.load({
           }, t('app'))
         ),
         body
-      );
-    }
-
-    // ── the sidebar entry and the header readout ───────────────────────────
-
-    function SidebarIcon(props) {
-      const size = typeof props?.size === 'number' ? props.size : 16;
-      return h('svg', {
-        viewBox: '0 0 24 24', width: size, height: size, fill: 'none',
-        stroke: 'currentColor', strokeWidth: 1.75, strokeLinecap: 'round',
-        'aria-hidden': true, style: { display: 'block' }
-      },
-        h('path', { d: 'M3 20h18' }),
-        h('rect', { x: 5, y: 12, width: 3, height: 8, rx: 0.5 }),
-        h('rect', { x: 10.5, y: 7, width: 3, height: 13, rx: 0.5 }),
-        h('rect', { x: 16, y: 3, width: 3, height: 17, rx: 0.5 })
-      );
-    }
-
-    /**
-     * The Session header readout: two numbers and nothing else.
-     *
-     * A header utility is a glance, not a report — the panel owns the detail. It
-     * renders nothing until the first successful read so an uninstalled endpoint
-     * cannot leave an empty chip in every session header.
-     */
-    function HeaderReadout(props) {
-      const t = props.t;
-      const sessionId = props.sessionId ?? props.session?.id ?? null;
-      const url = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
-      const [data, setData] = useState(null);
-      useEffect(() => {
-        if (url === null) return undefined;
-        let live = true;
-        const controller = new AbortController();
-        const load = async () => {
-          try {
-            const response = await fetch(url, { credentials: 'same-origin', signal: controller.signal });
-            if (!response.ok) return;
-            const body = await response.json();
-            if (live) setData(body);
-          } catch {
-            // A header readout never reports an error; the panel does that.
-          }
-        };
-        load();
-        const timer = setInterval(load, 15000);
-        return () => {
-          live = false;
-          controller.abort();
-          clearInterval(timer);
-        };
-      }, [url]);
-
-      if (data === null || data.report.totals.count === 0) return null;
-      const totals = data.report.totals;
-      return h('button', {
-        type: 'button',
-        className: 'lcmi-chip',
-        title: t('panel'),
-        onClick: () => {
-          // Selecting the sidebar entry is the sidebar's job; the header readout
-          // only needs to be a readable summary, so it is a plain button with a
-          // tooltip rather than a second navigation path.
-        },
-        style: { cursor: 'default' }
-      },
-        h('span', null, 'LCM'),
-        h('b', null, totals.count),
-        h('span', { 'aria-hidden': true }, '·'),
-        h('b', null, ratioText(totals.ratio))
       );
     }
 
@@ -615,9 +698,11 @@ window.__ModuleLoader__.load({
             SidebarIcon
           ));
 
-          yield ctx.slots.inject(HEADER_SLOT, () => ctx.slots.register(
-            { name: HEADER_SLOT, id: 'dsh-lcm-insight-chip', order: 900, label: () => t('title'), locale: NS },
-            (props) => h(HeaderReadout, { ...props, t })
+          // The overlay is root scope, so it receives no session id: the component
+          // resolves the active session from the store itself.
+          yield ctx.slots.inject(OVERLAY_SLOT, () => ctx.slots.register(
+            { name: OVERLAY_SLOT, id: 'lcm-insight-window', order: 900, label: () => t('title'), locale: NS },
+            () => h(FloatingStats, { t, sessionId: useActiveSessionId(ctx.sessions) })
           ));
         });
       }

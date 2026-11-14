@@ -117,8 +117,11 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.ok(manifest.files.includes("client.js"), "and the file must be shipped");
   const source = fs.readFileSync(path.join(ROOT, "client.js"), "utf8");
   assert.match(source, /__ModuleLoader__\.load/u, "a client bundle registers through the module loader");
-  assert.match(source, /conversation\.session\.header\.utilities/u, "the header readout targets the session header row");
-  assert.match(source, /sidebar\.panellist/u, "and the panel has a sidebar entry");
+  // Placement is a design decision worth pinning: the window floats in the frame
+  // overlay so it never competes with the host's own header rows for width.
+  assert.match(source, /shell\.overlay/u, "the statistics window renders in the frame overlay");
+  assert.doesNotMatch(source, /conversation\.session\.header\.utilities/u, "and NOT in the session header row, which belongs to navigation");
+  assert.match(source, /sidebar\.panellist/u, "the sidebar entry stays");
 });
 
 test("the client bundle registers under the PACKAGE NAME, which is how the graph keys it", () => {
