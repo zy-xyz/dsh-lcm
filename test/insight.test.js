@@ -185,6 +185,29 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.match(source, /variant: 'view'/u, "the tab keeps the flow-layout root");
 });
 
+test("the context is drawn as a node-link graph, not an indented list", () => {
+  // The DAG is a graph: one condensation absorbs up to `fanin` siblings. A linear
+  // list hides exactly that. This pins the shape of the answer, because "render it as
+  // a tree" is how it started and an indented list is the easy thing to regress to.
+  const source = fs.readFileSync(path.join(ROOT, "client.js"), "utf8");
+  assert.match(source, /function layoutGraph\(roots\)/u, "a layout pass assigns node positions");
+  assert.match(source, /function GraphNode\(/u, "nodes are drawn as boxes");
+  assert.match(source, /function ContextGraph\(/u, "and the view composes them");
+
+  // Depth on X, leaf order on Y, parents centred on their children — that centring is
+  // what makes a merge read as a merge.
+  assert.match(source, /depth \* \(NODE\.w \+ NODE\.gapX\)/u, "depth is the horizontal axis");
+  assert.match(source, /childRows\[0\] \+ childRows\[childRows\.length - 1\] \) \/ 2|childRows\[childRows\.length - 1\]\) \/ 2/u,
+    "a parent is centred on its children");
+
+  // Edges are curves between node ports, not straight lines with no endpoints.
+  assert.match(source, /M' \+ x1 \+ ',' \+ y1 \+ ' C'/u, "edges are cubic curves from port to port");
+
+  // The old list rendering must be gone, or both would render.
+  assert.doesNotMatch(source, /function TreeRow\(/u, "the indented rows are removed");
+  assert.doesNotMatch(source, /lcmi-tree-row/u, "and so is their CSS");
+});
+
 test("the surface language follows the host: tokens, one ease, reduced motion", () => {
   // The panel sits inside the host's own chrome, so its colours must come from the
   // host's tokens rather than literals: a hardcoded grey is invisible on one theme

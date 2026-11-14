@@ -37,6 +37,10 @@ window.__ModuleLoader__.load({
         view: 'LCM',
         live: 'live',
         stale: 'stale',
+        graphHint: 'Each box is a checkpoint; a box with several lines into it is a rollup of those checkpoints.',
+        depth: 'depth',
+        children: 'children',
+        close: 'Close',
         session: 'This session',
         app: 'This profile',
         emptySession: 'No checkpoint in this session yet. Nothing has been compacted.',
@@ -86,6 +90,10 @@ window.__ModuleLoader__.load({
         view: 'LCM',
         live: '实时',
         stale: '已断开',
+        graphHint: '每个方块是一个检查点；多条线汇入的方块是把它们合并的凝聚节点。',
+        depth: '深度',
+        children: '子节点',
+        close: '关闭',
         session: '本会话',
         app: '本配置档',
         emptySession: '本会话还没有 checkpoint，尚未压缩过。',
@@ -297,31 +305,59 @@ window.__ModuleLoader__.load({
       .lcmi-table td { padding: 5px 8px 5px 0; border-top: 1px solid var(--dsw-alias-border-l1); }
       .lcmi-table tbody tr { transition: background-color var(--ds-transition-duration, .2s) var(--lcmi-ease); }
       .lcmi-table tbody tr:hover { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
+
+      /* ── the node graph ─────────────────────────────────────────────────── */
+      .lcmi-graph-wrap { display: flex; flex-direction: column; gap: 8px; }
+      /* The graph scrolls inside its own box: a 59-checkpoint DAG is taller and wider
+         than any panel, and shrinking it to fit would make the labels unreadable.
+         The scroll happens on this DIV — an "svg" with overflow does not scroll its
+         own content. */
+      .lcmi-graph-scroll {
+        max-height: 320px; overflow: auto;
+        border: var(--lcmi-line); border-radius: var(--lcmi-radius-tile);
+        background: var(--dsw-alias-bg-base);
+      }
+      .lcmi-graph { display: block; }
+      .lcmi-gedge {
+        fill: none;
+        stroke: color-mix(in srgb, var(--dsw-alias-label-secondary) 45%, transparent);
+        stroke-width: 1.25;
+        transition: stroke .2s var(--lcmi-ease), stroke-width .2s var(--lcmi-ease);
+      }
+      .lcmi-gedge[data-active='true'] { stroke: var(--dsw-alias-brand-primary); stroke-width: 2; }
+      .lcmi-gnode { cursor: pointer; }
+      .lcmi-gnode:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+      .lcmi-gnode-box {
+        fill: var(--dsw-alias-bg-layer-1);
+        stroke: var(--dsw-alias-border-l2);
+        stroke-width: 1;
+        transition: fill .2s var(--lcmi-ease), stroke .2s var(--lcmi-ease);
+      }
+      .lcmi-gnode:hover .lcmi-gnode-box { stroke: var(--dsw-alias-border-l4, var(--dsw-alias-border-l2)); }
+      .lcmi-gnode.is-selected .lcmi-gnode-box { stroke: var(--dsw-alias-brand-primary); stroke-width: 1.75; }
+      .lcmi-gnode-box[data-fallback='true'] { stroke: var(--dsw-alias-state-error-primary); stroke-dasharray: 3 2; }
+      .lcmi-gnode-seq { fill: var(--dsw-alias-label-primary); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .lcmi-gnode-meta { fill: var(--dsw-alias-label-secondary); font-size: 9px; font-variant-numeric: tabular-nums; }
+      .lcmi-gnode-track { fill: var(--dsw-alias-bg-layer-2); }
+      .lcmi-gnode-fill { fill: var(--dsw-alias-brand-primary); opacity: .75; }
+      .lcmi-gdetail {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        border: var(--lcmi-line); border-radius: var(--lcmi-radius-tile);
+        background: var(--dsw-alias-bg-layer-2); padding: 6px 8px 6px 10px;
+      }
+      .lcmi-gdetail-row { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+      .lcmi-gdetail-row b { color: var(--dsw-alias-label-primary); }
+      .lcmi-gdetail-warn { color: var(--dsw-alias-state-error-primary); }
+      .lcmi-close {
+        appearance: none; border: 0; background: none; cursor: pointer;
+        color: var(--dsw-alias-label-secondary); font: inherit; font-size: 15px; line-height: 1;
+        width: 22px; height: 22px; border-radius: 4px;
+        display: inline-flex; align-items: center; justify-content: center;
+      }
+      .lcmi-close:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); }
+      .lcmi-close:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
       .lcmi-table td.num { text-align: right; }
       .lcmi-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
-      /* Trees. The connector is a border on the row's leading edge at the depth's
-         indent, so a deep branch reads as one line rather than as floating text. */
-      .lcmi-tree { font-size: 12px; }
-      .lcmi-tree-row {
-        display: flex; align-items: baseline; gap: 6px;
-        padding: 3px 0; min-height: 22px;
-        border-left: 1px solid transparent;
-      }
-      .lcmi-tree-row[data-depth='1'] { border-left-color: var(--dsw-alias-border-l2); }
-      .lcmi-tree-row[data-depth='2'] { border-left-color: var(--dsw-alias-border-l2); }
-      .lcmi-twisty {
-        appearance: none; background: none; border: 0; cursor: pointer; font: inherit;
-        color: var(--dsw-alias-label-secondary); width: 14px; min-width: 14px;
-        padding: 0; line-height: 1; text-align: center;
-      }
-      .lcmi-twisty:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; border-radius: 2px; }
-      .lcmi-tree-label { color: var(--dsw-alias-label-primary); white-space: nowrap; }
-      .lcmi-tree-label[data-tone='warn'] { color: var(--dsw-alias-state-error-primary); }
-      .lcmi-tree-detail { color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
-      .lcmi-tree-value {
-        margin-left: auto; padding-left: 8px;
-        font-variant-numeric: tabular-nums; font-weight: 600;
-      }
     `;
 
     function Style() {
@@ -478,113 +514,176 @@ window.__ModuleLoader__.load({
       return { ...state, reload };
     }
 
-    // ── trees ──────────────────────────────────────────────────────────────
+    // ── the node graph ─────────────────────────────────────────────────────
+    //
+    // A NODE-LINK DIAGRAM, not an indented list. The checkpoint DAG is a graph: one
+    // condensation absorbs up to `fanin` siblings, so a linear list hides the very
+    // thing worth seeing — how many leaves each rollup swallowed and how deep the
+    // chain runs. Nodes are laid out by depth on X and by leaf order on Y, edges are
+    // drawn as curves so a merge reads as a merge.
+
+    /** Node box geometry, in viewBox units. */
+    const NODE = { w: 118, h: 26, gapX: 46, gapY: 10, padX: 8, padY: 8, r: 5 };
 
     /**
-     * One row of an indented tree.
+     * Lay a tree out: depth on X, leaf order on Y.
      *
-     * Indentation is left padding in whole steps, with a connector drawn as a
-     * border on the row's leading edge. That keeps the tree readable without SVG
-     * path bookkeeping, and it reflows on a narrow window instead of overflowing.
+     * A row is assigned only to LEAVES; a parent is centred on its children, which is
+     * what makes a merge visually obvious. Doing it the other way (a row per node)
+     * would leave gaps wherever a parent has several children.
+     * @param roots - tree roots from the session report.
+     * @returns `{ nodes, edges, width, height, rows }`.
      */
-    function TreeRow({ depth, label, detail, value, tone, expandable, expanded, onToggle }) {
-      const pad = 8 + depth * 14;
-      return h('div', {
-        className: 'lcmi-tree-row',
-        style: { paddingLeft: pad + 'px' },
-        'data-depth': depth
+    function layoutGraph(roots) {
+      const nodes = [];
+      const edges = [];
+      let row = 0;
+
+      const place = (node, depth) => {
+        const children = node.children ?? [];
+        const childRows = [];
+        for (const child of children) childRows.push(place(child, depth + 1));
+        const y = childRows.length === 0
+          ? row++
+          : (childRows[0] + childRows[childRows.length - 1]) / 2;
+        const placed = { ...node, depth, row: y };
+        nodes.push(placed);
+        for (const child of children) {
+          edges.push({ from: placed, to: nodes.find((candidate) => candidate.seq === child.seq) });
+        }
+        return y;
+      };
+
+      for (const root of roots) place(root, 0);
+
+      const maxDepth = nodes.reduce((max, node) => Math.max(max, node.depth), 0);
+      const width = (maxDepth + 1) * (NODE.w + NODE.gapX) - NODE.gapX + NODE.padX * 2;
+      const height = Math.max(1, row) * (NODE.h + NODE.gapY) - NODE.gapY + NODE.padY * 2;
+      return { nodes, edges, width, height, rows: row };
+    }
+
+    /**
+     * One checkpoint node.
+     *
+     * The bar inside the box is the compression of that node — span on the track, kept
+     * on the fill — so a rollup that barely shrank anything is visible without
+     * reading the numbers.
+     */
+    function GraphNode({ node, x, y, selected, onSelect, t }) {
+      const saved = Math.max(0, node.span - node.kept);
+      const ratio = node.kept === 0 ? 1 : Math.min(1, node.kept / Math.max(1, node.span));
+      return h('g', {
+        transform: 'translate(' + x + ',' + y + ')',
+        className: 'lcmi-gnode' + (selected ? ' is-selected' : ''),
+        role: 'button',
+        tabIndex: 0,
+        'aria-label': 'seq ' + node.seq + ', ' + t('depth') + ' ' + node.depth,
+        onClick: () => onSelect(node.seq),
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onSelect(node.seq);
+          }
+        }
       },
-        expandable
-          ? h('button', {
-              type: 'button',
-              className: 'lcmi-twisty',
-              'aria-expanded': expanded ? 'true' : 'false',
-              onClick: onToggle
-            }, expanded ? '▾' : '▸')
-          : h('span', { className: 'lcmi-twisty', 'aria-hidden': true }),
-        h('span', { className: 'lcmi-tree-label', 'data-tone': tone ?? 'normal' }, label),
-        detail === undefined ? null : h('span', { className: 'lcmi-tree-detail' }, detail),
-        value === undefined ? null : h('span', { className: 'lcmi-tree-value' }, value)
+        h('rect', {
+          className: 'lcmi-gnode-box',
+          width: NODE.w, height: NODE.h, rx: NODE.r, ry: NODE.r,
+          'data-fallback': node.fallback ? 'true' : 'false'
+        }),
+        h('text', { className: 'lcmi-gnode-seq', x: 7, y: 11 }, 'seq ' + node.seq),
+        h('text', { className: 'lcmi-gnode-meta', x: NODE.w - 7, y: 11, textAnchor: 'end' },
+          'd' + node.depth + ' · ' + tok(saved)),
+        h('rect', { className: 'lcmi-gnode-track', x: 7, y: 16, width: NODE.w - 14, height: 3, rx: 1.5 }),
+        h('rect', {
+          className: 'lcmi-gnode-fill', x: 7, y: 16, width: (NODE.w - 14) * ratio, height: 3, rx: 1.5
+        })
       );
     }
 
     /**
-     * The context tree: what the model is actually being sent, by kind.
+     * The context DAG.
      *
-     * Three branches, in assembly order — system, checkpoints, raw messages — with
-     * each checkpoint expandable to the nodes it absorbed. The numbers come from the
-     * meter's own per-node prices, so they add up to the same total the engine
-     * compares against its threshold; a view that disagreed with the engine would be
-     * worse than no view.
+     * Scrolls in both axes rather than shrinking to fit: a 59-checkpoint session is
+     * wider than the panel, and scaling it down would make the labels unreadable — the
+     * one thing a node graph is for.
      */
-    function ContextTree({ data, t }) {
+    function ContextGraph({ data, t }) {
       const report = data.report;
-      const composition = data.composition;
-      const [open, setOpen] = useState(() => new Set());
-      const toggle = useCallback((seq) => {
-        setOpen((previous) => {
-          const next = new Set(previous);
-          if (next.has(seq)) next.delete(seq);
-          else next.add(seq);
-          return next;
-        });
-      }, []);
-
       const roots = report.tree?.roots ?? [];
-      const total = data.tokens;
+      const [selected, setSelected] = useState(null);
+      const layout = useMemo(() => layoutGraph(roots), [roots]);
 
-      const renderNode = (node, depth) => {
-        const expanded = open.has(node.seq);
-        const kids = node.children ?? [];
-        const expandable = kids.length > 0 || node.rawMessages > 0;
-        return h(React.Fragment, { key: node.seq },
-          h(TreeRow, {
-            depth,
-            label: 'seq ' + node.seq,
-            detail: (node.at === null ? '' : new Date(node.at).toISOString().slice(5, 16).replace('T', ' ') + ' · ') +
-              'd' + node.depth + ' · ' + tok(node.span) + '→' + tok(node.kept),
-            value: node.fallback ? t('fallback') : undefined,
-            tone: node.fallback ? 'warn' : 'normal',
-            expandable,
-            expanded,
-            onToggle: () => toggle(node.seq)
-          }),
-          expanded
-            ? h(React.Fragment, null,
-                kids.map((child) => renderNode(child, depth + 1)),
-                node.rawMessages > 0
-                  ? h(TreeRow, {
-                      depth: depth + 1,
-                      label: t('rawMessages'),
-                      detail: node.rawMessages + ' ' + t('messages'),
-                      value: undefined
-                    })
-                  : null
-              )
-            : null
-        );
-      };
+      if (roots.length === 0) {
+        return h('div', { className: 'lcmi-note' }, t('emptySession'));
+      }
 
-      return h('div', { className: 'lcmi-tree' },
-        h(TreeRow, {
-          depth: 0,
-          label: t('context'),
-          detail: total === null ? t('liveOnly') : tok(total) + (data.threshold ? ' / ' + tok(data.threshold) : ''),
-          value: data.threshold && total !== null ? pct(total / data.threshold) : undefined
-        }),
-        composition === null
-          ? h('div', { className: 'lcmi-note', style: { paddingLeft: '22px' } }, t('liveOnly'))
-          : h(React.Fragment, null,
-              h(TreeRow, { depth: 1, label: t('systemPrompt'), detail: composition.nodes.system + ' ' + t('messages'), value: tok(composition.system) }),
-              h(TreeRow, {
-                depth: 1,
-                label: t('checkpoints'),
-                detail: roots.length + ' ' + t('onSurface') + ' / ' + (report.tree?.total ?? 0) + ' ' + t('total'),
-                value: tok(composition.checkpoints)
-              }),
-              roots.map((node) => renderNode(node, 2)),
-              h(TreeRow, { depth: 1, label: t('rawMessages'), detail: composition.nodes.raw + ' ' + t('messages'), value: tok(composition.raw) })
-            )
+      const xOf = (depth) => NODE.padX + depth * (NODE.w + NODE.gapX);
+      const yOf = (row) => NODE.padY + row * (NODE.h + NODE.gapY);
+
+      return h('div', { className: 'lcmi-graph-wrap' },
+        // The scroll container is this DIV, not the `svg`: an SVG element with
+        // `overflow: auto` does not scroll its own content, it clips it.
+        h('div', { className: 'lcmi-graph-scroll' },
+        h('svg', {
+          className: 'lcmi-graph',
+          viewBox: '0 0 ' + layout.width + ' ' + layout.height,
+          width: layout.width,
+          height: layout.height,
+          role: 'img',
+          'aria-label': t('context')
+        },
+          h('g', { className: 'lcmi-gedges' },
+            layout.edges.map((edge, index) => {
+              const x1 = xOf(edge.from.depth) + NODE.w;
+              const y1 = yOf(edge.from.row) + NODE.h / 2;
+              const x2 = xOf(edge.to.depth);
+              const y2 = yOf(edge.to.row) + NODE.h / 2;
+              const mid = (x1 + x2) / 2;
+              return h('path', {
+                key: 'e' + index,
+                className: 'lcmi-gedge',
+                'data-active': selected === edge.from.seq || selected === edge.to.seq ? 'true' : 'false',
+                d: 'M' + x1 + ',' + y1 + ' C' + mid + ',' + y1 + ' ' + mid + ',' + y2 + ' ' + x2 + ',' + y2
+              });
+            })
+          ),
+          h('g', { className: 'lcmi-gnodes' },
+            layout.nodes.map((node) => h(GraphNode, {
+              key: node.seq,
+              node,
+              x: xOf(node.depth),
+              y: yOf(node.row),
+              selected: selected === node.seq,
+              onSelect: (seq) => setSelected((prev) => (prev === seq ? null : seq)),
+              t
+            }))
+          )
+        )
+        ),
+        selected === null
+          ? null
+          : h(GraphDetail, {
+              node: layout.nodes.find((candidate) => candidate.seq === selected),
+              t,
+              onClose: () => setSelected(null)
+            })
+      );
+    }
+
+    /** The selected node's numbers, because a box has no room for them. */
+    function GraphDetail({ node, t, onClose }) {
+      if (node === undefined) return null;
+      return h('div', { className: 'lcmi-gdetail' },
+        h('div', { className: 'lcmi-gdetail-row' },
+          h('b', null, 'seq ' + node.seq),
+          h('span', null, t('depth') + ' ' + node.depth),
+          h('span', null, tok(node.span) + ' → ' + tok(node.kept)),
+          h('span', null, t('rawMessages') + ' ' + node.rawMessages),
+          h('span', null, node.children.length + ' ' + t('children')),
+          node.fallback ? h('span', { className: 'lcmi-gdetail-warn' }, t('fallback')) : null
+        ),
+        h('button', { type: 'button', className: 'lcmi-close', onClick: onClose, 'aria-label': t('close') }, '×')
       );
     }
 
@@ -616,7 +715,7 @@ window.__ModuleLoader__.load({
             note: totals.fallbackRate === null ? '—' : pct(totals.fallbackRate)
           })
         ),
-        h(Card, { title: t('context') }, h(ContextTree, { data, t })),
+        h(Card, { title: t('context'), note: t('graphHint') }, h(ContextGraph, { data, t })),
         h(Card, { title: t('kept') + ' / ' + t('saved') }, h(Donut, { saved: totals.saved, kept: totals.kept, t })),
         days.length > 1 || (days[0] && days[0].value > 0)
           ? h(Card, { title: t('days') }, h(ColumnChart, { data: days, ariaLabel: t('days'), format: String }))
