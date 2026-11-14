@@ -9,6 +9,7 @@
 // at one text, 0.06 s at 256, 11.6 s at one text an hour later), so no single
 // divisor is right in every regime.
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import { batchSizeFor, MAX_EMBED_BATCH, resolveVectorConfig, vectorSearchBudgetMs } from "../src/vectors.js";
@@ -42,6 +43,19 @@ test("concurrency defaults to more than one", () => {
   // workload.
   const cfg = resolveVectorConfig(base);
   assert.ok(cfg.concurrency >= 2, `concurrency should allow overlapping requests, got ${cfg.concurrency}`);
+});
+
+test("an offline pass retries a timeout, a search does not", () => {
+  // Measured: this endpoint degrades from 1.8 s to 11.6 s per text over an hour.
+  // An offline pass has no outer deadline, and its ceiling exists so the endpoint's
+  // tail can be ridden out — so a timeout there is worth one more attempt. A search
+  // carries a deadline, and re-spending it inside a live turn is worse than
+  // degrading to lexical.
+  const source = fs.readFileSync(new URL("../src/vectors.js", import.meta.url), "utf8");
+  assert.match(source, /isTransientBackendFailure\(error, deadline !== undefined\)/u,
+    "the retry decision must know whether a deadline applies");
+  assert.ok(source.includes("timed out|aborted"), "the timeout branch exists");
+  assert.match(source, /return !hasDeadline;/u, "and a timeout is retried only without a deadline");
 });
 
 test("the search budget covers one full request", () => {

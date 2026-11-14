@@ -37,6 +37,7 @@ window.__ModuleLoader__.load({
         view: 'LCM',
         live: 'live',
         stale: 'stale',
+        refresh: 'Refresh',
         graphHint: 'Each box is a checkpoint; a box with several lines into it is a rollup of those checkpoints.',
         depth: 'depth',
         children: 'children',
@@ -97,6 +98,7 @@ window.__ModuleLoader__.load({
         view: 'LCM',
         live: '实时',
         stale: '已断开',
+        refresh: '刷新',
         graphHint: '每个方块是一个检查点；多条线汇入的方块是把它们合并的凝聚节点。',
         depth: '深度',
         children: '子节点',
@@ -262,6 +264,20 @@ window.__ModuleLoader__.load({
       }
       .lcmi-tab[aria-selected='true'] { color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-brand-primary); }
       .lcmi-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+      /* The retry control sits at the end of the tab row. It is quiet until a read
+         fails, then it carries the error colour — the only thing on this panel that
+         changes appearance based on state, because it is the only control. */
+      .lcmi-retry {
+        margin-left: auto; align-self: center;
+        appearance: none; background: none; border: 1px solid transparent;
+        border-radius: 4px; cursor: pointer; font: inherit; font-size: 11px;
+        color: var(--dsw-alias-label-secondary);
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 8px; min-height: 24px;
+      }
+      .lcmi-retry:hover { color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-border-l2); }
+      .lcmi-retry:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+      .lcmi-retry[data-failed='true'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-primary); }
       .lcmi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
       .lcmi-stat {
         border: var(--lcmi-line); border-radius: var(--lcmi-radius-tile);
@@ -596,7 +612,7 @@ window.__ModuleLoader__.load({
                 h('th', { className: 'num' }, t('embedCoverage'))
               )),
               h('tbody', null, rows.map((row) => h('tr', { key: row.id },
-                h('td', { className: 'lcmi-mono' }, row.id.replace(/^session-/u, '').slice(0, 10)),
+                h('td', { className: 'lcmi-session', title: row.title ?? row.id }, row.title ?? row.id.replace(/^session-/u, '').slice(0, 10)),
                 h('td', { className: 'num' }, tok(row.embedCandidates)),
                 h('td', { className: 'num' }, tok(row.embedEmbedded)),
                 h('td', { className: 'num' }, row.embedCoverage === null ? '—' : pct(row.embedCoverage))
@@ -906,7 +922,7 @@ window.__ModuleLoader__.load({
               h('th', { className: 'num' }, t('rollups'))
             )),
             h('tbody', null, data.perSession.filter((s) => s.checkpoints !== null).slice(0, 12).map((row) => h('tr', { key: row.id },
-              h('td', { className: 'lcmi-mono' }, row.id.replace(/^session-/u, '').slice(0, 10)),
+              h('td', { className: 'lcmi-session', title: row.title ?? row.id }, row.title ?? row.id.replace(/^session-/u, '').slice(0, 10)),
               h('td', { className: 'num' }, tok(row.tokens)),
               h('td', { className: 'num' }, row.checkpoints),
               h('td', { className: 'num' }, ratioText(row.ratio)),
@@ -1013,6 +1029,12 @@ window.__ModuleLoader__.load({
         return h(SessionView, { data: session.data, t });
       })();
 
+      const retry = () => {
+        if (tab === 'app') app.reload();
+        else session.reload();
+      };
+      const failed = active.error !== null;
+
       return h(React.Fragment, null,
         h('div', { className: 'lcmi-tabs', role: 'tablist' },
           h('button', {
@@ -1024,7 +1046,22 @@ window.__ModuleLoader__.load({
             className: 'lcmi-tab', role: 'tab', type: 'button',
             'aria-selected': tab === 'session' ? 'true' : 'false',
             onClick: () => setTab('session')
-          }, t('session'))
+          }, t('session')),
+          // A manual retry, because the panel is read-only and there is no other
+          // way to recover from a failed read: the poll is every 5 s but a failure
+          // that repeats is indistinguishable from a panel that stopped trying.
+          // The button is only live-looking when it can do something.
+          h('button', {
+            type: 'button',
+            className: 'lcmi-retry',
+            'data-failed': failed ? 'true' : 'false',
+            onClick: retry,
+            title: t('refresh'),
+            'aria-label': t('refresh')
+          },
+            (active.loading ? '…' : '↻'),
+            h('span', null, t('refresh'))
+          )
         ),
         body
       );

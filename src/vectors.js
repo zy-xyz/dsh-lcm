@@ -643,11 +643,18 @@ const TRANSIENT_RETRY_MS = 250;
  * @param error - the failure from one attempt.
  * @returns true when the same request may be repeated once.
  */
-function isTransientBackendFailure(error) {
+function isTransientBackendFailure(error, hasDeadline = false) {
   if (!(error instanceof VectorBackendError)) return false;
   if (error.poison === true) return false;
   if (error.budget === true) return false;
-  if (/timed out|aborted/u.test(error.message)) return false;
+  // A TIMEOUT is retried only when there is no outer deadline. A search carries
+  // one, and re-spending a ceiling inside a live turn is worse than degrading to
+  // lexical. An offline pass carries none: its ceiling exists precisely so the
+  // endpoint's tail can be ridden out, and a slow-but-alive endpoint is exactly
+  // the case a retry fixes. Measured: this endpoint degrades from 1.8 s to 11.6 s
+  // per text over an hour, so an un-retried timeout would silently drop batches
+  // that a second attempt would have completed.
+  if (/timed out|aborted/u.test(error.message)) return !hasDeadline;
   if (typeof error.status === "number") return error.status >= 500;
   return true;
 }
@@ -667,7 +674,10 @@ async function requestBatch(cfg, batch, signal, deadline) {
     try {
       return await requestBatchOnce(cfg, batch, signal, deadline);
     } catch (error) {
-      if (signal?.aborted === true || !isTransientBackendFailure(error)) throw error;
+      // `deadline === undefined` means an offline pass: it has no outer budget, so a
+      // timeout is worth one more attempt. A search passes a deadline and must not
+      // re-spend it.
+      if (signal?.aborted === true || !isTransientBackendFailure(error, deadline !== undefined)) throw error;
       last = error;
       if (attempt < TRANSIENT_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_MS));
     }
