@@ -99,7 +99,7 @@ test("a tool definition can be built under either name", () => {
 // schema, so a key that one layer knows and the other does not fails here.
 
 /** The keys both rows read. Declared once; every other list is derived from it. */
-const LEXICAL_KEYS = ["embedMaintenanceLimit", "legacyNames", "maxRecallTokens", "maxSearchHits", "rank", "rollupDir"];
+const LEXICAL_KEYS = ["allowLanAccess", "embedMaintenanceLimit", "legacyNames", "maxRecallTokens", "maxSearchHits", "rank", "rollupDir"];
 
 /**
  * The `vector*` keys the tool row spreads from `resolveVectorConfig`, derived
@@ -177,7 +177,12 @@ test("the command row declares every key its resolveConfig reads, both command f
   // the embedding pass and reads the rollup sidecar. The command row neither counts
   // embeddings in the background nor reads rollups, so declaring them there would be
   // the mirror of a missing key — simplify() would keep a value nothing consumes.
-  const commandLexical = LEXICAL_KEYS.filter((key) => key !== "embedMaintenanceLimit" && key !== "rollupDir");
+  // Three keys belong to the TOOL row alone: `embedMaintenanceLimit` schedules the
+  // background embedding pass, `rollupDir` locates the sidecar the timeline tool and
+  // the insight panel read, and `allowLanAccess` opens the insight routes beyond
+  // loopback. The command row does none of those, so declaring them there would be
+  // the mirror of a missing key: simplify() would keep a value nothing consumes.
+  const commandLexical = LEXICAL_KEYS.filter((key) => !["allowLanAccess", "embedMaintenanceLimit", "rollupDir"].includes(key));
   assert.deepEqual(
     Object.keys(command.Config.dict).sort(),
     [...commandLexical, "commandSet", ...VECTOR_KEYS].sort()

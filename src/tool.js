@@ -25,10 +25,14 @@ import { DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, recallSession, resolveRec
 import { DEFAULT_MAX_SEARCH_HITS, HYBRID_RANK_MODES, InvalidSearchPatternError, RANK_MODES, searchSessionHybrid } from "./search.js";
 import { resolveVectorConfig } from "./vectors.js";
 import { embedBackfill } from "./command.js";
+import { insightRoutes } from "./insight.js";
 import { readRollups } from "./rollup.js";
 
 const name = "tool-lcm-expand";
-const inject = ["tools"];
+// `webServer` carries the insight endpoints. Declaring it here rather than adding a
+// second bundle keeps the read-only panel in the package it reads: one install, one
+// row, and the panel cannot drift from the engine it reports on.
+const inject = ["tools", "webServer"];
 /**
  * Texts one incremental embedding pass may embed. Two batches of 32.
  *
@@ -47,6 +51,8 @@ function resolveConfig(config = {}) {
   if (typeof maxRecallTokens !== "number" || !Number.isInteger(maxRecallTokens) || maxRecallTokens <= 0) throw new Error("ToolRecallConfig: maxRecallTokens must be a positive integer");
   if (typeof maxSearchHits !== "number" || !Number.isInteger(maxSearchHits) || maxSearchHits <= 0) throw new Error("ToolRecallConfig: maxSearchHits must be a positive integer");
   if (typeof legacyNames !== "boolean") throw new Error("ToolRecallConfig: legacyNames must be a boolean");
+  const allowLanAccess = config.allowLanAccess ?? false;
+  if (typeof allowLanAccess !== "boolean") throw new Error("ToolRecallConfig: allowLanAccess must be a boolean");
   const rollupDir = config.rollupDir ?? ".lcm-rollups";
   if (typeof rollupDir !== "string" || rollupDir.length === 0) throw new Error("ToolRecallConfig: rollupDir must be a non-empty string");
   const embedMaintenanceLimit = config.embedMaintenanceLimit ?? DEFAULT_EMBED_MAINTENANCE_LIMIT;
@@ -56,7 +62,7 @@ function resolveConfig(config = {}) {
   }
   // The vector keys ride along so the search handler can read them; they are
   // inert unless `vectorEnabled` is true and `rank` names a vector mode.
-  return { maxRecallTokens, maxSearchHits, legacyNames, rank, embedMaintenanceLimit, rollupDir, ...resolveVectorConfig(config) };
+  return { maxRecallTokens, maxSearchHits, legacyNames, rank, embedMaintenanceLimit, rollupDir, allowLanAccess, ...resolveVectorConfig(config) };
 }
 
 /**
@@ -95,6 +101,9 @@ const Config = z.object({
   // Where the engine writes its day rollups. The tool row reads the same sidecar the
   // engine row writes, so the default matches ./config.js.
   rollupDir: z.string().min(1),
+  // Serve the insight endpoints beyond loopback. Off by default: they expose
+  // session history and file paths.
+  allowLanAccess: z.boolean(),
   // The vector block rides along for the search handler; inert unless
   // `vectorEnabled` is true and `rank` names a vector mode (same as
   // resolveConfig, which spreads these through resolveVectorConfig).
@@ -407,6 +416,22 @@ function apply(ctx, config) {
       for (const dispose of disposers) dispose();
     };
   });
+
+  // ── the read-only insight endpoints ──────────────────────────────────────
+  // The browser half cannot read session logs, sidecars or the vector cache, and a
+  // Session projection folds one session's committed events — not 267 logs plus
+  // three directories. So the panel's data comes from here, over the same carrier
+  // the meme gallery uses. Registration is an effect: unloading the row removes the
+  // routes.
+  // `webServer` is optional in practice: a headless or CLI-only profile composes the
+  // tool row without a browser carrier, and the insight panel has nothing to serve
+  // there. Registering unconditionally threw "Cannot read properties of undefined"
+  // and took the WHOLE tool row down with it — every lcm tool, not just the panel.
+  if (ctx.webServer !== undefined) {
+    for (const route of insightRoutes(ctx, resolved)) {
+      ctx.effect(() => ctx.webServer.register(route));
+    }
+  }
 }
 
-export { Config, DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, RECALL_DESCRIPTION, SEARCH_DESCRIPTION, TIMELINE_DESCRIPTION, apply, defineRecallTool, defineSearchTool, defineTimelineTool, inject, name, resolveConfig };
+export { Config, DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, RECALL_DESCRIPTION, SEARCH_DESCRIPTION, TIMELINE_DESCRIPTION, apply, defineRecallTool, defineSearchTool, defineTimelineTool, inject, insightRoutes, name, resolveConfig };
