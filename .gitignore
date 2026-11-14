@@ -5,6 +5,12 @@ bench/.embed-cache*/
 .lcm-vectors/
 .lcm-vectors*/
 
+# engine sidecars: rollups and assertions are derived from the session log
+.lcm-rollups/
+.lcm-rollups*/
+.lcm-assertions/
+.lcm-assertions*/
+
 # throwaway probes
 probe-*.mjs
 *.probe.mjs
