@@ -13,15 +13,9 @@ window.__ModuleLoader__.load({
     // the entry opens the panel.
     const PLUGIN = 'lcm-insight';
     const NS = 'lcmInsight';
-    // `shell.overlay` is the frame-wide layer above every column and outside their
-    // scroll containers. A header-slot chip was the first attempt and the wrong one:
-    // the session header row is the host's own breadcrumb line, and a readout there
-    // competes with navigation instead of complementing it. A floating window is
-    // also the only placement that can show charts without taking horizontal room
-    // from the conversation.
-    const OVERLAY_SLOT = 'shell.overlay';
-    // The central panel, selected by the sidebar entry's id, and the sidebar entry
-    // itself: one installation serves both the readout and the detail.
+    // The panel is the page the sidebar entry selects. Two other placements were
+    // built and removed: a chip in the session header row (competes with the host's
+    // own navigation) and a floating overlay (covers the conversation it describes).
     const PANEL_SLOT = 'main';
     const ENTRY_SLOT = 'sidebar.panellist';
     const REFRESH_MS = 5000;
@@ -72,8 +66,6 @@ window.__ModuleLoader__.load({
         onSurface: 'on surface',
         total: 'total',
         liveOnly: 'Available only while the session is loaded in this process.',
-        openWindow: 'Open the LCM statistics window',
-        closeWindow: 'Close the LCM statistics window',
         recent: 'Recent checkpoints',
         nodes: 'nodes',
         colSeq: 'seq',
@@ -122,8 +114,6 @@ window.__ModuleLoader__.load({
         onSurface: '在表面',
         total: '共',
         liveOnly: '仅当该会话仍被本进程加载时可用。',
-        openWindow: '打开 LCM 统计悬浮窗',
-        closeWindow: '关闭 LCM 统计悬浮窗',
         recent: '最近的检查点',
         nodes: '节点',
         colSeq: '序号',
@@ -225,56 +215,6 @@ window.__ModuleLoader__.load({
       .lcmi-table td { padding: 5px 8px 5px 0; border-top: 1px solid var(--dsw-alias-border-l1); }
       .lcmi-table td.num { text-align: right; }
       .lcmi-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
-      /* The floating window. Fixed to the bottom-right, above the composer, and
-         capped so it never reaches the app frame's own controls. One border, one
-         shadow, no blur: it is a panel, not a decoration. */
-      .lcmi-window {
-        position: fixed; right: 16px; bottom: 16px; z-index: 40;
-        width: min(420px, calc(100vw - 32px));
-        max-height: min(70vh, 640px);
-        display: flex; flex-direction: column;
-        border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--lcmi-radius);
-        background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-primary);
-        box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
-        overflow: hidden;
-      }
-      .lcmi-window-head {
-        display: flex; align-items: center; justify-content: space-between; gap: 8px;
-        padding: 9px 10px 9px 14px;
-        border-bottom: 1px solid var(--dsw-alias-border-l1);
-        background: var(--dsw-alias-bg-layer-1);
-      }
-      .lcmi-window-head h2 { margin: 0; font-size: 13px; font-weight: 600; }
-      .lcmi-close {
-        appearance: none; border: 0; background: none; cursor: pointer;
-        color: var(--dsw-alias-label-secondary); font: inherit; font-size: 17px; line-height: 1;
-        width: 28px; height: 28px; border-radius: var(--lcmi-radius);
-        display: inline-flex; align-items: center; justify-content: center;
-      }
-      .lcmi-close:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
-      .lcmi-close:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
-      .lcmi-window > .lcmi-tabs,
-      .lcmi-window > .lcmi-msg,
-      .lcmi-window > .lcmi-grid,
-      .lcmi-window > .lcmi-card,
-      .lcmi-window > div { flex: none; }
-      .lcmi-window > .lcmi-tabs { padding: 0 12px; }
-      .lcmi-window > .lcmi-msg,
-      .lcmi-window > .lcmi-grid { margin: 12px; }
-      .lcmi-window > .lcmi-card { margin: 0 12px 12px; }
-      .lcmi-window > .lcmi-note { margin: 0 12px 12px; }
-      .lcmi-fab {
-        position: fixed; right: 16px; bottom: 16px; z-index: 40;
-        appearance: none; cursor: pointer; font: inherit;
-        display: inline-flex; align-items: center; gap: 6px;
-        min-height: 34px; padding: 0 12px;
-        border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px;
-        background: var(--dsw-alias-bg-overlay); color: var(--dsw-alias-label-secondary);
-        box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
-        font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-      }
-      .lcmi-fab:hover { color: var(--dsw-alias-label-primary); }
-      .lcmi-fab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
       /* Trees. The connector is a border on the row's leading edge at the depth's
          indent, so a deep branch reads as one line rather than as floating text. */
       .lcmi-tree { font-size: 12px; }
@@ -684,14 +624,79 @@ window.__ModuleLoader__.load({
     // ── the panel ──────────────────────────────────────────────────────────
 
     /**
-     * The Session the main view is showing.
+     * The panel behind the sidebar entry.
      *
-     * A floating overlay is `root` scope, so it receives no `sessionId` prop — the
-     * earlier header readout took one and got `undefined`, which is why the panel
-     * asked the endpoint for `id=unknown` and the endpoint answered "id must be a
-     * session id". The store is the source: `retainedBy.mainView > 0` marks the
-     * session the conversation column is holding, which is exactly the one a
-     * statistics window should describe.
+     * This is the ONLY surface the plugin renders. A floating window was tried and
+     * removed: it covered the conversation for a readout that belongs on a page, and
+     * the sidebar entry is the navigation the host already provides.
+     *
+     * The panel receives no `sessionId` prop (`main` is keyed, not session-scoped),
+     * so it resolves the active session from the store — the same fix the floating
+     * window needed, kept because it is the correct way to ask.
+     */
+    function Panel(props) {
+      const t = props.t;
+      const sessionId = useActiveSessionId(props.sessions);
+      const sessionUrl = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
+      const session = useEndpoint(sessionUrl);
+      const app = useEndpoint('/lcm-insight/app');
+      return h('div', { className: 'lcmi-root' },
+        h(Style),
+        h('div', { className: 'lcmi-head' },
+          h('h2', null, t('title')),
+          h('span', { className: 'lcmi-sub' }, t('description'))
+        ),
+        h(PanelBody, { t, sessionId, session, app })
+      );
+    }
+
+    /**
+     * The panel's tabs and body: the profile summary first, the session detail second.
+     *
+     * The profile leads because it is the wider view; a reader who wants one
+     * session's history moves to the second tab.
+     */
+    function PanelBody({ t, sessionId, session, app }) {
+      const [tab, setTab] = useState('app');
+      const active = tab === 'app' ? app : session;
+
+      const body = (() => {
+        if (active.error !== null && active.data === null) {
+          return h('div', { className: 'lcmi-msg', 'data-tone': 'error', role: 'alert' }, t('offline') + ' (' + active.error + ')');
+        }
+        if (active.loading && active.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+        if (tab === 'app') {
+          if (app.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+          return h(AppView, { data: app.data, t });
+        }
+        if (sessionId === null) return h('div', { className: 'lcmi-msg' }, t('noSession'));
+        if (session.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+        return h(SessionView, { data: session.data, t });
+      })();
+
+      return h(React.Fragment, null,
+        h('div', { className: 'lcmi-tabs', role: 'tablist' },
+          h('button', {
+            className: 'lcmi-tab', role: 'tab', type: 'button',
+            'aria-selected': tab === 'app' ? 'true' : 'false',
+            onClick: () => setTab('app')
+          }, t('app')),
+          h('button', {
+            className: 'lcmi-tab', role: 'tab', type: 'button',
+            'aria-selected': tab === 'session' ? 'true' : 'false',
+            onClick: () => setTab('session')
+          }, t('session'))
+        ),
+        body
+      );
+    }
+
+    /**
+     * The Session the panel is describing.
+     *
+     * `retainedBy.mainView > 0` marks the session the conversation column is
+     * holding, which is the one a statistics panel should describe. Subscribed, so
+     * opening a different session moves the panel with it.
      * @param sessions - the client `sessions` service.
      * @returns the active session id, or null when none is mounted.
      */
@@ -719,121 +724,6 @@ window.__ModuleLoader__.load({
       return id;
     }
 
-    /**
-     * The floating statistics window.
-     *
-     * `shell.overlay` is the frame-wide layer above every column, outside their
-     * scroll containers — the only place a plugin can put a window that is not
-     * competing with the host's own header rows. Collapsed it is a small pill in the
-     * bottom-right; expanded it is the full panel. The collapsed state is remembered
-     * per browser so a reader who wants it out of the way keeps it out of the way.
-     */
-    function FloatingStats(props) {
-      const t = props.t;
-      const sessionId = props.sessionId;
-      const [open, setOpen] = useState(() => {
-        try {
-          return globalThis.localStorage?.getItem('lcm-insight.open') !== '0';
-        } catch {
-          return true;
-        }
-      });
-      const toggle = useCallback(() => {
-        setOpen((previous) => {
-          const next = !previous;
-          try {
-            globalThis.localStorage?.setItem('lcm-insight.open', next ? '1' : '0');
-          } catch {
-            // A reader with storage disabled keeps the default.
-          }
-          return next;
-        });
-      }, []);
-
-      // Escape closes the window, matching how the host dismisses its own popovers.
-      useEffect(() => {
-        if (!open) return undefined;
-        const onKey = (event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            toggle();
-          }
-        };
-        globalThis.document?.addEventListener('keydown', onKey);
-        return () => globalThis.document?.removeEventListener('keydown', onKey);
-      }, [open, toggle]);
-
-      const url = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
-      const session = useEndpoint(url);
-      const app = useEndpoint('/lcm-insight/app');
-
-      if (!open) {
-        return h('button', {
-          type: 'button',
-          className: 'lcmi-fab',
-          'aria-expanded': 'false',
-          title: t('openWindow'),
-          onClick: toggle
-        },
-          h('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 1.75, 'aria-hidden': true },
-            h('path', { d: 'M3 20h18' }),
-            h('rect', { x: 5, y: 12, width: 3, height: 8, rx: 0.5 }),
-            h('rect', { x: 10.5, y: 7, width: 3, height: 13, rx: 0.5 }),
-            h('rect', { x: 16, y: 3, width: 3, height: 17, rx: 0.5 })
-          ),
-          h('span', null, 'LCM')
-        );
-      }
-
-      return h('section', { className: 'lcmi-window', 'aria-label': t('title') },
-        h(Style),
-        h('header', { className: 'lcmi-window-head' },
-          h('h2', null, t('title')),
-          h('button', { type: 'button', className: 'lcmi-close', onClick: toggle, 'aria-label': t('closeWindow'), title: t('closeWindow') }, '×')
-        ),
-        h(WindowBody, { t, sessionId, session, app })
-      );
-    }
-
-    /** The window's tabs and body, split out so the chrome above stays readable. */
-    function WindowBody({ t, sessionId, session, app }) {
-      // The PROFILE tab leads: the window opens on the summary, and a reader who
-      // wants one session's detail moves to the second tab. The first version led
-      // with the session, which put the narrowest view in front of the widest one.
-      const [tab, setTab] = useState('app');
-      const active = tab === 'app' ? app : session;
-
-      const body = (() => {
-        if (active.error !== null && active.data === null) {
-          return h('div', { className: 'lcmi-msg', 'data-tone': 'error', role: 'alert' }, t('offline') + ' (' + active.error + ')');
-        }
-        if (active.loading && active.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
-        if (tab === 'app') {
-          if (app.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
-          return h(AppView, { data: app.data, t, onOpenSession: () => setTab('session') });
-        }
-        if (sessionId === null) return h('div', { className: 'lcmi-msg' }, t('noSession'));
-        if (session.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
-        return h(SessionView, { data: session.data, t });
-      })();
-
-      return h(React.Fragment, null,
-        h('div', { className: 'lcmi-tabs', role: 'tablist' },
-          h('button', {
-            className: 'lcmi-tab', role: 'tab', type: 'button',
-            'aria-selected': tab === 'app' ? 'true' : 'false',
-            onClick: () => setTab('app')
-          }, t('app')),
-          h('button', {
-            className: 'lcmi-tab', role: 'tab', type: 'button',
-            'aria-selected': tab === 'session' ? 'true' : 'false',
-            onClick: () => setTab('session')
-          }, t('session'))
-        ),
-        body
-      );
-    }
-
     return {
       inject: ['slots', 'locale', 'sessions'],
       apply(ctx) {
@@ -841,21 +731,19 @@ window.__ModuleLoader__.load({
           yield ctx.locale.register(NS, DICT);
           const t = ctx.locale.bind(NS);
 
+          // The panel and the sidebar entry MUST share one key: selecting the entry
+          // dispatches `main` by that id, so a panel registered under a different key
+          // is unreachable and the entry looks dead. That was the last regression —
+          // `Panel` had been deleted while this row still referenced it, so the entry
+          // opened nothing.
           yield ctx.slots.inject(PANEL_SLOT, () => ctx.slots.register(
             { name: PANEL_SLOT, key: PLUGIN, locale: NS },
-            (props) => h(Panel, { ...props, t })
+            (props) => h(Panel, { ...props, t, sessions: ctx.sessions })
           ));
 
           yield ctx.slots.inject(ENTRY_SLOT, () => ctx.slots.register(
             { name: ENTRY_SLOT, id: PLUGIN, order: 30, label: () => t('title'), locale: NS },
             SidebarIcon
-          ));
-
-          // The overlay is root scope, so it receives no session id: the component
-          // resolves the active session from the store itself.
-          yield ctx.slots.inject(OVERLAY_SLOT, () => ctx.slots.register(
-            { name: OVERLAY_SLOT, id: 'lcm-insight-window', order: 900, label: () => t('title'), locale: NS },
-            () => h(FloatingStats, { t, sessionId: useActiveSessionId(ctx.sessions) })
           ));
         });
       }
