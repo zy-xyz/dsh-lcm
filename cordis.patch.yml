@@ -131,11 +131,10 @@
         # costs nothing anyway. Raise it again on a local endpoint.
         vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
-        # PER REQUEST, and it must cover a whole batch. Measured on this endpoint:
-        # 8.9 s for one text, 37.2 s for eight (~4.7 s each) — cost per text FALLS
-        # with batch size, so a small batch is the expensive shape and the ceiling
-        # has to fit 32 texts, not one. 30 s could never do that, which is why every
-        # batch timed out. 150 s covers 32 texts at the measured cost with headroom.
+        # PER REQUEST. The search path sends one batch of candidates (bounded by
+        # vectorCandidateLimit), so 150 s covers a full batch of 256 texts even in
+        # the slow regime. Cost per text FALLS with batch size here, so a small
+        # batch is the expensive shape and this ceiling must fit a large one.
         vectorTimeoutMs: 150000
     - id: command-lcm-search
       name: dsh-lcm/command
@@ -169,10 +168,14 @@
         # currently agree; keep them that way.
         vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
-        # PER REQUEST. An offline pass tolerates the endpoint's tail, so this row
-        # waits longer than the search row: 240 s covers 32 texts at 4.7 s each plus
-        # a stall. The batch shrinks automatically if the ceiling cannot cover 32.
+        # PER REQUEST, and the batch is the endpoint's hard limit (256, measured:
+        # 257 returns HTTP 400). 240 s is the wall clock for that batch; the
+        # endpoint measured 14 s for 256 texts when healthy and degrades to
+        # minutes under load, so the ceiling is generous and a refusal bisects.
         vectorTimeoutMs: 240000
+        # Requests in flight. The gateway's own latency is ~140 ms, so the
+        # slowness is the upstream model and overlapping requests help.
+        vectorConcurrency: 4
     - id: lcm-compaction-gate
       name: dsh-lcm/gate
 

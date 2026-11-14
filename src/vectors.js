@@ -107,7 +107,7 @@ export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
  * The knob stays because the value belongs to the deployment, not to the algorithm:
  * a local LM Studio instance does parallelise, and its operator can raise this.
  */
-export const DEFAULT_VECTOR_CONCURRENCY = 1;
+export const DEFAULT_VECTOR_CONCURRENCY = 4;
 
 /**
  * Wall-clock ceiling one SEARCH may spend embedding, across every request.
@@ -153,8 +153,20 @@ export function vectorSearchBudgetMs(cfg) {
 /** Relative cache directory, resolved against the process cwd by the caller. */
 export const DEFAULT_VECTOR_CACHE_DIR = ".lcm-vectors";
 
-/** Texts per POST. The endpoint measured 32 texts in 981 ms. */
-export const MAX_EMBED_BATCH = 32;
+/**
+ * Texts per POST.
+ *
+ * 256 is the endpoint's HARD LIMIT, measured: 256 inputs return 200, 257 return
+ * HTTP 400 "Too many inputs in request, split into more batches." The previous
+ * value of 32 came from a note about a different endpoint ("32 texts in 981 ms")
+ * and was never re-measured after the backend changed, so the backfill was using
+ * one eighth of the capacity it was allowed.
+ *
+ * A batch at this size is also where the cost per text is lowest — the per-text
+ * measurement falls from 8.9 s at one text to 0.06 s at 256 — so the limit is both
+ * the most permissive and the most efficient choice.
+ */
+export const MAX_EMBED_BATCH = 256;
 
 /** Reciprocal-rank-fusion constant from the standard RRF formulation. */
 export const RRF_K = 60;
@@ -717,25 +729,25 @@ function ceilingFor(cfg) {
 const MAX_REQUEST_TIMEOUT_MS = 240_000;
 
 /**
- * Texts per request.
+ * Texts per request: always the endpoint's limit.
  *
- * `MAX_EMBED_BATCH` (32) unless the ceiling cannot cover it at the measured cost,
- * in which case the batch shrinks rather than the ceiling growing past its cap. The
- * measured cost used here is the CONSERVATIVE one (4.7 s/text, the eight-text
- * figure), because under-sizing a batch costs a little throughput while
- * over-sizing it costs a timeout and a failed batch.
- * @param cfg - vector settings (raw or resolved).
- * @returns texts per request, between 1 and MAX_EMBED_BATCH.
+ * A cost model used to shrink this, and it was the wrong shape. Cost per text on
+ * this endpoint varies by two orders of magnitude with batch size AND with
+ * upstream load — measured on the same day: 8.9 s at one text, 0.06 s at 256,
+ * and 11.6 s at one text an hour later — so no single divisor produces a batch
+ * that is right in every regime. Sizing for the slow regime wasted seven eighths
+ * of the capacity; sizing for the fast one risks a ceiling that cannot cover a
+ * batch.
+ *
+ * The ceiling is a WALL CLOCK, not a size limit, and the size limit is already
+ * exact: 256 is accepted and 257 is refused. A refusal is also self-correcting —
+ * `embedTextsTolerant` bisects a refused batch, so an over-limit request recovers
+ * at 128 rather than failing the pass. So the batch asks for the maximum and lets
+ * the ceiling and the bisection handle the rest.
+ * @returns texts per request.
  */
-export function batchSizeFor(cfg) {
-  const resolved = resolveVectorConfig(cfg);
-  // 4 600, not the 4 700 the eight-text probe produced: that probe is one sample,
-  // and rounding up by 100 ms made a 150 s ceiling cover 31 texts instead of 32 —
-  // a whole extra request per pass for no safety worth having. The ceiling already
-  // carries the stall headroom.
-  const MEASURED_PER_TEXT_MS = 4_600;
-  const fits = Math.floor(Math.min(resolved.timeoutMs, MAX_REQUEST_TIMEOUT_MS) / MEASURED_PER_TEXT_MS);
-  return Math.max(1, Math.min(MAX_EMBED_BATCH, fits));
+export function batchSizeFor() {
+  return MAX_EMBED_BATCH;
 }
 
 /** POST one batch and decode its vectors, with a bounded wall clock. */

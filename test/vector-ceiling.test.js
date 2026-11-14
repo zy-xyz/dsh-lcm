@@ -1,12 +1,13 @@
-// ── the ceiling must cover a whole batch ───────────────────────────────────
-// Measured failure: `vectorTimeoutMs` was 30 s on the maintenance row while a
-// 32-text batch costs ~150 s, so every batch timed out, twice in a row, and the
-// breaker ended the pass silently for days.
+// ── batch, request, concurrency: what each number means ────────────────────
+// 256 is the endpoint's hard limit, measured: 256 inputs return 200, 257 return
+// HTTP 400 "Too many inputs in request". The previous 32 came from a note about a
+// DIFFERENT endpoint and was never re-measured after the backend changed, so the
+// backfill ran at one eighth of the capacity it was allowed.
 //
-// The first fix made the ceiling PER TEXT and derived the batch from it. That was
-// wrong in the other direction: cost per text FALLS with batch size (8.9 s/text at
-// 1, 4.7 at 8, 1.7 at 9), so forcing small batches pays the fixed overhead most
-// often. These tests pin the shape the measurement actually supports.
+// A cost-derived batch was tried and removed: per-text cost on this endpoint
+// varies by two orders of magnitude with batch size and with upstream load (8.9 s
+// at one text, 0.06 s at 256, 11.6 s at one text an hour later), so no single
+// divisor is right in every regime.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -14,38 +15,36 @@ import { batchSizeFor, MAX_EMBED_BATCH, resolveVectorConfig, vectorSearchBudgetM
 
 const base = { vectorEnabled: true, vectorModel: "m", vectorDim: 4 };
 
-/** The conservative measured cost per text, matching the implementation. */
-const PER_TEXT_MS = 4_600;
+test("the batch is the endpoint's hard limit, whatever the ceiling", () => {
+  for (const timeoutMs of [5_000, 30_000, 150_000, 240_000]) {
+    const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: timeoutMs });
+    assert.equal(batchSizeFor(cfg), MAX_EMBED_BATCH,
+      `a ${timeoutMs} ms ceiling must still carry the full batch; the ceiling is a wall clock, not a size`);
+  }
+});
+
+test("the limit is 256 — the value the endpoint actually enforces", () => {
+  // 257 was measured to return HTTP 400. If this constant changes, the reason has
+  // to be a new measurement, not a preference.
+  assert.equal(MAX_EMBED_BATCH, 256);
+});
 
 test("the ceiling is per request and is returned unchanged", () => {
   const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 150_000 });
-  assert.equal(cfg.timeoutMs, 150_000, "one number, one meaning: the whole request");
+  assert.equal(cfg.timeoutMs, 150_000);
 });
 
-test("a ceiling that covers 32 texts yields the full protocol batch", () => {
-  // 32 texts at the measured cost is ~150 s. This is the configuration that makes
-  // a backfill work at all.
-  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 150_000 });
-  assert.equal(batchSizeFor(cfg), MAX_EMBED_BATCH);
-});
-
-test("a ceiling too small for 32 texts shrinks the BATCH, not the request", () => {
-  // The old bug was a 30 s ceiling with a fixed 32-text batch: a request that could
-  // never finish. Shrinking the batch keeps every request achievable.
-  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 30_000 });
-  const size = batchSizeFor(cfg);
-  assert.ok(size < MAX_EMBED_BATCH, "a 30 s ceiling cannot carry 32 texts");
-  assert.ok(size * PER_TEXT_MS <= cfg.timeoutMs,
-    `a ${size}-text batch costs ~${size * PER_TEXT_MS} ms, over the ${cfg.timeoutMs} ms ceiling`);
-});
-
-test("the batch never drops below one, whatever the ceiling", () => {
-  const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 1_000 });
-  assert.equal(batchSizeFor(cfg), 1, "a tiny ceiling still makes progress, one text at a time");
+test("concurrency defaults to more than one", () => {
+  // The gateway's OWN latency is ~140 ms (x-envoy-upstream-service-time 117 +
+  // x-kong-proxy-latency 19); the slowness is the upstream model, which is what
+  // concurrency is for. An earlier default of 1 was set from a probe that used
+  // the smallest possible batch, where the measurement did not represent the
+  // workload.
+  const cfg = resolveVectorConfig(base);
+  assert.ok(cfg.concurrency >= 2, `concurrency should allow overlapping requests, got ${cfg.concurrency}`);
 });
 
 test("the search budget covers one full request", () => {
   const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 30_000 });
-  assert.ok(vectorSearchBudgetMs(cfg) >= cfg.timeoutMs,
-    "a budget below one request's ceiling would refuse every search before its first call");
+  assert.ok(vectorSearchBudgetMs(cfg) >= cfg.timeoutMs);
 });
