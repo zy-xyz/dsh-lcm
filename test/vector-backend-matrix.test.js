@@ -130,14 +130,14 @@ async function withEnv(vars, fn) {
   }
 }
 
-test("[backend] a 5xx on the first attempt is retried once and then succeeds", async () => {
+test("[backend] a 5xx on the first attempt is retried and then succeeds", async () => {
   const root = await scratch();
   const server = await flakyServer({ a: [1, 0, 0], b: [0, 1, 0] }, 1, 500);
   try {
     const vectors = await embedTexts(cfgOf(server, root), ["a", "b"]);
     assert.equal(vectors.length, 2, "the retry produced both vectors");
     assert.deepEqual([...vectors[1]], [0, 1, 0], "the retried payload is the same payload");
-    assert.equal(server.state.requests, 2, "one failure plus exactly one retry");
+    assert.equal(server.state.requests, 2, "one failure plus one retry, which succeeded");
     assert.deepEqual(server.state.batches, [2, 2], "the retry resends the identical batch");
   } finally {
     await server.close();
@@ -145,16 +145,19 @@ test("[backend] a 5xx on the first attempt is retried once and then succeeds", a
   }
 });
 
-test("[backend] two consecutive 5xx responses fail the call after exactly one retry", async () => {
+test("[backend] a persistently failing 5xx exhausts the retry budget and surfaces it", async () => {
+  // The budget is an operator decision (three retries, so four attempts). What this
+  // pins is that a persistent failure TERMINATES: a retry loop without an end would
+  // turn a dead endpoint into a hang, and the caller's breaker would never see it.
   const root = await scratch();
-  const server = await flakyServer({ a: [1, 0, 0] }, 2, 500);
+  const server = await flakyServer({ a: [1, 0, 0] }, 99, 500);
   try {
     await assert.rejects(
       embedTexts(cfgOf(server, root), ["a"]),
       (error) => error.name === "VectorBackendError" && /HTTP 500/u.test(error.message) && error.status === 500,
       "a dead backend must surface as VectorBackendError carrying the status"
     );
-    assert.equal(server.state.requests, 2, "no third attempt: the retry budget is one");
+    assert.equal(server.state.requests, 4, "one initial attempt plus three retries, then it stops");
   } finally {
     await server.close();
     await rm(root, { recursive: true, force: true });

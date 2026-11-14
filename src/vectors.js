@@ -624,12 +624,23 @@ function unquote(value) {
  * pass — one server-side hiccup and nothing was warmed — so a batch retries once
  * before the failure is believed.
  *
- * A TIMEOUT is deliberately not retried: the wall clock was already spent, and a
- * second 20 s wait inside a live search is worse than degrading to lexical.
+ * Three retries after the first attempt, so four attempts at most. The count is an
+ * operator decision: this endpoint's failures are mostly load, and load clears.
+ *
+ * The cost is bounded twice. Per batch it is `attempts x ceiling`, which for an
+ * offline pass at 240 s is 16 min in the worst case — but `BACKFILL_FAILURE_LIMIT`
+ * stops a pass after two consecutive batches that embed nothing, so a dead endpoint
+ * costs ~32 min once, not once per batch. A search never retries a timeout at all,
+ * so its bound is unchanged.
  */
-const TRANSIENT_ATTEMPTS = 2;
+const TRANSIENT_ATTEMPTS = 4;
 
-/** Delay before the retry, long enough for a proxy hiccup to clear. */
+/**
+ * Delay before the first retry. Doubled per attempt (250 / 500 / 1 000 ms), which
+ * is long enough for a proxy hiccup to clear and short enough that a healthy retry
+ * is not delayed by the backoff itself. A retry after a TIMEOUT is the one case
+ * where the ceiling, not this delay, dominates.
+ */
 const TRANSIENT_RETRY_MS = 250;
 
 /**
@@ -679,7 +690,11 @@ async function requestBatch(cfg, batch, signal, deadline) {
       // re-spend it.
       if (signal?.aborted === true || !isTransientBackendFailure(error, deadline !== undefined)) throw error;
       last = error;
-      if (attempt < TRANSIENT_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_MS));
+      // Exponential backoff: 250, 500, 1000 ms. A fixed delay either hammers a
+      // recovering upstream or delays a good retry for no reason.
+      if (attempt < TRANSIENT_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_MS * 2 ** (attempt - 1)));
+      }
     }
   }
   throw last;

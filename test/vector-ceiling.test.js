@@ -58,6 +58,22 @@ test("an offline pass retries a timeout, a search does not", () => {
   assert.match(source, /return !hasDeadline;/u, "and a timeout is retried only without a deadline");
 });
 
+test("a failed request gets three retries, with backoff", () => {
+  // Three retries after the first attempt = four attempts. The count is an operator
+  // decision; the BOUND is what has to hold, because an offline pass at a 240 s
+  // ceiling would otherwise wait 16 min per batch with no ceiling on the pass.
+  const source = fs.readFileSync(new URL("../src/vectors.js", import.meta.url), "utf8");
+  assert.match(source, /const TRANSIENT_ATTEMPTS = 4;/u, "one initial attempt plus three retries");
+  assert.match(source, /TRANSIENT_RETRY_MS \* 2 \*\* \(attempt - 1\)/u,
+    "the delay doubles, so a recovering upstream is not hammered");
+
+  // The pass-level breaker is what keeps the total bounded: 4 attempts x 240 s x 2
+  // consecutive failed batches = 32 min once, not once per batch.
+  const command = fs.readFileSync(new URL("../src/command.js", import.meta.url), "utf8");
+  assert.match(command, /const BACKFILL_FAILURE_LIMIT = 2;/u,
+    "the breaker must still stop a pass after two dead batches");
+});
+
 test("the search budget covers one full request", () => {
   const cfg = resolveVectorConfig({ ...base, vectorTimeoutMs: 30_000 });
   assert.ok(vectorSearchBudgetMs(cfg) >= cfg.timeoutMs);
