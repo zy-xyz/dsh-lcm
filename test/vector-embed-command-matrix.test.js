@@ -174,7 +174,10 @@ test("[embed] --apply fills the cache, and a re-apply is a pure cache hit", asyn
 
     const requestsAfterFirst = server.state.requests;
     const second = await embedBackfill(hiddenSession(), cfg, { apply: true });
-    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true, corpus: 5, remaining: 0, scope: "corpus" }, second.text);
+    // `stopped` is part of the report now: the idle maintenance caller logs WHY a
+    // pass ended, and a reason that only lives in a rendered string is a reason
+    // nobody reads. Empty means "ran to the end", not "failed".
+    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true, corpus: 5, remaining: 0, scope: "corpus", stopped: "" }, second.text);
     assert.equal(server.state.requests, requestsAfterFirst, "a cached text is never sent again");
     assert.equal(server.state.inputs.length, 5, "and the input log did not grow");
 

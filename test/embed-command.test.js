@@ -152,7 +152,10 @@ test("backfill without --apply is a dry run: zero provider requests", async () =
     const cfg = commandConfig(server, dir);
     const { report, text } = await embedBackfill(hiddenSession(), cfg, { apply: false });
     assert.equal(server.state.requests, 0, "a preview must not spend a provider call");
-    assert.deepEqual(report, { scanned: 5, alreadyCached: 0, embedded: 0, failed: 0, limit: 200, applied: false, corpus: 5, remaining: 5, scope: "corpus" });
+    // `stopped` is part of the report now: the idle maintenance caller logs WHY a
+    // pass ended, and a reason that only lives in a rendered string is a reason
+    // nobody reads. Empty means "ran to the end or ran out of work", not "failed".
+    assert.deepEqual(report, { scanned: 5, alreadyCached: 0, embedded: 0, failed: 0, limit: 200, applied: false, corpus: 5, remaining: 5, scope: "corpus", stopped: "" });
     assert.match(text, /backfill \(dry-run, scope: corpus\)/, text);
     assert.match(text, /would embed: 5/, text);
     assert.match(text, /applied: no/, text);
@@ -180,7 +183,7 @@ test("--apply embeds once, and a second --apply is a pure cache hit", async () =
 
     const callsAfterFirst = server.state.requests;
     const second = await embedBackfill(hiddenSession(), cfg, { apply: true });
-    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true, corpus: 5, remaining: 0, scope: "corpus" });
+    assert.deepEqual(second.report, { scanned: 5, alreadyCached: 5, embedded: 0, failed: 0, limit: 200, applied: true, corpus: 5, remaining: 0, scope: "corpus", stopped: "" });
     assert.equal(server.state.requests, callsAfterFirst, "a cached text is never sent again");
     assert.equal(server.state.inputs.length, 5);
 

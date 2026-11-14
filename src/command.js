@@ -26,7 +26,7 @@ import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, collectVectorItems, searchSession } from "./search.js";
-import { MAX_EMBED_BATCH, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats, vectorSearchBudgetMs } from "./vectors.js";
+import { batchSizeFor, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats, vectorSearchBudgetMs } from "./vectors.js";
 
 const name = "command-lcm-search";
 const inject = ["commands"];
@@ -577,8 +577,16 @@ async function embedBackfill(session, cfg, options = {}) {
     // remote endpoint: one 65 s stall plus an HTTP 500 lost the entire pass. Per
     // batch, the work already paid for survives, and a re-run resumes from the
     // cache instead of starting over.
-    for (let start = 0; start < pending.length; start += MAX_EMBED_BATCH) {
-      const batch = pending.slice(start, start + MAX_EMBED_BATCH);
+    // ── the batch is derived from the ceiling, not guessed ────────────────
+    // Measured on OmniRoute's codestral-embed: ~4.7 s per text, so MAX_EMBED_BATCH
+    // of 32 needs ~150 s. `vectorTimeoutMs` is now a PER-TEXT allowance, so a
+    // 32-text batch is allowed 32 × the allowance — but the request also has a hard
+    // cap, and a batch sized past that cap would time out forever. `batchSizeFor`
+    // derives the size from the same rule the ceiling uses, so the two can never
+    // disagree.
+    const batchSize = batchSizeFor(cfg);
+    for (let start = 0; start < pending.length; start += batchSize) {
+      const batch = pending.slice(start, start + batchSize);
       let result;
       try {
         result = await embedTextsTolerant(cfg, batch);
@@ -630,7 +638,10 @@ async function embedBackfill(session, cfg, options = {}) {
     remaining,
     scope
   };
-  return { report, text: renderEmbedBackfill(cfg, candidates.length, pending.length, report, cache.dir, stopped) };
+  // `stopped` travels WITH the report, not only in the rendered text: the idle
+  // maintenance caller logs the reason, and a reason that only exists in a string
+  // nobody parses is a reason nobody sees.
+  return { report: { ...report, stopped }, text: renderEmbedBackfill(cfg, candidates.length, pending.length, report, cache.dir, stopped) };
 }
 
 /** Render one backfill report. */

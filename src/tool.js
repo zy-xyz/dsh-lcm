@@ -396,6 +396,15 @@ function apply(ctx, config) {
             const { report } = await embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit });
             if (report.embedded > 0) {
               ctx.logger.info(`lcm-embed maintenance: embedded ${report.embedded} text(s), ${report.remaining} remaining`);
+            } else if (report.failed > 0) {
+              // A pass that embeds nothing used to log NOTHING, which is how every
+              // batch timed out for two days without a single line to show for it.
+              // "Nothing to do" and "nothing worked" must not look the same.
+              ctx.logger.warn(
+                `lcm-embed maintenance: embedded 0, failed ${report.failed}` +
+                `${report.stopped === undefined || report.stopped === "" ? "" : `, stopped on ${report.stopped}`}` +
+                ` — check vectorTimeoutMs against the endpoint's per-text latency`
+              );
             }
           } catch (error) {
             // No turn to fail: the next idle tries again, and the cache is the state.

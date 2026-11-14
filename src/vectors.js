@@ -83,6 +83,14 @@ export const DEFAULT_VECTOR_CANDIDATE_LIMIT = 500;
  */
 export const DEFAULT_VECTOR_CANDIDATE_TOKENS = 100000;
 /** Per-request ceiling, so a hung backend cannot hold a search open. */
+/**
+ * Default per-TEXT allowance, in milliseconds.
+ *
+ * Measured cost is ~4.7 s per text on a slow hosted model, so 20 s is roughly four
+ * times headroom. Kept generous on purpose: the allowance decides when a text is
+ * declared too slow, and a false verdict costs a permanently unembedded text,
+ * while a true one only costs a retry.
+ */
 export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
 
 /**
@@ -124,7 +132,12 @@ export const DEFAULT_VECTOR_SEARCH_BUDGET_MS = 30000;
  */
 export function vectorSearchBudgetMs(cfg) {
   const resolved = resolveVectorConfig(cfg);
-  return Math.max(DEFAULT_VECTOR_SEARCH_BUDGET_MS, resolved.timeoutMs);
+  // The budget covers the batches a search actually sends: the query, then the
+  // candidate rerank. `timeoutMs` is per text now, so the budget scales with the
+  // batch size the same way a single request's ceiling does — otherwise the budget
+  // would fall BELOW one request's ceiling and every search would be refused
+  // before its first call.
+  return Math.max(DEFAULT_VECTOR_SEARCH_BUDGET_MS, ceilingFor(resolved, MAX_EMBED_BATCH));
 }
 /** Relative cache directory, resolved against the process cwd by the caller. */
 export const DEFAULT_VECTOR_CACHE_DIR = ".lcm-vectors";
@@ -204,6 +217,11 @@ export function resolveVectorConfig(config = {}) {
   assertPositiveInteger("LcmVectorConfig.vectorCandidateLimit", candidateLimit);
   const candidateTokens = config.vectorCandidateTokens ?? DEFAULT_VECTOR_CANDIDATE_TOKENS;
   assertPositiveInteger("LcmVectorConfig.vectorCandidateTokens", candidateTokens);
+  // PER TEXT, not per request. Measured on OmniRoute's codestral-embed: 8.9 s for
+  // one text, 37.2 s for eight — roughly 4.7 s each. A single per-request ceiling
+  // had to be sized for the worst batch, so a 32-text batch under a 30 s ceiling
+  // could never finish and the maintenance pass failed silently for days. Scaling
+  // by batch size makes the number mean one thing at every size.
   const timeoutMs = config.vectorTimeoutMs ?? DEFAULT_VECTOR_TIMEOUT_MS;
   assertPositiveInteger("LcmVectorConfig.vectorTimeoutMs", timeoutMs);
   const cacheDir = config.vectorCacheDir ?? DEFAULT_VECTOR_CACHE_DIR;
@@ -657,10 +675,58 @@ function budgetedTimeout(cfg, deadline) {
   return Math.min(cfg.timeoutMs, remaining);
 }
 
+/**
+ * The ceiling one batch of `size` texts gets, in milliseconds.
+ *
+ * `vectorTimeoutMs` is a PER-TEXT allowance, not a per-request one. Measured on
+ * OmniRoute's codestral-embed: 8.9 s for one text, 37.2 s for eight — about 4.7 s
+ * per text with a large fixed overhead. A single ceiling for the whole request
+ * therefore has to be sized for the WORST batch, and any batch bigger than that
+ * projection times out no matter how healthy the endpoint is. That is what froze
+ * the cache: the maintenance row allowed 30 s, a 32-text batch needs ~150 s, and
+ * every batch failed until the breaker gave up.
+ *
+ * Per-text scaling makes the ceiling mean the same thing at every batch size: a
+ * text that takes longer than the allowance is a slow text, and a batch that takes
+ * longer than `allowance × n` is n slow texts. The fixed part is added once, and
+ * the result is capped so a large batch cannot wait indefinitely.
+ * @param cfg - resolved vector settings.
+ * @param size - texts in this batch.
+ * @returns the ceiling in milliseconds, a positive integer.
+ */
+function ceilingFor(cfg, size) {
+  const count = Math.max(1, size);
+  const perText = cfg.timeoutMs;
+  const fixed = Math.min(perText, 5_000);
+  return Math.min(MAX_REQUEST_TIMEOUT_MS, fixed + perText * count);
+}
+
+/** Hard cap on one request's wall clock, whatever the batch size. */
+const MAX_REQUEST_TIMEOUT_MS = 240_000;
+
+/**
+ * The largest batch whose ceiling still fits under the hard cap.
+ *
+ * Derived from the SAME rule as {@link ceilingFor}, so a batch can never be sized
+ * for a ceiling it will not get. This replaces the earlier approach of guessing a
+ * batch from a measured per-text cost: that guess is a constant, and the moment the
+ * endpoint slows down the batch is wrong again. Deriving it from the ceiling means
+ * there is one number to be wrong about, not two.
+ * @param cfg - vector settings (raw or resolved).
+ * @returns texts per request, between 1 and MAX_EMBED_BATCH.
+ */
+export function batchSizeFor(cfg) {
+  const resolved = resolveVectorConfig(cfg);
+  const fixed = Math.min(resolved.timeoutMs, 5_000);
+  const fits = Math.floor((MAX_REQUEST_TIMEOUT_MS - fixed) / resolved.timeoutMs);
+  return Math.max(1, Math.min(MAX_EMBED_BATCH, fits));
+}
+
 /** POST one batch and decode its vectors, with a bounded wall clock. */
 async function requestBatchOnce(cfg, batch, signal, deadline) {
   const url = cfg.baseUrl + "/embeddings";
-  const timeoutMs = budgetedTimeout(cfg, deadline);
+  const ceiling = ceilingFor(cfg, batch.length);
+  const timeoutMs = deadline === undefined ? ceiling : Math.min(ceiling, budgetedTimeout(cfg, deadline));
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
