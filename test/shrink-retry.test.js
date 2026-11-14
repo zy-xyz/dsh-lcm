@@ -382,3 +382,82 @@ test("the deterministic rung commits on a real Session", { skip: harness === nul
   assert.ok(replacement !== undefined, "a checkpoint node replaced the span");
   assert.match(replacement.data.content.map((block) => block.text ?? "").join("\n"), /DETERMINISTIC fallback/, "and it says it is not a model summary");
 });
+
+/**
+ * The deterministic rung must not let one large event starve the rest of the span.
+ *
+ * Measured on disk: 39 of 49 fallback checkpoints dropped more than half their span
+ * with no marker, and one 28-node checkpoint carried anchors from node 1 only while
+ * its header still claimed "28 nodes (seqs 30545-30736)". An agent reading that
+ * believes it has the span, and never searches for what was dropped.
+ */
+function multiNodeSession(specs) {
+  const events = specs.map((spec) => ({
+    seq: spec.seq,
+    type: "user/message",
+    message: { role: "user", content: [{ type: "text", text: spec.text }] }
+  }));
+  const bySeq = new Map(events.map((event) => [event.seq, event]));
+  return {
+    id: "s-multi",
+    events,
+    surface: { nodes: specs.map((spec) => spec.seq), replaceGeneration: 1 },
+    eventAt: (seq) => bySeq.get(seq),
+    deriveEventMessage: (event) => event.message ?? null,
+    requestHeader: () => ({ config: { provider: "p", model: "m", tools: {} } })
+  };
+}
+
+test("a deterministic fallback carries every node, not just the first", async () => {
+  // Node 1 alone is far larger than the whole budget: the pre-fix body spent the
+  // entire cap on it and never reached nodes 2 or 3.
+  const bulk = Array.from({ length: 400 }, (_, i) => "node one line " + i + " filler").join("\n");
+  const session = multiNodeSession([
+    { seq: 0, text: bulk },
+    { seq: 1, text: "SECOND NODE MARKER" },
+    { seq: 2, text: "THIRD NODE MARKER" }
+  ]);
+  async function* emptyReply() {
+    yield { type: "block-start", index: 0, blockType: "reasoning" };
+    yield { type: "reasoning-delta", index: 0, text: "thinking" };
+    yield { type: "finish", reason: { kind: "stop" }, replayState: undefined };
+  }
+  const stub = stubLlm([emptyReply]);
+  const engine = engineWith(stub);
+  const preparedSpan = { session, start: 0, end: 2, shadowedSeqs: [0, 1, 2], shadowedTokenCount: 4000 };
+  const out = await engine.compile(preparedSpan, { session, options: undefined });
+  const body = out.entries.map((entry) => entry.text).join("\n");
+  assert.match(body, /DETERMINISTIC/, "the fixture reaches the deterministic rung");
+  assert.match(body, /SECOND NODE MARKER/, "node 2 survives a huge node 1");
+  assert.match(body, /THIRD NODE MARKER/, "node 3 survives too");
+  assert.match(body, /\(seq 1\)/, "and is attributed to its own seq, so lcm_expand lands right");
+  assert.ok(estimateEntryTokens(body) <= 4000, "and the body still respects the shrink bound");
+});
+
+test("a deterministic fallback says which nodes it left out", async () => {
+  // 40 nodes of ~100 tokens each against a ~900-token span: the body can carry a
+  // few, so it MUST say how many it dropped and that they are still recoverable.
+  // Pre-fix this body carried 3 nodes and claimed all 40 with no marker at all.
+  const bulk = "y".repeat(400);
+  const specs = Array.from({ length: 40 }, (_, i) => ({ seq: i, text: bulk + " node" + i }));
+  const session = multiNodeSession(specs);
+  async function* emptyReply() {
+    yield { type: "block-start", index: 0, blockType: "reasoning" };
+    yield { type: "reasoning-delta", index: 0, text: "thinking" };
+    yield { type: "finish", reason: { kind: "stop" }, replayState: undefined };
+  }
+  const stub = stubLlm([emptyReply]);
+  const engine = engineWith(stub);
+  const preparedSpan = { session, start: 0, end: 39, shadowedSeqs: specs.map((s) => s.seq), shadowedTokenCount: 900 };
+  const out = await engine.compile(preparedSpan, { session, options: undefined });
+  const body = out.entries.map((entry) => entry.text).join("\n");
+  assert.match(body, /NOT carried below/, "it names the nodes it left out");
+  assert.match(body, /of 40 nodes/, "and says how many of the span that is");
+  assert.match(body, /lcm_expand|lcm_search/, "and how to get them back");
+
+  // The note comes before the anchors, because truncation cuts the tail: a note
+  // placed last would be the first thing cut and the body would go silent again.
+  const noteAt = body.indexOf("NOT carried below");
+  const firstAnchorAt = body.indexOf("(seq 0)");
+  assert.ok(noteAt >= 0 && firstAnchorAt >= 0 && noteAt < firstAnchorAt, "the note precedes the anchors");
+});

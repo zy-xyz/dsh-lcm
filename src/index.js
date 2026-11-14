@@ -205,25 +205,63 @@ function headerTokens(prepared, bodyTokens) {
  * @returns a checkpoint body that always fits and is never empty.
  */
 function deterministicCheckpoint(prepared, budgetTokens) {
-  const lines = [
+  const header = [
     "## 逐字锚点",
     "[deterministic: span words, cut to fit]"
   ];
-  let used = estimateEntryTokens(lines.join("\n"));
+  let used = estimateEntryTokens(header.join("\n"));
   const cap = Math.max(64, budgetTokens);
-  for (const seq of prepared.shadowedSeqs) {
+  const seqs = prepared.shadowedSeqs;
+  // Room kept back for the omission note. The note is the difference between a
+  // degraded checkpoint and a lying one: without it the body claims a span it does
+  // not carry, and the agent reads on believing it has the context.
+  const footerReserve = 56;
+  const bodyCap = Math.max(32, cap - footerReserve);
+  // Fair share per node. Measured bug: one large event (a long assistant message)
+  // consumed the entire budget on its own, so a 28-node span produced anchors from
+  // node 1 only and no marker saying so — 39 of 49 fallbacks on disk dropped more
+  // than half their span silently, and one carried 1 of 28 nodes.
+  const share = Math.max(24, Math.floor(bodyCap / Math.max(1, seqs.length)));
+  const dropped = [];
+  const anchors = [];
+  for (const seq of seqs) {
     const event = resolveEventAt(prepared.session, seq);
-    if (event === undefined) continue;
+    if (event === undefined) {
+      dropped.push(seq);
+      continue;
+    }
     const rendered = renderEventBody(prepared.session, event);
+    let nodeCost = 0;
+    let wrote = false;
     for (const line of String(rendered?.body ?? "").split("\n")) {
       const trimmed = line.trim();
       if (trimmed.length === 0) continue;
       const cost = estimateEntryTokens(trimmed) + 1;
-      if (used + cost > cap) return lines.join("\n");
-      lines.push(`(seq ${seq}) ${trimmed}`);
+      // A node's FIRST line outranks its fair share. An even split alone can leave
+      // the body empty while the budget could still have held a dozen nodes:
+      // measured, 40 nodes of ~100 tokens each against an 844-token body cap carried
+      // ZERO, because 844/40 floored to a 24-token share and nothing ever fit.
+      const overShare = nodeCost + cost > share;
+      if (used + cost > bodyCap) break;
+      if (overShare && wrote) break;
+      anchors.push(`(seq ${seq}) ${trimmed}`);
+      nodeCost += cost;
       used += cost;
+      wrote = true;
     }
+    if (!wrote) dropped.push(seq);
   }
+  const lines = [...header];
+  if (dropped.length > 0) {
+    // Emitted before the anchors, not after them, because the body may still be cut
+    // to fit: a note in the tail is the first thing truncation removes, which would
+    // restore exactly the silence this note exists to prevent.
+    const first = dropped[0];
+    const last = dropped[dropped.length - 1];
+    const where = dropped.length === 1 ? `seq ${first}` : `seqs ${first}-${last}`;
+    lines.push(`[deterministic: ${dropped.length} of ${seqs.length} nodes are NOT carried below (${where}). Nothing is lost — the log is append-only: restore with lcm_expand, or find it with lcm_search.]`);
+  }
+  lines.push(...anchors);
   return lines.join("\n");
 }
 
