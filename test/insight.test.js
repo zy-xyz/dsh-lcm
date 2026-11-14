@@ -4,12 +4,13 @@
 // refuse what they claim to refuse, and the client half must be reachable from the
 // manifest the Web app reads.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { analyzeApplication, analyzeSession, checkpointDepths, checkpointTree, spanHistogram } from "../src/insight.js";
+import { analyzeApplication, analyzeSession, checkpointDepths, checkpointTree, embeddingCoverage, spanHistogram } from "../src/insight.js";
 import { insightRoutes } from "../src/insight.js";
 import { resolveConfig } from "../src/tool.js";
 
@@ -183,6 +184,36 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.match(source, /name: PANEL_SLOT, key: PLUGIN/u, "and the panel answers under the same id");
   assert.match(source, /variant: 'panel'/u, "the main panel gets its own full-height root");
   assert.match(source, /variant: 'view'/u, "the tab keeps the flow-layout root");
+});
+
+test("embedding coverage is measured against the cache, never inferred", () => {
+  // The numbers have to agree with `/lcm-embed status`, which means calling the
+  // engine's own collector rather than re-deriving its four filters. A second copy
+  // would report coverage for texts the search route never looks up.
+  const vector = { model: "test/model", dim: 4, cacheDir: "/nonexistent" };
+  const events = [
+    { type: "user/message", seq: 1, time: T0, data: { message: { role: "user", content: [{ type: "text", text: "alpha" }] } } },
+    { type: "assistant/message", seq: 2, time: T0, data: { message: { role: "assistant", content: [{ type: "text", text: "beta" }] } } }
+  ];
+  // No digests cached: every candidate is pending, and coverage is zero rather than
+  // "unknown" — the corpus is known, only the vectors are missing.
+  const empty = embeddingCoverage(events, vector, new Set());
+  assert.ok(empty.candidates >= 1, "the collector found at least one candidate");
+  assert.equal(empty.embedded, 0, "and nothing is cached");
+  assert.equal(empty.pending, empty.candidates);
+  assert.equal(empty.coverage, 0);
+
+  // With every digest present, coverage is complete. The digest is the engine's own
+  // key: sha256(model + "\n" + text-slice).
+  const digests = new Set();
+  for (const seq of [1, 2]) {
+    const message = events[seq - 1].data.message;
+    const text = message.content[0].text.slice(0, 4000);
+    digests.add(createHash("sha256").update(vector.model + "\n" + text, "utf8").digest("hex"));
+  }
+  const full = embeddingCoverage(events, vector, digests);
+  assert.equal(full.embedded, full.candidates, "every candidate found in the cache");
+  assert.equal(full.coverage, 1);
 });
 
 test("the context is drawn as a node-link graph, not an indented list", () => {

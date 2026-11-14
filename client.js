@@ -63,18 +63,25 @@ window.__ModuleLoader__.load({
         events: 'Events',
         rollups: 'Rollups',
         assertions: 'Assertions',
-        vectors: 'Embeddings',
+        embeddings: 'Embeddings',
+        embedNote: 'Measured against the vector cache: "embedded" means a vector exists for that exact text and model.',
+        embedCandidates: 'Corpus',
+        embedEmbedded: 'Embedded',
+        embedPending: 'Pending',
+        embedCache: 'Cached',
+        embedMeasured: 'Measured',
+        embedCorpus: 'texts the engine can embed',
+        embedWork: 'not yet embedded',
+        embedMeasuring: 'measuring…',
+        embedComplete: 'all recent sessions',
+        embedOff: 'The vector layer is off for this profile, so there is nothing to measure.',
+        embedCoverage: 'Coverage',
         unreadable: 'unreadable',
         estimated: 'Estimated from checkpoint bodies; spans are engine-recorded.',
         noPressure: 'No session is loaded in this process, so live pressure is unavailable.',
         noSession: 'No session is open. Open one and this window follows it.',
         context: 'Context',
-        systemPrompt: 'System prompt',
         rawMessages: 'Raw messages',
-        messages: 'messages',
-        onSurface: 'on surface',
-        total: 'total',
-        liveOnly: 'Available only while the session is loaded in this process.',
         recent: 'Recent checkpoints',
         nodes: 'nodes',
         colSeq: 'seq',
@@ -116,18 +123,25 @@ window.__ModuleLoader__.load({
         events: '事件',
         rollups: '时间线',
         assertions: '断言',
-        vectors: '嵌入',
+        embeddings: '嵌入',
+        embedNote: '对向量缓存实测：只有该文本与模型确实存在向量文件才算「已嵌入」。',
+        embedCandidates: '语料',
+        embedEmbedded: '已嵌入',
+        embedPending: '待嵌入',
+        embedCache: '缓存条数',
+        embedMeasured: '已测',
+        embedCorpus: '引擎可嵌入的文本',
+        embedWork: '尚未嵌入',
+        embedMeasuring: '测量中…',
+        embedComplete: '近期会话已全部测完',
+        embedOff: '本配置档未启用向量层，没有可测数据。',
+        embedCoverage: '覆盖率',
         unreadable: '个不可读',
         estimated: '正文 token 为估算，跨度为引擎记录。',
         noPressure: '本进程未加载任何会话，实时压力不可用。',
         noSession: '当前没有打开的会话。打开一个，本窗口会自动跟随。',
         context: '上下文',
-        systemPrompt: '系统提示',
         rawMessages: '原始消息',
-        messages: '条',
-        onSurface: '在表面',
-        total: '共',
-        liveOnly: '仅当该会话仍被本进程加载时可用。',
         recent: '最近的检查点',
         nodes: '节点',
         colSeq: '序号',
@@ -306,6 +320,16 @@ window.__ModuleLoader__.load({
       .lcmi-table tbody tr { transition: background-color var(--ds-transition-duration, .2s) var(--lcmi-ease); }
       .lcmi-table tbody tr:hover { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
 
+      /* ── embedding coverage bar ─────────────────────────────────────────── */
+      .lcmi-embedbar {
+        height: 10px; border-radius: 3px; overflow: hidden;
+        background: var(--dsw-alias-bg-layer-2);
+        border: var(--lcmi-line);
+      }
+      .lcmi-embedbar-fill {
+        height: 100%; background: var(--lcmi-series-1, #3fa89b);
+        transition: width .4s var(--lcmi-ease);
+      }
       /* ── the node graph ─────────────────────────────────────────────────── */
       .lcmi-graph-wrap { display: flex; flex-direction: column; gap: 8px; }
       /* The graph scrolls inside its own box: a 59-checkpoint DAG is taller and wider
@@ -514,6 +538,73 @@ window.__ModuleLoader__.load({
       return { ...state, reload };
     }
 
+    // ── embeddings ─────────────────────────────────────────────────────────
+
+    /**
+     * Embedding coverage, per session and in total.
+     *
+     * The numbers are MEASURED, never inferred: the host walks each session's corpus
+     * with the engine's own collector and checks every candidate's cache digest, so
+     * "embedded" means a vector file exists for that exact text and model. A gap is
+     * work not done — the cache cannot tell "never attempted" from "attempted and
+     * failed", because a failure writes nothing — so the panel reports it as pending
+     * rather than as a success rate it cannot compute.
+     */
+    function EmbeddingPanel({ data, t }) {
+      const embedding = data.embedding;
+      const cache = data.vectors ?? [];
+      const bytes = cache.reduce((total, family) => total + family.bytes, 0);
+      const entries = cache.reduce((total, family) => total + family.entries, 0);
+
+      if (embedding === undefined || embedding.enabled === false) {
+        return h('div', { className: 'lcmi-note' }, t('embedOff'));
+      }
+
+      const share = embedding.candidates === 0 ? null : embedding.embedded / embedding.candidates;
+      const rows = data.perSession
+        .filter((row) => row.embedCandidates !== null && row.embedCandidates > 0)
+        .sort((a, b) => (a.embedCoverage ?? 0) - (b.embedCoverage ?? 0))
+        .slice(0, 10);
+
+      return h(React.Fragment, null,
+        h('div', { className: 'lcmi-grid' },
+          h(Stat, { label: t('embedCandidates'), value: tok(embedding.candidates), note: t('embedCorpus') }),
+          h(Stat, { label: t('embedEmbedded'), value: tok(embedding.embedded), note: share === null ? '—' : pct(share) }),
+          h(Stat, { label: t('embedPending'), value: tok(embedding.pending), note: t('embedWork') }),
+          h(Stat, { label: t('embedCache'), value: tok(entries), note: (bytes / 1048576).toFixed(1) + ' MB' }),
+          h(Stat, {
+            label: t('embedMeasured'),
+            value: embedding.measured + '/' + embedding.total,
+            note: embedding.measured < embedding.total ? t('embedMeasuring') : t('embedComplete')
+          })
+        ),
+        h('div', { className: 'lcmi-embedbar', title: pct(share) },
+          h('div', { className: 'lcmi-embedbar-fill lcmi-anim-stacked', style: { width: (share ?? 0) * 100 + '%' } })
+        ),
+        h('div', { className: 'lcmi-legend' },
+          h('span', null, h('i', { style: { background: SERIES[1] } }), t('embedEmbedded') + ' ' + tok(embedding.embedded)),
+          h('span', null, h('i', { style: { background: 'var(--dsw-alias-bg-layer-2)' } }), t('embedPending') + ' ' + tok(embedding.pending)),
+          h('span', { className: 'lcmi-mono' }, embedding.model + ' · ' + embedding.dim + 'd')
+        ),
+        rows.length === 0
+          ? null
+          : h('table', { className: 'lcmi-table', style: { marginTop: '8px' } },
+              h('thead', null, h('tr', null,
+                h('th', null, t('colSession')),
+                h('th', { className: 'num' }, t('embedCandidates')),
+                h('th', { className: 'num' }, t('embedEmbedded')),
+                h('th', { className: 'num' }, t('embedCoverage'))
+              )),
+              h('tbody', null, rows.map((row) => h('tr', { key: row.id },
+                h('td', { className: 'lcmi-mono' }, row.id.replace(/^session-/u, '').slice(0, 10)),
+                h('td', { className: 'num' }, tok(row.embedCandidates)),
+                h('td', { className: 'num' }, tok(row.embedEmbedded)),
+                h('td', { className: 'num' }, row.embedCoverage === null ? '—' : pct(row.embedCoverage))
+              )))
+            )
+      );
+    }
+
     // ── the node graph ─────────────────────────────────────────────────────
     //
     // A NODE-LINK DIAGRAM, not an indented list. The checkpoint DAG is a graph: one
@@ -716,6 +807,28 @@ window.__ModuleLoader__.load({
           })
         ),
         h(Card, { title: t('context'), note: t('graphHint') }, h(ContextGraph, { data, t })),
+        data.embedding === null || data.embedding === undefined
+          ? null
+          : h(Card, { title: t('embeddings'), note: t('embedNote') },
+              h('div', { className: 'lcmi-grid' },
+                h(Stat, { label: t('embedCandidates'), value: tok(data.embedding.candidates) }),
+                h(Stat, { label: t('embedEmbedded'), value: tok(data.embedding.embedded) }),
+                h(Stat, { label: t('embedPending'), value: tok(data.embedding.pending) }),
+                h(Stat, {
+                  label: t('embedCoverage'),
+                  value: data.embedding.coverage === null ? '—' : pct(data.embedding.coverage)
+                })
+              ),
+              h('div', { className: 'lcmi-embedbar', title: pct(data.embedding.coverage) },
+                h('div', {
+                  className: 'lcmi-embedbar-fill lcmi-anim-stacked',
+                  style: { width: (data.embedding.coverage ?? 0) * 100 + '%' }
+                })
+              ),
+              h('div', { className: 'lcmi-legend' },
+                h('span', { className: 'lcmi-mono' }, data.vectorModel + ' · ' + data.vectorDim + 'd')
+              )
+            ),
         h(Card, { title: t('kept') + ' / ' + t('saved') }, h(Donut, { saved: totals.saved, kept: totals.kept, t })),
         days.length > 1 || (days[0] && days[0].value > 0)
           ? h(Card, { title: t('days') }, h(ColumnChart, { data: days, ariaLabel: t('days'), format: String }))
@@ -764,14 +877,7 @@ window.__ModuleLoader__.load({
           h(Stat, { label: t('rollups'), value: tok(data.sidecars.rollupRows), note: data.sidecars.rollupFiles + ' files' }),
           h(Stat, { label: t('assertions'), value: tok(data.sidecars.assertionRows), note: data.sidecars.assertionFiles + ' files' })
         ),
-        data.vectors.length > 0
-          ? h(Card, {
-              title: t('vectors'),
-              note: data.vectors.map((v) => v.family + ': ' + tok(v.entries) + ' entries, ' + (v.bytes / 1048576).toFixed(1) + ' MB').join(' · ')
-            },
-            h(BarRows, { data: data.vectors.map((v) => ({ label: v.family.split('-')[0], value: v.entries })), color: SERIES[2], format: String })
-          )
-          : null,
+        h(Card, { title: t('embeddings'), note: t('embedNote') }, h(EmbeddingPanel, { data, t })),
         days.length > 0 ? h(Card, { title: t('days') }, h(ColumnChart, { data: days, ariaLabel: t('days'), format: String })) : null,
         h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' } },
           h(Card, { title: t('spans') }, h(ColumnChart, { data: spans, color: SERIES[2], ariaLabel: t('spans'), format: String })),

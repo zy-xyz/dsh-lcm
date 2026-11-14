@@ -13,10 +13,14 @@
  *
  * @module dsh-lcm/insight
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
+
+import { VECTOR_TEXT_LIMIT, resolveVectorConfig, vectorCacheDirOf } from "./vectors.js";
+import { collectVectorItems } from "./search.js";
 
 /** Chars per token, measured against `dsh-token-meter` on real checkpoint bodies. */
 const CHARS_PER_TOKEN = 3.9;
@@ -367,6 +371,82 @@ export function analyzeApplication(sessions) {
     }))
   };
 }
+// ── embedding coverage ─────────────────────────────────────────────────────
+
+/**
+ * The set of cache filenames that hold a vector, for one model-and-width family.
+ *
+ * The cache is content-addressed: a file is named `sha256(model + "\n" + text)`. So
+ * "is this text embedded" is a set membership test, not a read — which is what makes
+ * per-session coverage affordable at all.
+ * @param dir - the family directory, `<modelTag>-<dim>`.
+ * @returns a Set of digests without the `.f32` suffix.
+ */
+function cachedDigests(dir) {
+  const digests = new Set();
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return digests;
+  }
+  for (const name of names) {
+    if (name.endsWith(".f32")) digests.add(name.slice(0, -4));
+  }
+  return digests;
+}
+
+/**
+ * Embedding coverage for one session.
+ *
+ * It calls the ENGINE'S OWN `collectVectorItems`, not a copy of its rules. Those
+ * rules are four interacting filters — message-producing types, nothing still on the
+ * surface, a token window, and the 4 000-character slice that IS the cache key — and
+ * a second copy would report numbers that disagree with `/lcm-embed status`.
+ *
+ * `theoretical` is what the engine CAN embed for this session (the corpus); `embedded`
+ * is how much of it actually has a vector. The gap is work not done, not failure:
+ * the cache cannot distinguish "never attempted" from "attempted and failed", because
+ * a failure writes nothing. The panel says so rather than inventing a success rate.
+ * @param events - the session log in seq order.
+ * @param vector - the resolved vector config (`model`, `dim`, `cacheDir`).
+ * @param digests - the cached digests for this family, from {@link cachedDigests}.
+ * @returns `{ candidates, embedded, pending, coverage }`.
+ */
+export function embeddingCoverage(events, vector, digests) {
+  const session = {
+    id: "coverage",
+    snapshotEvents: () => events,
+    get seq() { return events.length; },
+    eventAt: () => undefined,
+    deriveEventMessage: (event) => event?.data?.message ?? null
+  };
+  let items;
+  try {
+    const collected = collectVectorItems(session, { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER });
+    items = collected.items ?? [];
+  } catch {
+    // A third-party replacement event the fold refuses; the engine degrades the same
+    // way, so report "unknown" rather than zero.
+    return { candidates: 0, embedded: 0, pending: 0, coverage: null };
+  }
+  let candidates = 0;
+  let embedded = 0;
+  for (const item of items) {
+    const text = String(item.text ?? "").slice(0, VECTOR_TEXT_LIMIT);
+    if (text.trim().length === 0) continue;
+    candidates += 1;
+    const digest = createHash("sha256").update(vector.model + "\n" + text, "utf8").digest("hex");
+    if (digests.has(digest)) embedded += 1;
+  }
+  return {
+    candidates,
+    embedded,
+    pending: candidates - embedded,
+    coverage: candidates === 0 ? null : embedded / candidates
+  };
+}
+
 // ── the read-only HTTP surface ─────────────────────────────────────────────
 //
 // Everything below answers one question for the browser half: what did the engine
@@ -475,6 +555,20 @@ function sessionFiles() {
 
 /** Reports keyed by file plus mtime, so a repaint does not re-inflate every log. */
 const reportCache = new Map();
+
+/**
+ * Embedding coverage keyed by file plus mtime, like {@link reportCache}.
+ *
+ * Measured: one 50 000-event session costs ~600 ms because `collectVectorItems` walks
+ * the whole log and renders each candidate's text. Doing that for 267 sessions on a
+ * five-second poll is minutes of blocking work, so the app view computes a small
+ * batch per request and reports how many it has finished. The number is either
+ * measured or absent — never a guess.
+ */
+const coverageCache = new Map();
+
+/** How many sessions one /lcm-insight/app request may analyse. */
+const COVERAGE_BUDGET_PER_REQUEST = 2;
 
 /**
  * One session's report, reusing the cached fold while its log is unchanged.
@@ -681,6 +775,11 @@ export function insightRoutes(ctx, resolved) {
   const assertionDir = firstExisting([path.join(cwd, ".lcm-assertions"), path.join(home, ".lcm-assertions")]);
   const vectorDir = firstExisting([path.join(cwd, ".lcm-vectors"), path.join(home, ".lcm-vectors")]);
   const allowLan = resolved.allowLanAccess === true;
+  // The vector layer's own resolution, so coverage is measured against the exact
+  // model and width the search route uses. Off means the panel reports the layer as
+  // disabled instead of showing a coverage of zero.
+  const vector = resolved.vectorEnabled === true ? resolveVectorConfig(resolved) : null;
+  const digests = vector === null ? null : cachedDigests(vectorCacheDirOf(vector));
 
   return [
     {
@@ -697,19 +796,52 @@ export function insightRoutes(ctx, resolved) {
           const assertions = sidecarCounts(assertionDir);
           const since = Date.now() - RECENT_WINDOW_MS;
           const held = new Set((ctx.get("sessions")?.list() ?? []).map((session) => session.id));
+          const recent = sessionFiles().filter((entry) => entry.mtimeMs >= since);
+          // Coverage is measured incrementally: each request analysises at most
+          // COVERAGE_BUDGET_PER_REQUEST sessions it has not seen at this mtime, and the
+          // response says how many of the total are done. A poll eventually covers
+          // everything without ever blocking for minutes.
+          let budget = COVERAGE_BUDGET_PER_REQUEST;
+          let covered = 0;
           const sessions = [];
-          for (const entry of sessionFiles()) {
-            if (entry.mtimeMs < since) continue;
+          for (const entry of recent) {
             const pressure = held.has(entry.id) ? await livePressure(ctx, entry.id) : null;
+            let embedding = null;
+            if (vector !== null && digests !== null) {
+              const hit = coverageCache.get(entry.file);
+              if (hit !== undefined && hit.mtimeMs === entry.mtimeMs) {
+                embedding = hit.coverage;
+                covered += 1;
+              } else if (budget > 0) {
+                budget -= 1;
+                const records = readLog(entry.file) ?? [];
+                embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests);
+                coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding });
+                covered += 1;
+              }
+            }
             sessions.push({
               id: entry.id,
               report: cachedReport(entry.file, entry.mtimeMs),
               tokens: pressure?.tokens ?? null,
-              threshold: pressure?.threshold ?? null
+              threshold: pressure?.threshold ?? null,
+              embedding
             });
           }
           const body = analyzeApplication(sessions);
           body.vectors = vectorStats(vectorDir);
+          body.embedding = {
+            enabled: vector !== null,
+            model: vector?.model ?? null,
+            dim: vector?.dim ?? null,
+            // How many of the recent sessions have a measured coverage, and how many
+            // are still queued. A poll fills the queue a couple at a time.
+            measured: covered,
+            total: recent.length,
+            candidates: sessions.reduce((total, session) => total + (session.embedding?.candidates ?? 0), 0),
+            embedded: sessions.reduce((total, session) => total + (session.embedding?.embedded ?? 0), 0),
+            pending: sessions.reduce((total, session) => total + (session.embedding?.pending ?? 0), 0)
+          };
           body.sidecars = {
             rollupDir,
             assertionDir,
@@ -718,11 +850,18 @@ export function insightRoutes(ctx, resolved) {
             assertionFiles: assertions.size,
             assertionRows: [...assertions.values()].reduce((total, n) => total + n, 0)
           };
-          body.perSession = body.perSession.map((row) => ({
-            ...row,
-            rollups: rollups.get(row.id) ?? 0,
-            assertions: assertions.get(row.id) ?? 0
-          }));
+          const byId = new Map(sessions.map((session) => [session.id, session.embedding]));
+          body.perSession = body.perSession.map((row) => {
+            const embedding = byId.get(row.id) ?? null;
+            return {
+              ...row,
+              rollups: rollups.get(row.id) ?? 0,
+              assertions: assertions.get(row.id) ?? 0,
+              embedCandidates: embedding?.candidates ?? null,
+              embedEmbedded: embedding?.embedded ?? null,
+              embedCoverage: embedding?.coverage ?? null
+            };
+          });
           body.held = held.size;
           sendJson(res, 200, body);
         } catch (error) {
@@ -763,6 +902,19 @@ export function insightRoutes(ctx, resolved) {
         const pressure = await livePressure(ctx, id);
         const rollups = sidecarCounts(rollupDir);
         const assertions = sidecarCounts(assertionDir);
+        // The session view is ONE session, so it pays for exact coverage and caches it
+        // by mtime; a repeat poll on an unchanged log costs a map lookup.
+        let embedding = null;
+        if (vector !== null && digests !== null) {
+          const hit = coverageCache.get(entry.file);
+          if (hit !== undefined && hit.mtimeMs === entry.mtimeMs) {
+            embedding = hit.coverage;
+          } else {
+            const records = readLog(entry.file) ?? [];
+            embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests);
+            coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding });
+          }
+        }
         sendJson(res, 200, {
           id,
           updatedAt: entry.mtimeMs,
@@ -770,6 +922,10 @@ export function insightRoutes(ctx, resolved) {
           tokens: pressure?.tokens ?? null,
           threshold: pressure?.threshold ?? null,
           composition: pressure?.composition ?? null,
+          embedding,
+          vectorEnabled: vector !== null,
+          vectorModel: vector?.model ?? null,
+          vectorDim: vector?.dim ?? null,
           rollups: rollups.get(id) ?? 0,
           assertions: assertions.get(id) ?? 0
         });

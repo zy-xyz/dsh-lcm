@@ -740,7 +740,7 @@ function decodeEmbeddings(payload, cfg, url, expected) {
  * @param resolved - resolved vector settings.
  * @returns absolute directory path for this model and width.
  */
-function vectorCacheDirOf(resolved) {
+export function vectorCacheDirOf(resolved) {
   const modelTag = createHash("sha256").update(resolved.model, "utf8").digest("hex").slice(0, 12);
   return join(resolved.cacheDir, `${modelTag}-${resolved.dim}`);
 }
