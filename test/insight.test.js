@@ -165,19 +165,15 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.ok(manifest.files.includes("client.js"), "and the file must be shipped");
   const source = fs.readFileSync(path.join(ROOT, "client.js"), "utf8");
   assert.match(source, /__ModuleLoader__\.load/u, "a client bundle registers through the module loader");
-  // Placement is a design decision worth pinning. Two attempts were removed: a chip
-  // in the session header row (competes with the host's navigation) and a floating
-  // overlay (covers the conversation it describes). The panel is the page the
-  // sidebar entry selects, and nothing else renders.
-  assert.match(source, /sidebar\.panellist/u, "the sidebar entry is the way in");
-  assert.match(source, /name: PANEL_SLOT, key: PLUGIN/u, "and the panel is registered under the same key");
+  // Placement is a design decision worth pinning, and three of the four candidates
+  // were rejected on the way here. `conversation.view` is the row that carries
+  // 轨迹 / 上下文: a View tab beside them, which is where a per-session report
+  // belongs, and its registration is handed `sessionId` by `inject`.
+  assert.match(source, /VIEW_SLOT = 'conversation\.view'/u, "the tab registers in the conversation view row");
+  assert.match(source, /inject: \(sessionId\) => \(\{ sessionId \}\)/u, "and receives its session from the host");
   assert.doesNotMatch(source, /shell\.overlay/u, "no floating overlay");
   assert.doesNotMatch(source, /conversation\.session\.header\.utilities/u, "no header chip");
-
-  // A panel keyed under one id and an entry registered under another leaves the
-  // entry dead: selecting it dispatches `main` by the ENTRY's id.
-  const keys = [...source.matchAll(/key: PLUGIN|id: PLUGIN/g)];
-  assert.equal(keys.length, 2, "the panel key and the entry id are the only two uses of PLUGIN");
+  assert.doesNotMatch(source, /'sidebar\.panellist'/u, "no separate sidebar entry: the tab row is the navigation");
 });
 
 test("every component the bundle registers is actually defined", () => {

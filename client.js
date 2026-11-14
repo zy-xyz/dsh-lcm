@@ -8,16 +8,14 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const { useState, useEffect, useMemo, useCallback } = React;
 
-    // Slot keys are this plugin's own namespace; they are NOT the module id. The
-    // sidebar entry id and the `main` panel key must match each other so selecting
-    // the entry opens the panel.
+    // Slot keys are this plugin's own namespace; they are NOT the module id.
     const PLUGIN = 'lcm-insight';
     const NS = 'lcmInsight';
-    // The panel is the page the sidebar entry selects. Two other placements were
-    // built and removed: a chip in the session header row (competes with the host's
-    // own navigation) and a floating overlay (covers the conversation it describes).
-    const PANEL_SLOT = 'main';
-    const ENTRY_SLOT = 'sidebar.panellist';
+    // `conversation.view` is the row that carries 轨迹 / 上下文: a View tab beside
+    // them, which is what "编队标签页" means. Two other placements were built and
+    // removed — a chip in the session header row (competes with the host's own
+    // navigation) and a floating overlay (covers the conversation it describes).
+    const VIEW_SLOT = 'conversation.view';
     const REFRESH_MS = 5000;
 
     // ── palette ────────────────────────────────────────────────────────────
@@ -30,6 +28,7 @@ window.__ModuleLoader__.load({
       en: {
         title: 'LCM insight',
         description: 'Compaction, structure and embedding statistics for this profile.',
+        view: 'LCM',
         panel: 'LCM insight',
         session: 'This session',
         app: 'This profile',
@@ -78,6 +77,7 @@ window.__ModuleLoader__.load({
       zh: {
         title: 'LCM 洞察',
         description: '本配置档的压缩、结构与嵌入统计。',
+        view: 'LCM',
         panel: 'LCM 洞察',
         session: '本会话',
         app: '本配置档',
@@ -155,12 +155,14 @@ window.__ModuleLoader__.load({
     // One radius system, tabular figures for every number, host tokens for
     // structure. Rendered as a React element so unmounting removes it.
     const CSS = `
-      .lcmi-root {
+      /* A View tab renders inside the conversation column, which already owns the
+         scroll container and the outer padding. So this is a plain flow block: no
+         height, no overflow, no background of its own. */
+      .lcmi-view {
         --lcmi-radius: 6px;
         display: flex; flex-direction: column; gap: 18px;
-        height: 100%; overflow-y: auto; padding: 20px 22px 28px;
+        padding: 16px 20px 28px;
         color: var(--dsw-alias-label-primary);
-        background: var(--dsw-alias-bg-base);
         font-size: 13px; line-height: 1.45;
       }
       .lcmi-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -624,28 +626,29 @@ window.__ModuleLoader__.load({
     // ── the panel ──────────────────────────────────────────────────────────
 
     /**
-     * The panel behind the sidebar entry.
+     * The View tab's body.
      *
-     * This is the ONLY surface the plugin renders. A floating window was tried and
-     * removed: it covered the conversation for a readout that belongs on a page, and
-     * the sidebar entry is the navigation the host already provides.
+     * This is the ONLY surface the plugin renders. A header chip and a floating
+     * window were both built and removed; the tab is where a per-session report
+     * belongs, because the tab row is already how the host switches between views of
+     * one session.
      *
-     * The panel receives no `sessionId` prop (`main` is keyed, not session-scoped),
-     * so it resolves the active session from the store — the same fix the floating
-     * window needed, kept because it is the correct way to ask.
+     * `sessionId` arrives from the View registration's `inject(sessionId)`; the store
+     * lookup is the fallback for a host that does not pass it.
      */
     function Panel(props) {
       const t = props.t;
-      const sessionId = useActiveSessionId(props.sessions);
+      // The View registration's `inject(sessionId)` hands this in; the store lookup
+      // stays as a fallback for a host that does not pass it.
+      const sessionId = props.sessionId ?? useActiveSessionId(props.sessions);
       const sessionUrl = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
       const session = useEndpoint(sessionUrl);
       const app = useEndpoint('/lcm-insight/app');
-      return h('div', { className: 'lcmi-root' },
+      // A View tab renders INSIDE the conversation column, which already owns the
+      // scroll and the padding: no fixed height, no own scroll container, and no
+      // second title bar competing with the tab label.
+      return h('div', { className: 'lcmi-view' },
         h(Style),
-        h('div', { className: 'lcmi-head' },
-          h('h2', null, t('title')),
-          h('span', { className: 'lcmi-sub' }, t('description'))
-        ),
         h(PanelBody, { t, sessionId, session, app })
       );
     }
@@ -731,19 +734,20 @@ window.__ModuleLoader__.load({
           yield ctx.locale.register(NS, DICT);
           const t = ctx.locale.bind(NS);
 
-          // The panel and the sidebar entry MUST share one key: selecting the entry
-          // dispatches `main` by that id, so a panel registered under a different key
-          // is unreachable and the entry looks dead. That was the last regression —
-          // `Panel` had been deleted while this row still referenced it, so the entry
-          // opened nothing.
-          yield ctx.slots.inject(PANEL_SLOT, () => ctx.slots.register(
-            { name: PANEL_SLOT, key: PLUGIN, locale: NS },
-            (props) => h(Panel, { ...props, t, sessions: ctx.sessions })
-          ));
-
-          yield ctx.slots.inject(ENTRY_SLOT, () => ctx.slots.register(
-            { name: ENTRY_SLOT, id: PLUGIN, order: 30, label: () => t('title'), locale: NS },
-            SidebarIcon
+          // A View tab beside 轨迹 and 上下文: `conversation.view` is the row that
+          // carries those, and its registration receives an `inject(sessionId)`
+          // callback, so the tab is handed the session it is showing instead of
+          // hunting for it. That is the placement the operator meant by "编队标签页".
+          yield ctx.slots.inject(VIEW_SLOT, () => ctx.slots.register(
+            {
+              name: VIEW_SLOT,
+              id: PLUGIN,
+              order: 30,
+              locale: NS,
+              label: () => t('view'),
+              inject: (sessionId) => ({ sessionId })
+            },
+            (props) => h(Panel, { ...props, t })
           ));
         });
       }
