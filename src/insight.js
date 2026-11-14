@@ -201,6 +201,63 @@ export function spanHistogram(rows) {
  * @param events - the session log in seq order.
  * @returns the session report.
  */
+/**
+ * The checkpoint DAG as a nested tree, for the structure view.
+ *
+ * A checkpoint absorbs a contiguous range of surface nodes, and `shadowedSeqs`
+ * names them. When those seqs are themselves checkpoints the node is a
+ * condensation and its absorbed checkpoints are its children; when they are raw
+ * messages it is a leaf. That is the whole shape, and it is exactly what a tree
+ * view needs: the nodes that are still on the surface are the roots, everything
+ * they replaced hangs beneath them.
+ *
+ * Only checkpoints are materialised. A leaf's absorbed messages are summarised as a
+ * COUNT, because listing 24 000 individual messages would make the payload larger
+ * than the log it describes and the reader would scroll past the structure to find
+ * it.
+ * @param events - the session log in seq order.
+ * @returns `[{ seq, depth, span, kept, nodes, rawMessages, fallback, at, children }]`,
+ *   roots first, oldest sibling first.
+ */
+export function checkpointTree(events) {
+  const depths = checkpointDepths(events);
+  const bySeq = new Map();
+  for (const event of events) {
+    if (!isCheckpoint(event)) continue;
+    const body = (event.data?.summary ?? []).map((block) => block?.text ?? "").join("");
+    bySeq.set(event.seq, {
+      seq: event.seq,
+      at: typeof event.time === "number" ? event.time : null,
+      span: event.data?.shadowedTokenCount ?? 0,
+      kept: estimateTokens(body),
+      nodes: (event.data?.shadowedSeqs ?? []).length,
+      rawMessages: 0,
+      fallback: body.includes(FALLBACK_MARKER),
+      depth: depths.get(event.seq) ?? 1,
+      children: []
+    });
+  }
+  // Link each checkpoint to the checkpoints it absorbed; count the rest as raw.
+  const absorbed = new Set();
+  for (const [seq, node] of bySeq) {
+    const source = events.find((event) => event.seq === seq);
+    for (const childSeq of source?.data?.shadowedSeqs ?? []) {
+      const child = bySeq.get(childSeq);
+      if (child === undefined) {
+        node.rawMessages += 1;
+        continue;
+      }
+      node.children.push(child);
+      absorbed.add(childSeq);
+    }
+  }
+  for (const node of bySeq.values()) node.children.sort((a, b) => a.seq - b.seq);
+  // A checkpoint nothing else absorbed is a root: it is still standing on the
+  // surface. Everything else is reachable through a parent.
+  const roots = [...bySeq.values()].filter((node) => !absorbed.has(node.seq)).sort((a, b) => a.seq - b.seq);
+  return { roots, total: bySeq.size };
+}
+
 export function analyzeSession(events) {
   const rows = checkpointRows(events);
   const totals = summarizeCheckpoints(rows);
@@ -217,6 +274,7 @@ export function analyzeSession(events) {
     depths: depthHistogram(rows),
     days: dailyHistogram(rows),
     spans: spanHistogram(rows),
+    tree: checkpointTree(events),
     kinds: [...byType.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([type, count]) => ({ type, count }))
   };
 }
@@ -501,15 +559,36 @@ export async function livePressure(ctx, sessionId) {
   } catch {
     return null;
   }
+
+  // ── the composition tree ────────────────────────────────────────────────
+  // The meter prices EVERY node on the surface, so the breakdown costs nothing
+  // extra: classify each priced seq by the event it points at. That is what makes
+  // an honest "context is made of this" view possible — it reports the same numbers
+  // the engine itself compares against the threshold, rather than re-deriving them
+  // from the log and disagreeing by a few percent.
+  const composition = { system: 0, checkpoints: 0, raw: 0, nodes: { system: 0, checkpoints: 0, raw: 0 } };
+  const bySeq = new Map(session.snapshotEvents?.().map((event) => [event.seq, event]) ?? []);
+  for (const node of measured.nodes ?? []) {
+    const event = bySeq.get(node.seq);
+    const kind = event?.type === "compaction/summary"
+      ? "checkpoints"
+      : event?.type === "system/message" || event?.type === "developer/message"
+        ? "system"
+        : "raw";
+    composition[kind] += node.tokens ?? 0;
+    composition.nodes[kind] += 1;
+  }
+
   const target = header?.config;
-  if (target === undefined || llm === undefined) return { tokens: measured.totalTokens, threshold: null };
+  const base = { tokens: measured.totalTokens, threshold: null, composition };
+  if (target === undefined || llm === undefined) return base;
   try {
     const info = await llm.resolveModelInfo(target.provider, target.model);
     const window = info?.context?.contextWindow;
-    if (window === undefined) return { tokens: measured.totalTokens, threshold: null };
-    return { tokens: measured.totalTokens, threshold: thresholdFor(window, info.defaultMaxTokens) };
+    if (window === undefined) return base;
+    return { tokens: measured.totalTokens, threshold: thresholdFor(window, info.defaultMaxTokens), composition };
   } catch {
-    return { tokens: measured.totalTokens, threshold: null };
+    return base;
   }
 }
 
@@ -654,6 +733,7 @@ export function insightRoutes(ctx, resolved) {
           report,
           tokens: pressure?.tokens ?? null,
           threshold: pressure?.threshold ?? null,
+          composition: pressure?.composition ?? null,
           rollups: rollups.get(id) ?? 0,
           assertions: assertions.get(id) ?? 0
         });

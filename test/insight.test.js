@@ -9,7 +9,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { analyzeApplication, analyzeSession, checkpointDepths, spanHistogram } from "../src/insight.js";
+import { analyzeApplication, analyzeSession, checkpointDepths, checkpointTree, spanHistogram } from "../src/insight.js";
 import { insightRoutes } from "../src/insight.js";
 import { resolveConfig } from "../src/tool.js";
 
@@ -49,6 +49,38 @@ test("depth is derived from what each checkpoint absorbed", () => {
   const depths = checkpointDepths(events);
   assert.equal(depths.get(2), 1, "a leaf is depth 1");
   assert.equal(depths.get(6), 2, "a merge of two leaves is depth 2");
+});
+
+test("the tree links a condensation to the checkpoints it absorbed", () => {
+  // The structure view needs parenthood, not just depth. A condensation absorbs
+  // earlier CHECKPOINTS; a leaf absorbs raw messages and only their count survives,
+  // because listing 24 000 messages would bury the structure it is meant to explain.
+  const events = [
+    { type: "user/message", seq: 1, time: T0 },
+    checkpoint(2, T0, 1000, "leaf one"),
+    { type: "user/message", seq: 3, time: T0 + 1 },
+    checkpoint(4, T0 + 2, 1000, "leaf two"),
+    { type: "compaction/summary", seq: 6, time: T0 + 3, data: { shadowedSeqs: [2, 4], shadowedTokenCount: 2000, summary: [{ type: "text", text: "merged" }] } }
+  ];
+  const tree = checkpointTree(events);
+  assert.equal(tree.total, 3, "three checkpoints");
+  assert.equal(tree.roots.length, 1, "the condensation is the only root; the leaves hang under it");
+  assert.equal(tree.roots[0].seq, 6);
+  assert.deepEqual(tree.roots[0].children.map((child) => child.seq), [2, 4], "oldest sibling first");
+  assert.equal(tree.roots[0].rawMessages, 0, "it absorbed checkpoints, not messages");
+});
+
+test("a leaf counts its absorbed messages instead of listing them", () => {
+  const events = [
+    { type: "user/message", seq: 1, time: T0 },
+    { type: "assistant/message", seq: 2, time: T0 + 1 },
+    { type: "user/message", seq: 3, time: T0 + 2 },
+    { type: "compaction/summary", seq: 5, time: T0 + 3, data: { shadowedSeqs: [1, 2, 3], shadowedTokenCount: 900, summary: [{ type: "text", text: "(seq 1) done" }] } }
+  ];
+  const tree = checkpointTree(events);
+  assert.equal(tree.roots.length, 1);
+  assert.equal(tree.roots[0].rawMessages, 3, "three messages summarised as a count");
+  assert.deepEqual(tree.roots[0].children, [], "and no checkpoint children");
 });
 
 test("span buckets keep one oversized leaf from flattening the chart", () => {

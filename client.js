@@ -64,6 +64,14 @@ window.__ModuleLoader__.load({
         estimated: 'Estimated from checkpoint bodies; spans are engine-recorded.',
         noPressure: 'No session is loaded in this process, so live pressure is unavailable.',
         noSession: 'No session is open. Open one and this window follows it.',
+        context: 'Context',
+        systemPrompt: 'System prompt',
+        rawMessages: 'Raw messages',
+        raw: 'raw',
+        messages: 'messages',
+        onSurface: 'on surface',
+        total: 'total',
+        liveOnly: 'Available only while the session is loaded in this process.',
         openWindow: 'Open the LCM statistics window',
         closeWindow: 'Close the LCM statistics window',
         recent: 'Recent checkpoints',
@@ -106,6 +114,14 @@ window.__ModuleLoader__.load({
         estimated: '正文 token 为估算，跨度为引擎记录。',
         noPressure: '本进程未加载任何会话，实时压力不可用。',
         noSession: '当前没有打开的会话。打开一个，本窗口会自动跟随。',
+        context: '上下文',
+        systemPrompt: '系统提示',
+        rawMessages: '原始消息',
+        raw: '原始',
+        messages: '条',
+        onSurface: '在表面',
+        total: '共',
+        liveOnly: '仅当该会话仍被本进程加载时可用。',
         openWindow: '打开 LCM 统计悬浮窗',
         closeWindow: '关闭 LCM 统计悬浮窗',
         recent: '最近的检查点',
@@ -259,6 +275,29 @@ window.__ModuleLoader__.load({
       }
       .lcmi-fab:hover { color: var(--dsw-alias-label-primary); }
       .lcmi-fab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+      /* Trees. The connector is a border on the row's leading edge at the depth's
+         indent, so a deep branch reads as one line rather than as floating text. */
+      .lcmi-tree { font-size: 12px; }
+      .lcmi-tree-row {
+        display: flex; align-items: baseline; gap: 6px;
+        padding: 3px 0; min-height: 22px;
+        border-left: 1px solid transparent;
+      }
+      .lcmi-tree-row[data-depth='1'] { border-left-color: var(--dsw-alias-border-l2); }
+      .lcmi-tree-row[data-depth='2'] { border-left-color: var(--dsw-alias-border-l2); }
+      .lcmi-twisty {
+        appearance: none; background: none; border: 0; cursor: pointer; font: inherit;
+        color: var(--dsw-alias-label-secondary); width: 14px; min-width: 14px;
+        padding: 0; line-height: 1; text-align: center;
+      }
+      .lcmi-twisty:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; border-radius: 2px; }
+      .lcmi-tree-label { color: var(--dsw-alias-label-primary); white-space: nowrap; }
+      .lcmi-tree-label[data-tone='warn'] { color: var(--dsw-alias-state-error-primary); }
+      .lcmi-tree-detail { color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .lcmi-tree-value {
+        margin-left: auto; padding-left: 8px;
+        font-variant-numeric: tabular-nums; font-weight: 600;
+      }
     `;
 
     function Style() {
@@ -407,6 +446,116 @@ window.__ModuleLoader__.load({
       return { ...state, reload };
     }
 
+    // ── trees ──────────────────────────────────────────────────────────────
+
+    /**
+     * One row of an indented tree.
+     *
+     * Indentation is left padding in whole steps, with a connector drawn as a
+     * border on the row's leading edge. That keeps the tree readable without SVG
+     * path bookkeeping, and it reflows on a narrow window instead of overflowing.
+     */
+    function TreeRow({ depth, label, detail, value, tone, expandable, expanded, onToggle }) {
+      const pad = 8 + depth * 14;
+      return h('div', {
+        className: 'lcmi-tree-row',
+        style: { paddingLeft: pad + 'px' },
+        'data-depth': depth
+      },
+        expandable
+          ? h('button', {
+              type: 'button',
+              className: 'lcmi-twisty',
+              'aria-expanded': expanded ? 'true' : 'false',
+              onClick: onToggle
+            }, expanded ? '▾' : '▸')
+          : h('span', { className: 'lcmi-twisty', 'aria-hidden': true }),
+        h('span', { className: 'lcmi-tree-label', 'data-tone': tone ?? 'normal' }, label),
+        detail === undefined ? null : h('span', { className: 'lcmi-tree-detail' }, detail),
+        value === undefined ? null : h('span', { className: 'lcmi-tree-value' }, value)
+      );
+    }
+
+    /**
+     * The context tree: what the model is actually being sent, by kind.
+     *
+     * Three branches, in assembly order — system, checkpoints, raw messages — with
+     * each checkpoint expandable to the nodes it absorbed. The numbers come from the
+     * meter's own per-node prices, so they add up to the same total the engine
+     * compares against its threshold; a view that disagreed with the engine would be
+     * worse than no view.
+     */
+    function ContextTree({ data, t }) {
+      const report = data.report;
+      const composition = data.composition;
+      const [open, setOpen] = useState(() => new Set());
+      const toggle = useCallback((seq) => {
+        setOpen((previous) => {
+          const next = new Set(previous);
+          if (next.has(seq)) next.delete(seq);
+          else next.add(seq);
+          return next;
+        });
+      }, []);
+
+      const roots = report.tree?.roots ?? [];
+      const total = data.tokens;
+
+      const renderNode = (node, depth) => {
+        const expanded = open.has(node.seq);
+        const kids = node.children ?? [];
+        const expandable = kids.length > 0 || node.rawMessages > 0;
+        return h(React.Fragment, { key: node.seq },
+          h(TreeRow, {
+            depth,
+            label: 'seq ' + node.seq,
+            detail: (node.at === null ? '' : new Date(node.at).toISOString().slice(5, 16).replace('T', ' ') + ' · ') +
+              'd' + node.depth + ' · ' + tok(node.span) + '→' + tok(node.kept),
+            value: node.fallback ? t('fallback') : undefined,
+            tone: node.fallback ? 'warn' : 'normal',
+            expandable,
+            expanded,
+            onToggle: () => toggle(node.seq)
+          }),
+          expanded
+            ? h(React.Fragment, null,
+                kids.map((child) => renderNode(child, depth + 1)),
+                node.rawMessages > 0
+                  ? h(TreeRow, {
+                      depth: depth + 1,
+                      label: t('rawMessages'),
+                      detail: node.rawMessages + ' ' + t('messages'),
+                      value: undefined
+                    })
+                  : null
+              )
+            : null
+        );
+      };
+
+      return h('div', { className: 'lcmi-tree' },
+        h(TreeRow, {
+          depth: 0,
+          label: t('context'),
+          detail: total === null ? t('liveOnly') : tok(total) + (data.threshold ? ' / ' + tok(data.threshold) : ''),
+          value: data.threshold && total !== null ? pct(total / data.threshold) : undefined
+        }),
+        composition === null
+          ? h('div', { className: 'lcmi-note', style: { paddingLeft: '22px' } }, t('liveOnly'))
+          : h(React.Fragment, null,
+              h(TreeRow, { depth: 1, label: t('systemPrompt'), detail: composition.nodes.system + ' ' + t('messages'), value: tok(composition.system) }),
+              h(TreeRow, {
+                depth: 1,
+                label: t('checkpoints'),
+                detail: roots.length + ' ' + t('onSurface') + ' / ' + (report.tree?.total ?? 0) + ' ' + t('total'),
+                value: tok(composition.checkpoints)
+              }),
+              roots.map((node) => renderNode(node, 2)),
+              h(TreeRow, { depth: 1, label: t('rawMessages'), detail: composition.nodes.raw + ' ' + t('messages'), value: tok(composition.raw) })
+            )
+      );
+    }
+
     // ── session view ───────────────────────────────────────────────────────
 
     function SessionView({ data, t }) {
@@ -435,6 +584,7 @@ window.__ModuleLoader__.load({
             note: totals.fallbackRate === null ? '—' : pct(totals.fallbackRate)
           })
         ),
+        h(Card, { title: t('context') }, h(ContextTree, { data, t })),
         h(Card, { title: t('kept') + ' / ' + t('saved') }, h(Donut, { saved: totals.saved, kept: totals.kept, t })),
         days.length > 1 || (days[0] && days[0].value > 0)
           ? h(Card, { title: t('days') }, h(ColumnChart, { data: days, ariaLabel: t('days'), format: String }))
@@ -647,35 +797,38 @@ window.__ModuleLoader__.load({
 
     /** The window's tabs and body, split out so the chrome above stays readable. */
     function WindowBody({ t, sessionId, session, app }) {
-      const [tab, setTab] = useState('session');
-      const active = tab === 'session' ? session : app;
+      // The PROFILE tab leads: the window opens on the summary, and a reader who
+      // wants one session's detail moves to the second tab. The first version led
+      // with the session, which put the narrowest view in front of the widest one.
+      const [tab, setTab] = useState('app');
+      const active = tab === 'app' ? app : session;
 
       const body = (() => {
         if (active.error !== null && active.data === null) {
           return h('div', { className: 'lcmi-msg', 'data-tone': 'error', role: 'alert' }, t('offline') + ' (' + active.error + ')');
         }
         if (active.loading && active.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
-        if (tab === 'session') {
-          if (sessionId === null) return h('div', { className: 'lcmi-msg' }, t('noSession'));
-          if (session.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
-          return h(SessionView, { data: session.data, t });
+        if (tab === 'app') {
+          if (app.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+          return h(AppView, { data: app.data, t, onOpenSession: () => setTab('session') });
         }
-        if (app.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
-        return h(AppView, { data: app.data, t });
+        if (sessionId === null) return h('div', { className: 'lcmi-msg' }, t('noSession'));
+        if (session.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+        return h(SessionView, { data: session.data, t });
       })();
 
       return h(React.Fragment, null,
         h('div', { className: 'lcmi-tabs', role: 'tablist' },
           h('button', {
             className: 'lcmi-tab', role: 'tab', type: 'button',
-            'aria-selected': tab === 'session' ? 'true' : 'false',
-            onClick: () => setTab('session')
-          }, t('session')),
-          h('button', {
-            className: 'lcmi-tab', role: 'tab', type: 'button',
             'aria-selected': tab === 'app' ? 'true' : 'false',
             onClick: () => setTab('app')
-          }, t('app'))
+          }, t('app')),
+          h('button', {
+            className: 'lcmi-tab', role: 'tab', type: 'button',
+            'aria-selected': tab === 'session' ? 'true' : 'false',
+            onClick: () => setTab('session')
+          }, t('session'))
         ),
         body
       );
