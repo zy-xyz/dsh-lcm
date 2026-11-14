@@ -35,7 +35,8 @@ window.__ModuleLoader__.load({
         title: 'LCM insight',
         description: 'Compaction, structure and embedding statistics for this profile.',
         view: 'LCM',
-        panel: 'LCM insight',
+        live: 'live',
+        stale: 'stale',
         session: 'This session',
         app: 'This profile',
         emptySession: 'No checkpoint in this session yet. Nothing has been compacted.',
@@ -66,7 +67,6 @@ window.__ModuleLoader__.load({
         context: 'Context',
         systemPrompt: 'System prompt',
         rawMessages: 'Raw messages',
-        raw: 'raw',
         messages: 'messages',
         onSurface: 'on surface',
         total: 'total',
@@ -84,7 +84,8 @@ window.__ModuleLoader__.load({
         title: 'LCM 洞察',
         description: '本配置档的压缩、结构与嵌入统计。',
         view: 'LCM',
-        panel: 'LCM 洞察',
+        live: '实时',
+        stale: '已断开',
         session: '本会话',
         app: '本配置档',
         emptySession: '本会话还没有 checkpoint，尚未压缩过。',
@@ -115,7 +116,6 @@ window.__ModuleLoader__.load({
         context: '上下文',
         systemPrompt: '系统提示',
         rawMessages: '原始消息',
-        raw: '原始',
         messages: '条',
         onSurface: '在表面',
         total: '共',
@@ -160,29 +160,77 @@ window.__ModuleLoader__.load({
     // ── styles ─────────────────────────────────────────────────────────────
     // One radius system, tabular figures for every number, host tokens for
     // structure. Rendered as a React element so unmounting removes it.
+    // ── the surface language, learned from dsh-context ──────────────────────
+    // Every colour is a HOST TOKEN, never a literal: the panel has to hold up in
+    // both themes and across a host reskin. Radius is one scale (8 tiles, 12 cards),
+    // shadows come from the host's own elevation tokens, and hairlines are 1px at
+    // the border tokens so a card edge is visible on a light canvas without drawing
+    // a box on a dark one.
+    //
+    // Motion follows dsh-context's vocabulary exactly: one ease curve
+    // (cubic-bezier(.4,0,.2,1)), short durations (bars .35 s, donuts .45 s), and a
+    // STAGGER driven by a --lcmi-i index so a chart draws left to right instead of
+    // appearing as a block. Everything is disabled under prefers-reduced-motion —
+    // an animated chart is a preference, not a requirement.
     const CSS = `
-      /* A View tab renders inside the conversation column, which already owns the
-         scroll container and the outer padding. So this is a plain flow block: no
-         height, no overflow, no background of its own. */
-      .lcmi-view {
-        --lcmi-radius: 6px;
-        display: flex; flex-direction: column; gap: 18px;
-        padding: 16px 20px 28px;
+      .lcmi-view, .lcmi-panel {
+        --lcmi-radius-card: 12px;
+        --lcmi-radius-tile: 8px;
+        --lcmi-ease: cubic-bezier(.4, 0, .2, 1);
+        --lcmi-line: 1px solid var(--dsw-alias-border-l2);
+        --lcmi-shadow-card: var(--dsw-shadow-lv1, 0 1px 2px rgb(0 0 0 / 8%)), var(--dsw-shadow-lv1-blur, 0 2px 8px rgb(0 0 0 / 6%));
+        --lcmi-shadow-hover: var(--dsw-shadow-lv2, 0 4px 16px rgb(0 0 0 / 12%));
+        /* A recessed track rather than a flat one: the unfilled arc has to read as a
+           container the filled arc sits in, which is how dsh-context draws its donut.
+           color-mix keeps it neutral across both themes instead of pinning a grey. */
+        --lcmi-track: color-mix(in srgb, var(--dsw-alias-label-secondary) 18%, transparent);
         color: var(--dsw-alias-label-primary);
         font-size: 13px; line-height: 1.45;
+        display: flex; flex-direction: column; gap: 14px;
       }
+      /* A View tab renders inside the conversation column, which already owns the
+         scroll container and the outer padding: no height, no overflow. */
+      .lcmi-view { padding: 16px 20px 28px; background: transparent; }
       /* The "main" panel IS the page: it owns the scroll and the height. */
-      .lcmi-panel {
-        --lcmi-radius: 6px;
-        display: flex; flex-direction: column; gap: 18px;
-        height: 100%; overflow-y: auto; padding: 20px 22px 28px;
-        color: var(--dsw-alias-label-primary);
-        background: var(--dsw-alias-bg-base);
-        font-size: 13px; line-height: 1.45;
+      .lcmi-panel { height: 100%; overflow-y: auto; padding: 18px 20px 28px; background: var(--dsw-alias-bg-base); }
+
+      @keyframes lcmi-bar-in { 0% { transform: scaleY(0); } }
+      @keyframes lcmi-donut-in { 0% { stroke-dasharray: 0 100; } }
+      @keyframes lcmi-stacked-in { 0% { transform: scaleX(0); } }
+      @keyframes lcmi-fade-up { 0% { opacity: 0; transform: translateY(6px); } }
+      @keyframes lcmi-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+      /* Stagger by position, not by a prop: the views are literal element trees, and
+         an index prop would have to be threaded through every call and kept in sync
+         with each insertion. */
+      .lcmi-grid > :nth-child(1), .lcmi-view > :nth-child(2) { --lcmi-i: 0; }
+      .lcmi-grid > :nth-child(2), .lcmi-view > :nth-child(3) { --lcmi-i: 1; }
+      .lcmi-grid > :nth-child(3), .lcmi-view > :nth-child(4) { --lcmi-i: 2; }
+      .lcmi-grid > :nth-child(4), .lcmi-view > :nth-child(5) { --lcmi-i: 3; }
+      .lcmi-grid > :nth-child(5), .lcmi-view > :nth-child(6) { --lcmi-i: 4; }
+      .lcmi-grid > :nth-child(6), .lcmi-view > :nth-child(7) { --lcmi-i: 5; }
+      .lcmi-anim-bar { animation: lcmi-bar-in .35s var(--lcmi-ease) calc(var(--lcmi-i, 0) * 15ms) both; transform-origin: bottom; }
+      .lcmi-anim-donut { animation: lcmi-donut-in .45s var(--lcmi-ease) both; }
+      .lcmi-anim-stacked { animation: lcmi-stacked-in .4s var(--lcmi-ease) calc(var(--lcmi-i, 0) * 30ms) both; transform-origin: left; }
+      .lcmi-anim-fade { animation: lcmi-fade-up .35s var(--lcmi-ease) calc(var(--lcmi-i, 0) * 35ms) both; }
+      .lcmi-anim-pulse { animation: lcmi-pulse 1.8s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .lcmi-anim-bar, .lcmi-anim-donut, .lcmi-anim-stacked, .lcmi-anim-fade, .lcmi-anim-pulse {
+          animation: none !important;
+        }
       }
       .lcmi-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
       .lcmi-head h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
       .lcmi-head .lcmi-sub { color: var(--dsw-alias-label-secondary); font-size: 12px; }
+      /* A live dot, not decoration: the panel re-reads every 5 s, and a readout with
+         no freshness signal is indistinguishable from a frozen one. It pulses while
+         the last poll succeeded and goes flat the moment one fails. */
+      .lcmi-live { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+      .lcmi-live i {
+        width: 6px; height: 6px; border-radius: 50%; display: block;
+        background: var(--dsw-alias-brand-primary);
+      }
+      .lcmi-live[data-stale='true'] i { background: var(--dsw-alias-state-error-primary); animation: none; }
       .lcmi-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
       .lcmi-tab {
         appearance: none; background: none; border: 0; cursor: pointer;
@@ -192,19 +240,32 @@ window.__ModuleLoader__.load({
       }
       .lcmi-tab[aria-selected='true'] { color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-brand-primary); }
       .lcmi-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
-      .lcmi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(124px, 1fr)); gap: 10px; }
+      .lcmi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
       .lcmi-stat {
-        border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--lcmi-radius);
-        background: var(--dsw-alias-bg-layer-1); padding: 10px 12px;
+        border: var(--lcmi-line); border-radius: var(--lcmi-radius-tile);
+        background: var(--dsw-alias-bg-layer-2); padding: 7px 9px;
+        display: flex; flex-direction: column; gap: 2px; min-width: 0;
+        box-shadow: var(--lcmi-shadow-tile, none);
+        transition: box-shadow var(--ds-transition-duration, .2s) var(--lcmi-ease);
       }
-      .lcmi-stat .k { color: var(--dsw-alias-label-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-      .lcmi-stat .v { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-      .lcmi-stat .n { color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .lcmi-stat:hover { box-shadow: var(--lcmi-shadow-hover); }
+      .lcmi-stat .k {
+        color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .lcmi-stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; line-height: 1.2; }
+      .lcmi-stat .n { color: var(--dsw-alias-label-secondary); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .lcmi-card {
-        border: 1px solid var(--dsw-alias-border-l1); border-radius: var(--lcmi-radius);
-        background: var(--dsw-alias-bg-layer-1); padding: 12px 14px;
+        border: var(--lcmi-line); border-radius: var(--lcmi-radius-card);
+        background: var(--dsw-alias-bg-layer-1); padding: 8px 10px;
+        box-shadow: var(--lcmi-shadow-card);
       }
-      .lcmi-card > h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+      .lcmi-card > h3 {
+        margin: 0 0 9px; padding-bottom: 7px;
+        border-bottom: var(--lcmi-line);
+        font-size: 12px; font-weight: 600; color: var(--dsw-alias-label-secondary);
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      }
       .lcmi-note { color: var(--dsw-alias-label-secondary); font-size: 11px; }
       .lcmi-msg { padding: 28px 4px; color: var(--dsw-alias-label-secondary); font-size: 13px; }
       .lcmi-msg[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
@@ -214,6 +275,10 @@ window.__ModuleLoader__.load({
       .lcmi-bar-row { display: grid; grid-template-columns: 74px 1fr 54px; align-items: center; gap: 8px; font-size: 12px; }
       .lcmi-bar-row .l { color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
       .lcmi-bar-row .n { text-align: right; font-variant-numeric: tabular-nums; }
+      /* The track is the host's recessive layer, the fill is the series colour: a
+         bare fill on the card background reads as a floating line, not as a bar. */
+      .lcmi-bar { background: var(--dsw-alias-bg-layer-2); border-radius: 3px; overflow: hidden; }
+      .lcmi-bar > i { transition: width .4s var(--lcmi-ease); }
       .lcmi-bar { height: 8px; border-radius: 2px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; }
       .lcmi-bar > i { display: block; height: 100%; border-radius: 2px; }
       .lcmi-chip {
@@ -230,6 +295,8 @@ window.__ModuleLoader__.load({
       .lcmi-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
       .lcmi-table th { text-align: left; font-weight: 500; color: var(--dsw-alias-label-secondary); font-size: 11px; padding: 4px 8px 4px 0; text-transform: uppercase; letter-spacing: 0.03em; }
       .lcmi-table td { padding: 5px 8px 5px 0; border-top: 1px solid var(--dsw-alias-border-l1); }
+      .lcmi-table tbody tr { transition: background-color var(--ds-transition-duration, .2s) var(--lcmi-ease); }
+      .lcmi-table tbody tr:hover { background: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2)); }
       .lcmi-table td.num { text-align: right; }
       .lcmi-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
       /* Trees. The connector is a border on the row's leading edge at the depth's
@@ -285,8 +352,12 @@ window.__ModuleLoader__.load({
           h('line', { x1: 0, y1: height - 14, x2: 100, y2: height - 14, stroke: 'var(--dsw-alias-border-l1)', strokeWidth: 0.5, vectorEffect: 'non-scaling-stroke' }),
           data.map((d, i) => {
             const barH = Math.max(d.value === 0 ? 0 : 1.5, ((height - 22) * d.value) / max);
+            // `--lcmi-i` staggers the draw left to right: 15 ms per bar is fast
+            // enough to feel like one motion and slow enough to see direction.
             return h('rect', {
               key: d.label + i,
+              className: 'lcmi-anim-bar',
+              style: { '--lcmi-i': i },
               x: i * slot + (slot - barW) / 2,
               y: height - 14 - barH,
               width: barW,
@@ -312,7 +383,10 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'lcmi-bars' },
         data.map((d, i) => h('div', { className: 'lcmi-bar-row', key: d.label + i },
           h('span', { className: 'l' }, d.label),
-          h('span', { className: 'lcmi-bar' }, h('i', { style: { width: (100 * d.value) / max + '%', background: d.color ?? color } })),
+          h('span', { className: 'lcmi-bar' }, h('i', {
+            className: 'lcmi-anim-stacked',
+            style: { '--lcmi-i': i, width: (100 * d.value) / max + '%', background: d.color ?? color }
+          })),
           h('span', { className: 'n' }, format(d.value))
         ))
       );
@@ -326,8 +400,9 @@ window.__ModuleLoader__.load({
       const savedLen = (c * saved) / total;
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: '16px' } },
         h('svg', { width: size, height: size, viewBox: '0 0 100 100', role: 'img', 'aria-label': 'removed vs kept' },
-          h('circle', { cx: 50, cy: 50, r, fill: 'none', stroke: 'var(--dsw-alias-bg-layer-2)', strokeWidth: 13 }),
+          h('circle', { cx: 50, cy: 50, r, fill: 'none', stroke: 'var(--lcmi-track)', strokeWidth: 13 }),
           h('circle', {
+            className: 'lcmi-anim-donut',
             cx: 50, cy: 50, r, fill: 'none', stroke: SERIES[1], strokeWidth: 13,
             strokeDasharray: savedLen + ' ' + (c - savedLen),
             strokeDashoffset: 0, transform: 'rotate(-90 50 50)', strokeLinecap: 'butt'
@@ -346,7 +421,7 @@ window.__ModuleLoader__.load({
 
     /** One stat tile. */
     function Stat({ label, value, note }) {
-      return h('div', { className: 'lcmi-stat' },
+      return h('div', { className: 'lcmi-stat lcmi-anim-fade' },
         h('div', { className: 'k' }, label),
         h('div', { className: 'v' }, value),
         note === undefined ? null : h('div', { className: 'n' }, note)
@@ -354,7 +429,7 @@ window.__ModuleLoader__.load({
     }
 
     function Card({ title, children, note }) {
-      return h('div', { className: 'lcmi-card' },
+      return h('div', { className: 'lcmi-card lcmi-anim-fade' },
         title === undefined ? null : h('h3', null, title),
         children,
         note === undefined ? null : h('div', { className: 'lcmi-note', style: { marginTop: '8px' } }, note)
@@ -689,11 +764,16 @@ window.__ModuleLoader__.load({
       // with the tab label. A `main` panel is the whole page, so it gets the height
       // and the heading back.
       if (variant === 'panel') {
+        const stale = app.error !== null && app.data !== null;
         return h('div', { className: 'lcmi-panel' },
           h(Style),
           h('div', { className: 'lcmi-head' },
             h('h2', null, t('title')),
-            h('span', { className: 'lcmi-sub' }, t('description'))
+            h('span', { className: 'lcmi-sub' }, t('description')),
+            h('span', { className: 'lcmi-live', 'data-stale': stale ? 'true' : 'false' },
+              h('i', { className: 'lcmi-anim-pulse', 'aria-hidden': true }),
+              t(stale ? 'stale' : 'live')
+            )
           ),
           h(PanelBody, { t, sessionId, session, app })
         );

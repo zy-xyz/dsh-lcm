@@ -185,6 +185,27 @@ test("the manifest exposes the client half the Web app loads", () => {
   assert.match(source, /variant: 'view'/u, "the tab keeps the flow-layout root");
 });
 
+test("the surface language follows the host: tokens, one ease, reduced motion", () => {
+  // The panel sits inside the host's own chrome, so its colours must come from the
+  // host's tokens rather than literals: a hardcoded grey is invisible on one theme
+  // and wrong on the other. dsh-context, the reference this was built against, does
+  // exactly that — and it also animates, which is the part worth copying carefully.
+  const source = fs.readFileSync(path.join(ROOT, "client.js"), "utf8");
+  assert.ok((source.match(/var\(--dsw-alias-/g) ?? []).length > 20,
+    "structural colour comes from host tokens");
+
+  // Charts animate in, with a positional stagger and one shared easing curve.
+  for (const keyframe of ["lcmi-bar-in", "lcmi-donut-in", "lcmi-stacked-in", "lcmi-fade-up"]) {
+    assert.match(source, new RegExp("@" + "keyframes " + keyframe), "missing " + keyframe);
+  }
+  assert.match(source, /--lcmi-ease: cubic-bezier/u, "one easing curve, declared once");
+
+  // Motion is a preference. Without this, a chart that animates on every repaint is
+  // an accessibility failure, and the panel re-reads every five seconds.
+  assert.match(source, /@media \(prefers-reduced-motion: reduce\)/u, "reduced motion is honoured");
+  assert.match(source, /animation: none !important/u, "and it actually disables the animations");
+});
+
 test("every component the bundle registers is actually defined", () => {
   // Measured regression: `Panel` was deleted while the `main` registration still
   // referenced it, so the sidebar entry opened nothing and the whole entry looked
