@@ -384,6 +384,41 @@ export function analyzeApplication(sessions) {
  * @param dir - the family directory, `<modelTag>-<dim>`.
  * @returns a Set of digests without the `.f32` suffix.
  */
+/**
+ * The cached digests for one family directory, refreshed when that directory moves.
+ *
+ * The set IS the definition of "already embedded", and it changes on every search
+ * and every backfill that writes a vector. Building it once at route registration
+ * made the panel under-report for the rest of the process: measured here, five
+ * vectors written after startup moved the cache count from 61 to 66 while the
+ * embedded count stayed at 1136 across four polls.
+ *
+ * A rebuild is a readdir plus a Set of 20 000 names, measured at 60 ms, so it is
+ * gated on the directory's own mtime — a 0.16 ms stat — rather than run per poll.
+ * @param dir - the family directory, `<modelTag>-<dim>`.
+ * @returns `{ digests, generation }`; the generation changes on every rebuild.
+ */
+function digestsFor(dir) {
+  let mtimeMs;
+  try {
+    mtimeMs = fs.statSync(dir).mtimeMs;
+  } catch {
+    return { digests: digestCache.digests, generation: digestCache.generation };
+  }
+  if (digestCache.dir === dir && digestCache.mtimeMs === mtimeMs) {
+    return { digests: digestCache.digests, generation: digestCache.generation };
+  }
+  digestGeneration += 1;
+  digestCache = { dir, mtimeMs, digests: cachedDigests(dir), generation: digestGeneration };
+  return { digests: digestCache.digests, generation: digestCache.generation };
+}
+
+/** The last digest set built, with the stat that says whether it is still current. */
+let digestCache = { dir: null, mtimeMs: -1, digests: new Set(), generation: 0 };
+
+/** Bumped on every rebuild, so a cached coverage knows it is out of date. */
+let digestGeneration = 0;
+
 function cachedDigests(dir) {
   const digests = new Set();
   let names;
@@ -979,7 +1014,10 @@ export async function warmReports(ctx, resolved) {
   const home = dshHome();
   const titleDir = firstExisting([path.join(home, "storages", "session_projcache", "sessions")]);
   const vector = resolved.enabled === true ? resolveVectorConfig(resolved) : null;
-  const digests = vector === null ? null : cachedDigests(vectorCacheDirOf(vector));
+  // The FAMILY directory, not a frozen digest set: the set changes whenever a
+  // search or a backfill writes a vector, and a snapshot taken at registration
+  // reported a stale "already embedded" count for the rest of the process.
+  const vectorFamilyDir = vector === null ? null : vectorCacheDirOf(vector);
   const liveSessions = new Map((ctx.get("sessions")?.list() ?? []).map((session) => [session.id, session]));
   const since = Date.now() - RECENT_WINDOW_MS;
   let analysed = 0;
@@ -1024,7 +1062,10 @@ export function insightRoutes(ctx, resolved) {
   const home = dshHome();
   const rollupDir = firstExisting([resolved.rollupDir, path.join(cwd, ".lcm-rollups"), path.join(home, ".lcm-rollups")]);
   const assertionDir = firstExisting([path.join(cwd, ".lcm-assertions"), path.join(home, ".lcm-assertions")]);
-  const vectorDir = firstExisting([path.join(cwd, ".lcm-vectors"), path.join(home, ".lcm-vectors")]);
+  // The engine's own root first: a relative `vectorCacheDir` resolves against the
+  // process cwd, which is the container layer here, so the cwd candidate is a
+  // fallback for an old install rather than the primary answer.
+  const vectorDir = firstExisting([vectorCacheDirOf(resolveVectorConfig(resolved)), path.join(cwd, ".lcm-vectors"), path.join(home, ".lcm-vectors")]);
   const allowLan = resolved.allowLanAccess === true;
   // The vector layer's own resolution, so coverage is measured against the exact
   // model and width the search route uses. Off means the panel reports the layer as
@@ -1035,7 +1076,11 @@ export function insightRoutes(ctx, resolved) {
   // filling its cache. Same trap the idle maintenance pass documents at its own
   // call site; the fix is to read the resolved name.
   const vector = resolved.enabled === true ? resolveVectorConfig(resolved) : null;
-  const digests = vector === null ? null : cachedDigests(vectorCacheDirOf(vector));
+  // The FAMILY directory, not a frozen digest set. The set IS the definition of
+  // "already embedded", so it changes on every search and every backfill that
+  // writes a vector; a snapshot taken here made the panel under-report for the
+  // rest of the process. It is rebuilt per request, gated on the directory mtime.
+  const vectorFamilyDir = vector === null ? null : vectorCacheDirOf(vector);
   // Where the host keeps the titles the sidebar shows. Absent is normal: a profile
   // that has never rendered a session has no projection cache.
   const titleDir = firstExisting([path.join(home, "storages", "session_projcache", "sessions")]);
@@ -1053,6 +1098,9 @@ export function insightRoutes(ctx, resolved) {
         try {
           const rollups = sidecarCounts(rollupDir);
           const assertions = sidecarCounts(assertionDir);
+          // Refreshed per request, but only rebuilt when the directory moved.
+          const digestState = vectorFamilyDir === null ? null : digestsFor(vectorFamilyDir);
+          const digests = digestState?.digests ?? null;
           const since = Date.now() - RECENT_WINDOW_MS;
           // Live sessions by id: their in-memory log is what the report is built
           // from, which skips re-inflating a file the host is still writing.
@@ -1077,16 +1125,28 @@ export function insightRoutes(ctx, resolved) {
             const pressure = held.has(entry.id) ? await livePressure(ctx, entry.id) : null;
             let embedding = null;
             if (vector !== null && digests !== null) {
+              // Keyed by log mtime AND digest generation: a vector written by a
+              // search changes "already embedded" for every session at once, so a
+              // cache keyed by the log alone kept reporting the old coverage.
+              const generation = digestState?.generation ?? 0;
               const hit = coverageCache.get(entry.file);
-              if (hit !== undefined && hit.mtimeMs === entry.mtimeMs) {
+              if (hit !== undefined && hit.mtimeMs === entry.mtimeMs && hit.generation === generation) {
                 embedding = hit.coverage;
                 covered += 1;
               } else if (budget > 0) {
                 budget -= 1;
                 const records = readLog(entry.file) ?? [];
                 embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests);
-                coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding });
+                coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding, generation });
                 covered += 1;
+              } else if (hit !== undefined) {
+                // The budget for this request is spent, but the previous number is
+                // still the best one available. Dropping it made the TOTALS fall
+                // whenever a batch of logs moved at once: measured here, six changed
+                // sessions took candidates from 139 468 to 97 884 and back, purely
+                // because the sum only covered the sessions measured in that pass.
+                // A number one poll old is honest; a total that halves is not.
+                embedding = hit.coverage;
               }
             }
             sessions.push({
@@ -1181,14 +1241,16 @@ export function insightRoutes(ctx, resolved) {
         // The session view is ONE session, so it pays for exact coverage and caches it
         // by mtime; a repeat poll on an unchanged log costs a map lookup.
         let embedding = null;
-        if (vector !== null && digests !== null) {
+        if (vector !== null && vectorFamilyDir !== null) {
+          const digestState = digestsFor(vectorFamilyDir);
+          const generation = digestState.generation;
           const hit = coverageCache.get(entry.file);
-          if (hit !== undefined && hit.mtimeMs === entry.mtimeMs) {
+          if (hit !== undefined && hit.mtimeMs === entry.mtimeMs && hit.generation === generation) {
             embedding = hit.coverage;
           } else {
             const records = readLog(entry.file) ?? [];
-            embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests);
-            coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding });
+            embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digestState.digests);
+            coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding, generation });
           }
         }
         sendJson(res, 200, {

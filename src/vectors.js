@@ -165,8 +165,25 @@ export function vectorSearchBudgetMs(cfg) {
   const resolved = resolveVectorConfig(cfg);
   return Math.max(DEFAULT_VECTOR_SEARCH_BUDGET_MS, resolved.timeoutMs);
 }
-/** Relative cache directory, resolved against the process cwd by the caller. */
-export const DEFAULT_VECTOR_CACHE_DIR = ".lcm-vectors";
+/**
+ * Where the vector cache lives by default.
+ *
+ * Under the dsh home, not the process cwd. Measured failure: `dsh` runs with cwd
+ * `/home/agent`, which is the CONTAINER layer — only `.dsh` and `workspaces` are
+ * mounted volumes. So `.lcm-vectors` was recreated empty on every container
+ * restart, and a full backfill (315 vectors on 2026-11-09) vanished with it. The
+ * cache is derived data and rebuilding it is only wasted spend, never wrong; that
+ * is exactly why it must sit somewhere that survives, next to the logs it indexes.
+ */
+export const DEFAULT_VECTOR_CACHE_DIR = join(dshHomeDir(), ".lcm-vectors");
+
+/**
+ * The dsh home, read the way the rest of the plugin reads it.
+ * @returns an absolute path.
+ */
+function dshHomeDir() {
+  return process.env.DSH_HOME ?? join(homedir(), ".dsh");
+}
 
 /**
  * Texts per POST.

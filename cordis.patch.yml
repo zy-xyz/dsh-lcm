@@ -113,6 +113,11 @@
         # hosted gateway needs one; a local LM Studio does not. The literal key
         # never appears here, because this file is in the repository.
         vectorApiKeyEnv: OMNIROUTE_API_KEY
+        # Explicit, because the DEFAULT is derived from DSH_HOME and a deployment
+        # that moved it would silently start a second, empty cache. `~/.dsh` is a
+        # mounted volume here; the process cwd (/home/agent) is the container
+        # layer, and a cache there is recreated empty on every container restart.
+        vectorCacheDir: /home/agent/.dsh/.lcm-vectors
         # The candidate window is what the model CANNOT read: events off the
         # session surface. The visible tail is already in context verbatim, so
         # embedding it would be pure waste - on the measured 24k-event session
@@ -161,6 +166,7 @@
         vectorModel: mistral-proxy/codestral-embed
         vectorDim: 1536
         vectorApiKeyEnv: OMNIROUTE_API_KEY
+        vectorCacheDir: /home/agent/.dsh/.lcm-vectors
         # The SAME window as the search row above, and that is deliberate:
         # /lcm-embed status prices its candidates from THIS row's config, so a
         # different number here would report a pending count the search never

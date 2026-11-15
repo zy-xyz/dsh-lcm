@@ -79,4 +79,35 @@ test("a held session is analysed from memory, not from its file", async () => {
   assert.match(source, /liveSession\?\.log \?\? null/u, "and so does the session route");
 });
 
+
+test("a spent coverage budget keeps the last number instead of dropping it", async () => {
+  // Measured defect: the app view measures at most COVERAGE_BUDGET_PER_REQUEST
+  // sessions per request and summed only those, so six logs changing at once took
+  // the totals from 139 468 candidates to 97 884 and back. A total that halves for
+  // a poll is not a measurement, it is a scheduling artifact.
+  const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
+  assert.match(source, /\} else if \(hit !== undefined\) \{/u, "the spent-budget branch keeps the previous coverage");
+  assert.match(source, /embedding = hit\.coverage;\n\s*\}\n\s*\}/u, "and assigns it rather than leaving null");
+});
+
+test("the digest set follows the cache directory, not the process start", async () => {
+  // The set IS the definition of "already embedded". A snapshot taken at route
+  // registration made five vectors written after startup invisible for the rest of
+  // the process: the cache count moved 61 -> 66 while the embedded count stayed put.
+  const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
+  assert.match(source, /function digestsFor\(dir\)/u, "the refresh helper exists");
+  assert.match(source, /fs\.statSync\(dir\)\.mtimeMs/u, "it is gated on the directory's mtime");
+  assert.match(source, /digestCache\.mtimeMs === mtimeMs/u, "and rebuilds only when that moved");
+  assert.match(source, /hit\.generation === generation/u, "cached coverage knows which set it was measured against");
+});
+
+test("the default vector cache lives under the dsh home, not the process cwd", async () => {
+  // dsh runs with cwd /home/agent, which is the container layer; only ~/.dsh and
+  // ~/workspaces are volumes. A cwd-relative default meant every container restart
+  // recreated the cache empty, discarding a completed backfill.
+  const { DEFAULT_VECTOR_CACHE_DIR } = await import("../src/vectors.js");
+  assert.equal(path.isAbsolute(DEFAULT_VECTOR_CACHE_DIR), true, "an absolute path, not a cwd-relative name");
+  assert.equal(path.dirname(DEFAULT_VECTOR_CACHE_DIR), home, "directly under DSH_HOME: " + DEFAULT_VECTOR_CACHE_DIR);
+});
+
 test.after(() => { fs.rmSync(home, { recursive: true, force: true }); });
