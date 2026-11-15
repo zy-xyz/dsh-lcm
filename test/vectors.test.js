@@ -878,6 +878,38 @@ test("two models own different cache directories and never read each other's vec
   }
 });
 
+
+test("a request is grouped by TOKENS, because the gateway caps the sum, not the count", async () => {
+  const { groupIntoRequests, MAX_EMBED_TOKENS, MAX_EMBED_BATCH } = await import("../src/vectors.js");
+  const { estimateEntryTokens } = await import("../src/compiler.js");
+
+  // Measured against the live gateway with 4 000-character CJK text: 14 texts
+  // (61 278 tokens) accepted, 15 texts (65 655 tokens) refused with
+  // "Too many tokens overall, split into more batches."
+  const cjk = "上下文压缩引擎会把一段被压缩的事件写成摘要并替换为一条检查点节点".repeat(130).slice(0, 4000);
+  const groups = groupIntoRequests(Array.from({ length: 40 }, () => cjk));
+  assert.ok(groups.length >= 3, "40 long CJK texts cannot fit in one request, got " + groups.length);
+  for (const group of groups) {
+    const tokens = group.reduce((total, text) => total + estimateEntryTokens(text), 0);
+    // The estimator undercounts CJK by 10% (measured), so the bound is 56 000 and
+    // 56 000 * 1.10 = 61 600 stays under the 65 536 the gateway enforces.
+    assert.ok(tokens <= MAX_EMBED_TOKENS, "group of " + group.length + " is " + tokens + " estimated tokens");
+    assert.ok(group.length <= MAX_EMBED_BATCH, "and never more than the count ceiling");
+  }
+  const total = groups.reduce((sum, group) => sum + group.length, 0);
+  assert.equal(total, 40, "nothing is dropped by the grouping");
+
+  // Latin text is cheap, so a short-text batch reaches the COUNT ceiling instead.
+  const latin = groupIntoRequests(Array.from({ length: 600 }, () => "hello world"));
+  assert.equal(latin[0].length, MAX_EMBED_BATCH, "count ceiling binds when tokens do not");
+
+  // One text over the cap is still emitted alone: the bisection isolates it, and
+  // silently skipping it would hide a real refusal.
+  const oversized = groupIntoRequests(["上".repeat(30000)]);
+  assert.equal(oversized.length, 1);
+  assert.equal(oversized[0].length, 1, "an oversized text is not dropped");
+});
+
 test("vectorCacheStats reports what is on disk, and pruneForeignVectorCaches drops a stale model", async () => {
   // No request is made here: these are the cache-management surfaces, and the
   // root is the layer's own directory.
