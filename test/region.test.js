@@ -358,7 +358,7 @@ function spanTokens(session, range, each) {
   return (nodes.indexOf(range.end) - nodes.indexOf(range.start) + 1) * each;
 }
 
-test("overflow recovery is not capped by leafSpanTokens; pressure still is", { skip }, async () => {
+test("overflow recovery bounded by leafSpanTokens like pressure", { skip }, async () => {
   // Measured on a 60 725-token / 81-node session: dsh-compaction-basic selected
   // 59 961 tokens (79 nodes) and landed the request under the window in one pass,
   // while this engine's leaf cap (24 000) held it to 24 288 tokens (32 nodes). With
@@ -396,17 +396,25 @@ test("overflow recovery is not capped by leafSpanTokens; pressure still is", { s
     return engine;
   }
 
-  const agent = { session, options: {} };
+    const agent = { session, options: {} };
 
-  // Overflow: the whole compactable prefix, exactly the selector's uncapped result.
+  // Overflow: same bounded leaf as pressure, repeated. A single unbounded
+  // leaf is what silently lost context in a real session: 798 nodes /
+  // 562 436 priced tokens shadowed by a call that reported 94 089 input
+  // tokens, replaced by a 6 746-character checkpoint.
+  const ranges = [];
   const overflow = captureEngine();
-  await assert.rejects(overflow.compactIfNeeded(agent, "context-overflow", undefined), (error) => {
-    assert.deepEqual(error.range, unlimited, "overflow must select without the pressure leaf cap");
-    assert.ok(spanTokens(session, error.range, EACH) > config.leafSpanTokens, "so it can remove more than one leaf's worth");
-    return true;
-  });
+  overflow.compactRegion = async (start, end) => {
+    ranges.push({ start, end });
+    return { start, end };
+  };
+  const result = await overflow.compactIfNeeded(agent, "context-overflow", undefined);
+  assert.ok(result !== null, "one bounded leaf is performed");
+  assert.equal(ranges.length, 1, "a pass that cannot show progress stops the sweep");
+  assert.deepEqual(ranges[0], capped, "overflow selects the same bounded leaf pressure does");
+  assert.ok(spanTokens(session, ranges[0], EACH) <= config.leafSpanTokens + EACH, "one leaf, never the whole prefix");
 
-  // Pressure: unchanged. Same window, same retain policy, and the leaf cap binds.
+// Pressure: unchanged. Same window, same retain policy, and the leaf cap binds.
   const pressure = captureEngine({
     llm: { async resolveModelInfo() { return { context: { contextWindow: 200_000 }, defaultMaxTokens: 4096 }; } }
   });

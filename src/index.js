@@ -1149,38 +1149,43 @@ export class LcmCompactionEngine extends CompactionEngine {
     switch (trigger) {
       // The durable envelope IS the proposed envelope for a step boundary.
       case "pressure": return this.compactPressure(agent, agent.session.requestHeader(), signal, false);
-      case "context-overflow": {
-        const meter = this.ctx.tokenMeter;
-        const prune = this.ctx.get("toolResultPruner");
-        let measurement = meter.measure(agent.session);
-        if (prune !== undefined) {
-          prune.pruneSession(agent.session);
-          measurement = meter.measure(agent.session);
-        }
-        // Overflow recovery is still an AUTOMATIC reduction, so the same
-        // "not worth a summary call" floor applies: a span the summary budget
-        // could never undercut would burn one model call and then fail the shrink
-        // guarantee, which is strictly worse than preserving the original error.
-        // No leaf cap on this trigger: `0` is the selector's "no ceiling".
-        //
-        // The leaf cap exists so a PRESSURE compaction produces bounded leaves —
-        // many small summaries that condense into a DAG instead of one
-        // ever-deeper checkpoint. Overflow recovery is the opposite case: the
-        // provider has already refused the request, so the pass has to remove as
-        // much as the measurement needs, in one attempt. Measured on a 60 725-token
-        // / 81-node session, `dsh-compaction-basic` selected 59 961 tokens (79
-        // nodes) and landed the request back under the window in one pass, while
-        // the leaf cap (24 000) held this engine to 24 288 tokens (32 nodes) — with
-        // the default `maxOverflowRetries: 1` that can return still over the
-        // window where the reference backend would have fit. The span floor and the
-        // fanin stay as they are: the floor is what refuses a span no summary could
-        // undercut, and the fanin is what keeps an overflow pass from
-        // re-summarising its own checkpoint.
-        const range = selectCompactableRange(agent.session, measurement, 0, this.config.summaryFloorTokens, 0, this.config.condensationFanin);
-        if (range === null) return null;
-        return this.compactRegion(range.start, range.end, agent, signal);
+          case "context-overflow": {
+      const meter = this.ctx.tokenMeter;
+      const prune = this.ctx.get("toolResultPruner");
+      let measurement = meter.measure(agent.session);
+      if (prune !== undefined) {
+        prune.pruneSession(agent.session);
+        measurement = meter.measure(agent.session);
       }
-      /* v8 ignore next -- closed-union exhaustiveness guard */
+      /*
+       * Overflow recovery must bound every leaf by the same span cap the
+       * pressure path uses. A span larger than the summarizer can read gets
+       * clipped upstream without an error, so the checkpoint is written from a
+       * fraction of the span it then replaces and the rest is unrecoverable.
+       * Measured: one leaf shadowed 798 nodes / 562 436 priced tokens while the
+       * call reported 94 089 input tokens, and a 6 746-character checkpoint
+       * replaced that entire span. Remove the surface in bounded leaves until
+       * it is under the window, or until a pass stops making progress.
+       */
+      let last = null;
+      for (let pass = 0; pass < this.config.fullSweepMaxPasses; pass += 1) {
+        const range = selectCompactableRange(
+          agent.session,
+          measurement,
+          0,
+          this.config.summaryFloorTokens,
+          this.config.leafSpanTokens,
+          this.config.condensationFanin,
+        );
+        if (range === null) break;
+        last = await this.compactRegion(range.start, range.end, agent, signal);
+        const next = meter.measure(agent.session);
+        if (next.totalTokens >= measurement.totalTokens) break;
+        measurement = next;
+      }
+      return last;
+    }
+/* v8 ignore next -- closed-union exhaustiveness guard */
       default: assertNever(trigger, "compaction trigger");
     }
   }
