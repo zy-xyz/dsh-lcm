@@ -96,6 +96,9 @@ let successesSinceFailure = 0;
 let consecutiveFailures = 0;
 let stopped = "";
 const t0 = Date.now();
+let lastReportAt = t0;
+// The first report waits a minute; without an interval the line only printed when
+// the cumulative count happened to land inside one batch width.
 
 const worker = async () => {
   for (;;) {
@@ -124,11 +127,14 @@ const worker = async () => {
       if (vector === undefined) { failed += 1; continue; }
       try { fs.writeFileSync(path.join(cacheDir, keyOf(batch[i]) + ".f32"), Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength)); embedded += 1; } catch { failed += 1; }
     }
-    const done = embedded + failed;
-    if (done % 2000 < batch.length) {
-      const mins = ((Date.now() - t0) / 60000).toFixed(1);
-      const rate = (embedded / (mins / 60)).toFixed(0);
-      log("progress: embedded " + embedded + " failed " + failed + " of " + pending.length + " | " + mins + "min | " + rate + "/h");
+    const now = Date.now();
+    if (now - lastReportAt >= 60_000) {
+      lastReportAt = now;
+      const mins = (now - t0) / 60000;
+      const rate = mins > 0 ? (embedded / (mins / 60)).toFixed(0) : "0";
+      const left = pending.length - embedded - failed;
+      const eta = embedded > 0 ? ((left / (embedded / mins)) / 60).toFixed(1) : "?";
+      log("progress: " + embedded + "/" + pending.length + " embedded, " + failed + " failed | " + mins.toFixed(1) + "min | " + rate + "/h | eta " + eta + "h");
     }
   }
 };
