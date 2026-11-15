@@ -26,7 +26,7 @@ import { sessionEvents } from "./events.js";
 import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, collectVectorItems, searchSession } from "./search.js";
-import { batchSizeFor, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats, vectorSearchBudgetMs } from "./vectors.js";
+import { VECTOR_TEXT_LIMIT, embedTextsTolerant, groupIntoRequests, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats, vectorSearchBudgetMs } from "./vectors.js";
 import { hotKeysFor, overlayFor, registerLiveConsumer } from "./live.js";
 
 const name = "command-lcm-search";
@@ -594,6 +594,9 @@ async function embedBackfill(session, cfg, options = {}) {
   let embedded = 0;
   let failed = 0;
   let consecutiveFailures = 0;
+  // Batches that landed since the last failure. The breaker reads this to tell a
+  // dead endpoint from a live one that dropped a batch.
+  let successesSinceFailure = 0;
   let stopped = "";
   if (apply && pending.length > 0) {
     // One batch at a time, writing as each returns.
@@ -604,14 +607,12 @@ async function embedBackfill(session, cfg, options = {}) {
     // remote endpoint: one 65 s stall plus an HTTP 500 lost the entire pass. Per
     // batch, the work already paid for survives, and a re-run resumes from the
     // cache instead of starting over.
-    // ── the batch is derived from the ceiling, not guessed ────────────────
-    // Measured on OmniRoute's codestral-embed: ~4.7 s per text, so MAX_EMBED_BATCH
-    // of 32 needs ~150 s. `vectorTimeoutMs` is now a PER-TEXT allowance, so a
-    // 32-text batch is allowed 32 × the allowance — but the request also has a hard
-    // cap, and a batch sized past that cap would time out forever. `batchSizeFor`
-    // derives the size from the same rule the ceiling uses, so the two can never
-    // disagree.
-    const batchSize = batchSizeFor(cfg);
+    // ── the batch is grouped by TOKENS, not guessed ────────────────────────
+    // The gateway refuses a request whose total exceeds 65 536 tokens (measured
+    // against this endpoint), and it also refuses more than 256 inputs. Both
+    // ceilings are applied by `groupIntoRequests`, because one number cannot
+    // honour them: a text costs 4 377 tokens as CJK and ~900 as code at the same
+    // 4 000-character length.
     // ── concurrent batches, bounded ───────────────────────────────────────
     // Measured on this endpoint: four 1-text requests took 107.6 s sequentially
     // and 8.3 s concurrently — 13x, because the bottleneck is per-request
@@ -621,10 +622,9 @@ async function embedBackfill(session, cfg, options = {}) {
     // The bound matters: this row shares a gateway with the search route, and a
     // pass that fires every batch at once would starve an interactive query.
     // `cfg.concurrency` is the measured 4.
-    const batches = [];
-    for (let start = 0; start < pending.length; start += batchSize) {
-      batches.push(pending.slice(start, start + batchSize));
-    }
+    // Grouped by TOKENS, not by count: the gateway refuses a request whose total
+    // exceeds 65 536 tokens (measured), and 256 long CJK texts is 1.1 M.
+    const batches = groupIntoRequests(pending);
     let cursor = 0;
     // One worker drains the batch list; `concurrency` of them run at a time.
     // Writes go to the content-addressed cache one file at a time, so parallel
@@ -639,16 +639,26 @@ async function embedBackfill(session, cfg, options = {}) {
         let result;
         try {
           result = await embedTextsTolerant(cfg, batch);
+          successesSinceFailure += 1;
           consecutiveFailures = 0;
         } catch (error) {
           // The endpoint refused the whole batch (auth, routing, a dead server).
-          // Those texts stay uncached and are counted, not silently dropped. The
-          // pass stops at the breaker rather than walking the window at this
-          // row's long ceiling: nothing here is lost, because every earlier batch
-          // is already on disk and a re-run resumes from the cache.
+          // Those texts stay uncached and are counted, not silently dropped.
           failed += batch.length;
           consecutiveFailures += 1;
-          if (consecutiveFailures >= BACKFILL_FAILURE_LIMIT) stopped = "failures";
+          // The breaker is only meaningful for a DEAD endpoint, and that is what
+          // "consecutive" has to mean under concurrency. This counter is shared by
+          // every worker, so N simultaneous transient failures looked identical to
+          // N sequential ones and tripped the pass: measured, a run stopped nine
+          // sessions in a row with 2 112 embedded and 13 841 counted as failed,
+          // while a direct 30-text request against the same session succeeded 30/30.
+          //
+          // So a failure only counts toward the breaker when NO batch has succeeded
+          // since the previous failure. A working endpoint that drops one batch
+          // keeps going; a dead one still stops after BACKFILL_FAILURE_LIMIT.
+          const tripped = successesSinceFailure === 0 && consecutiveFailures >= BACKFILL_FAILURE_LIMIT;
+          successesSinceFailure = 0;
+          if (tripped) stopped = "failures";
           continue;
         }
         for (let index2 = 0; index2 < batch.length; index2 += 1) {

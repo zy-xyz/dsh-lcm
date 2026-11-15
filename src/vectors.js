@@ -25,6 +25,8 @@ import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "n
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
+import { estimateEntryTokens } from "./compiler.js";
+
 // ── defaults ───────────────────────────────────────────────────────────────
 
 /** The layer is opt-in. Off means zero extra work and zero network calls. */
@@ -96,33 +98,31 @@ export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
 /**
  * Requests one backfill may have in flight at once.
  *
- * Eight, from the deployment's own shape rather than from a benchmark. The gateway
- * fronts more than ten upstream accounts and each account accepts about one request
- * per second, so ten requests can be starting at any moment without queuing. Eight
- * uses most of that without sitting on the limit.
+ * Four, because concurrency is a property of the DEPLOYMENT, not of the algorithm:
+ * it is how many upstream accounts the gateway can serve at the same time, and a
+ * default cannot know that. Four is the value that is safe everywhere — a single
+ * account still makes progress, and a large pool is not left idle once the
+ * operator sets the real number.
+ *
+ * This constant was 19, which is THIS deployment's credential-pool size. Putting a
+ * machine's topology in a default means every other install inherits a fan-out it
+ * cannot justify: on a one-account gateway, 19 concurrent requests queue, time out,
+ * and look like a broken endpoint. The operator who knows the pool size sets
+ * `vectorConcurrency` to it; the composition for this deployment already does.
+ *
+ * Concurrency is NOT a fix for timeouts. This endpoint times out on single texts
+ * too (measured: 2.6 s, 8.9 s, 12 s, and 30 s timeouts among five one-text calls),
+ * so a low concurrency still meets them — the per-request ceiling and the retry
+ * budget absorb those. Concurrency buys throughput the accounts already allow.
  *
  * Two earlier values were measured and both were wrong, for the same reason: the
  * probe did not represent the workload.
  *
- *   1  — set after a probe using the smallest possible batch, where a 13x "win"
- *        appeared and did not survive the real shape. It also made a single slow
- *        request look like a stalled pass when it was just one batch retrying.
- *   4  — set from that same small-batch probe. Not harmful, but it left more than
- *        half the account capacity unused.
- *
- * Concurrency is NOT a fix for timeouts. This endpoint times out on single texts
- * too (measured: 2.6 s, 8.9 s, 12 s, and 30 s timeouts among five one-text calls),
- * so a low concurrency still meets them — the retry budget is what absorbs those.
- * Concurrency is for the throughput the accounts already allow.
- *
- *   19 — the credential pool size, not a latency measurement. OmniRoute serves one
- *        account per request, so 19 in flight is the ceiling that adds throughput
- *        without forcing a request to queue behind another. Timeouts are the
- *        upstream model's own latency and occur at every concurrency (measured:
- *        single texts at 2.6 s through 30 s), which is why the per-request ceiling
- *        and the retry budget absorb them instead of a lower fan-out.
+ *   1  — from a probe using the smallest possible batch, where a 13x "win" appeared
+ *        and did not survive the real shape.
+ *   19 — correct for one deployment and wrong as a default, see above.
  */
-export const DEFAULT_VECTOR_CONCURRENCY = 19;
+export const DEFAULT_VECTOR_CONCURRENCY = 4;
 
 /**
  * Wall-clock ceiling one SEARCH may spend embedding, across every request.
@@ -199,6 +199,82 @@ function dshHomeDir() {
  * the most permissive and the most efficient choice.
  */
 export const MAX_EMBED_BATCH = 256;
+
+/**
+ * The endpoint's cap on the SUM of a request's tokens, measured.
+ *
+ * The 400 that made a full backfill impossible says exactly what it is:
+ * `"Too many tokens overall, split into more batches."` It is not a count limit,
+ * so {@link MAX_EMBED_BATCH} alone cannot honour it — 256 texts at the 4 000-character
+ * slice is ~1.1 M tokens, seventeen times over.
+ *
+ * Bisected against the live gateway with 4 000-character CJK text, which is 43% of
+ * this corpus and the densest input it takes:
+ *
+ *   12 texts   52 524 tokens  accepted
+ *   13 texts   56 901 tokens  accepted
+ *   14 texts   61 278 tokens  accepted
+ *   15 texts   65 655 tokens  HTTP 400 "Too many tokens overall"
+ *   16 texts   70 016 tokens  HTTP 400
+ *
+ * So the cap is 65 536, the round number the gateway is enforcing.
+ *
+ * The working bound is 56 000, not 65 000, because the estimator that groups the
+ * batches is not the tokenizer the gateway bills with. Calibrated against the live
+ * endpoint, one text at a time:
+ *
+ *   CJK   4 000 chars   estimate 4 000   actual 4 377   (under by 9%)
+ *   CJK   2 000 chars   estimate 2 000   actual 2 191   (under by 10%)
+ *   latin 4 000 chars   estimate 1 200   actual   803   (over by 33%)
+ *   code  4 000 chars   estimate 1 200   actual   897   (over by 25%)
+ *
+ * CJK is the case that matters here: it is 43% of this corpus and it is the side
+ * the estimator gets wrong in the dangerous direction. 56 000 × 1.10 = 61 600,
+ * still under the cap with room for a text whose density runs higher than the
+ * sample. Latin batches never approach the bound at all, so the margin costs them
+ * nothing.
+ */
+export const MAX_EMBED_TOKENS = 56_000;
+
+/**
+ * Split texts into requests the gateway will accept.
+ *
+ * Two ceilings apply and they bind in different regimes: the endpoint refuses more
+ * than 256 inputs, and it refuses more than ~65 536 total tokens. A single count
+ * cannot satisfy both, because the token cost per text varies by an order of
+ * magnitude (measured 4 377 tokens for a 4 000-character CJK slice against ~1 000
+ * for the same length of Latin). So the grouping is by TOKENS, with the count as a
+ * second stop.
+ *
+ * The estimate is the engine's own `estimateEntryTokens`, the same function that
+ * prices the candidate window — a second estimator would disagree with the window
+ * that decided these texts were worth embedding.
+ *
+ * A single text over the cap is still emitted alone: the endpoint will refuse it,
+ * and the bisection in `embedTextsTolerant` is what isolates that one text instead
+ * of dropping a whole batch. Silently skipping it would hide a real refusal.
+ * @param texts - input strings, in order.
+ * @returns arrays whose concatenation is `texts`, each within both ceilings.
+ */
+export function groupIntoRequests(texts) {
+  const groups = [];
+  let current = [];
+  let tokens = 0;
+  for (const text of texts) {
+    const cost = estimateEntryTokens(text);
+    const wouldExceedTokens = tokens + cost > MAX_EMBED_TOKENS && current.length > 0;
+    const wouldExceedCount = current.length >= MAX_EMBED_BATCH;
+    if (wouldExceedTokens || wouldExceedCount) {
+      groups.push(current);
+      current = [];
+      tokens = 0;
+    }
+    current.push(text);
+    tokens += cost;
+  }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
 
 /** Reciprocal-rank-fusion constant from the standard RRF formulation. */
 export const RRF_K = 60;
@@ -366,13 +442,14 @@ export async function embedTextsTolerant(cfg, texts, signal, options = {}) {
   const deadline = options?.deadline;
   const vectors = new Array(list.length);
   const failures = [];
-  for (let start = 0; start < list.length; start += MAX_EMBED_BATCH) {
-    const batch = list.slice(start, start + MAX_EMBED_BATCH);
+  let start = 0;
+  for (const batch of groupIntoRequests(list)) {
     const slots = await embedBatchTolerant(resolved, batch, signal, deadline);
     slots.forEach((slot, offset) => {
       if (slot.vector !== undefined) vectors[start + offset] = slot.vector;
       else failures.push({ index: start + offset, text: batch[offset], reason: slot.reason });
     });
+    start += batch.length;
   }
   return { vectors, failures };
 }
@@ -1125,12 +1202,15 @@ export async function rankByVector(cfg, items, queryText, signal, limit, options
   // the window worth having. The window arrives oldest-first (log order).
   const pending = missingTextsOf(vectors, query, candidates);
   let budgetExhausted = false;
-  for (let start = 0; start < pending.length; start += MAX_EMBED_BATCH) {
+  // Grouped by tokens for the same reason as the backfill: the gateway refuses a
+  // request whose total exceeds 65 536 tokens, and a window of long CJK events
+  // reaches that in three texts.
+  let start = 0;
+  for (const batch of groupIntoRequests(pending)) {
     if (Date.now() >= deadline) {
       budgetExhausted = true;
       break;
     }
-    const batch = pending.slice(start, start + MAX_EMBED_BATCH);
     let embedded;
     try {
       embedded = await embedTextsTolerant(resolved, batch, signal, { deadline });
@@ -1143,7 +1223,7 @@ export async function rankByVector(cfg, items, queryText, signal, limit, options
       // with the groups that did return.
       if (!vectors.has(query)) throw error;
       budgetExhausted = true;
-      failures.push({ index: start, text: batch[0], reason: reasonOf(error) });
+      failures.push({ index: 0, text: batch[0], reason: reasonOf(error) });
       break;
     }
     embedded.vectors.forEach((vector, index) => {

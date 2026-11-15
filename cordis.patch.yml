@@ -174,10 +174,11 @@
         # currently agree; keep them that way.
         vectorCandidateTokens: 30000
         vectorCandidateLimit: 500
-        # PER REQUEST, and the batch is the endpoint's hard limit (256, measured:
-        # 257 returns HTTP 400). 240 s is the wall clock for that batch; the
-        # endpoint measured 14 s for 256 texts when healthy and degrades to
-        # minutes under load, so the ceiling is generous and a refusal bisects.
+        # PER REQUEST. The count limit is 256 (measured: 257 returns HTTP 400), and
+        # the TOTAL token limit is 65 536 (measured: 14 long CJK texts = 61 278
+        # accepted, 15 = 65 655 refused with "Too many tokens overall"). Both are
+        # applied by `groupIntoRequests`; this ceiling is only the wall clock, and
+        # a refusal bisects.
         vectorTimeoutMs: 240000
         # Requests in flight, sized to the credential pool: 19 accounts, so 19 is
         # the most the gateway can serve without one request queueing behind
