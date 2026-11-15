@@ -1062,10 +1062,15 @@ export function insightRoutes(ctx, resolved) {
   const home = dshHome();
   const rollupDir = firstExisting([resolved.rollupDir, path.join(cwd, ".lcm-rollups"), path.join(home, ".lcm-rollups")]);
   const assertionDir = firstExisting([path.join(cwd, ".lcm-assertions"), path.join(home, ".lcm-assertions")]);
-  // The engine's own root first: a relative `vectorCacheDir` resolves against the
-  // process cwd, which is the container layer here, so the cwd candidate is a
-  // fallback for an old install rather than the primary answer.
-  const vectorDir = firstExisting([vectorCacheDirOf(resolveVectorConfig(resolved)), path.join(cwd, ".lcm-vectors"), path.join(home, ".lcm-vectors")]);
+  // The ROOT, not the family directory: `vectorStats` iterates the model
+  // subdirectories under it, and handing it the family directory returned an empty
+  // list — the panel showed no cache at all. The root comes from the engine's own
+  // resolution so a pinned `vectorCacheDir` is what gets read.
+  const vectorDir = firstExisting([
+    path.dirname(vectorCacheDirOf(resolveVectorConfig(resolved))),
+    path.join(cwd, ".lcm-vectors"),
+    path.join(home, ".lcm-vectors")
+  ]);
   const allowLan = resolved.allowLanAccess === true;
   // The vector layer's own resolution, so coverage is measured against the exact
   // model and width the search route uses. Off means the panel reports the layer as
@@ -1135,7 +1140,12 @@ export function insightRoutes(ctx, resolved) {
                 covered += 1;
               } else if (budget > 0) {
                 budget -= 1;
-                const records = readLog(entry.file) ?? [];
+                // A session the host still holds is measured from its in-memory log.
+                // The live session's file is 23.7 MB and inflating it costs 1.96 s,
+                // against 1.4 s to fold the events it already has — and the fold is
+                // the same work, so the inflate is pure loss on every poll.
+                const liveLog = liveSessions.get(entry.id)?.log ?? null;
+                const records = liveLog ?? readLog(entry.file) ?? [];
                 embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests);
                 coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding, generation });
                 covered += 1;

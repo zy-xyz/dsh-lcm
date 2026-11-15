@@ -110,4 +110,24 @@ test("the default vector cache lives under the dsh home, not the process cwd", a
   assert.equal(path.dirname(DEFAULT_VECTOR_CACHE_DIR), home, "directly under DSH_HOME: " + DEFAULT_VECTOR_CACHE_DIR);
 });
 
+
+test("the cache panel reads the ROOT, because vectorStats iterates model subdirectories", async () => {
+  // Measured defect, introduced while fixing the cache path: handing vectorStats
+  // the family directory (…/<tag>-<dim>) instead of its parent returned [] and the
+  // panel showed no cache at all — 109 files on disk, "0.00 MB" in the page.
+  const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
+  assert.match(source, /path\.dirname\(vectorCacheDirOf\(resolveVectorConfig\(resolved\)\)\)/u, "the root is the family directory's parent");
+  assert.doesNotMatch(source, /firstExisting\(\[vectorCacheDirOf\(resolveVectorConfig\(resolved\)\)/u, "never the family directory itself");
+});
+
+
+test("coverage for a held session uses its in-memory log", async () => {
+  // Measured: the live session's file is 23.7 MB and inflating it costs 1.96 s,
+  // while folding the events the host already holds costs 1.4 s. The inflate was
+  // pure loss on every poll that had to re-measure that session.
+  const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
+  assert.match(source, /const liveLog = liveSessions\.get\(entry\.id\)\?\.log \?\? null;/u, "the held log is preferred");
+  assert.match(source, /const records = liveLog \?\? readLog\(entry\.file\) \?\? \[\]/u, "and the file is only the fallback");
+});
+
 test.after(() => { fs.rmSync(home, { recursive: true, force: true }); });
