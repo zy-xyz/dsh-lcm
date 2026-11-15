@@ -11,6 +11,9 @@ bench/.embed-cache*/
 .lcm-assertions/
 .lcm-assertions*/
 
+# recovered checkpoint dumps: a debugging byproduct of the append-only log, not source
+recovered/
+
 # throwaway probes
 probe-*.mjs
 *.probe.mjs
