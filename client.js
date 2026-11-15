@@ -79,7 +79,8 @@ window.__ModuleLoader__.load({
         embedCoverage: 'Coverage',
         unreadable: 'unreadable',
         config: 'Config',
-        configNote: 'Edits apply to the running engine at its next decision; no restart. Saved to ~/.dsh/lcm-live.json and reused on boot.',
+        configUnset: 'not set',
+        configNote: 'Applied at the next decision, no restart: the new value is read when it is used. Edits persist to ~/.dsh/lcm-live.json and are reused on boot. Every field explains what the value does; the ones marked "note" have a side effect when changed at runtime, and it is written under the field. Field descriptions are in Chinese.',
         configSave: 'Apply',
         configSaving: 'Applying…',
         configSaved: 'Applied',
@@ -87,7 +88,9 @@ window.__ModuleLoader__.load({
         configEmpty: 'Nothing to show.',
         configGroupCompaction: 'Compaction',
         configGroupVector: 'Embedding',
-        configRisk: 'note',
+        configIntroCompaction: 'How the engine decides to compact, how much it keeps, and what bounds one pass. These read at decision time, so a new value is in force on the next step. Descriptions are in Chinese.',
+        configIntroVector: 'The optional semantic layer behind lcm_search. Off by default; with it off every search is lexical. Changing the model or the endpoint invalidates what is already embedded.',
+        configRisk: 'Note',
         estimated: 'Estimated from checkpoint bodies; spans are engine-recorded.',
         noPressure: 'No session is loaded in this process, so live pressure is unavailable.',
         noSession: 'No session is open. Open one and this window follows it.',
@@ -163,15 +166,18 @@ window.__ModuleLoader__.load({
         colSession: '会话',
         colTokens: 'token',
         config: '参数',
-        configNote: '改完立即生效，不用重启；会写入 ~/.dsh/lcm-live.json，重启后沿用。',
+        configUnset: '未设置',
+        configNote: '改完立即生效，不用重启：新值在下一次决策时被读取。改动写入 ~/.dsh/lcm-live.json，重启后沿用。下方每一项都标了默认值与影响，带「注意」的那几项在运行中修改会有副作用，后果写在字段下面。',
         configSave: '应用',
         configSaving: '应用中…',
         configSaved: '已生效',
         configReset: '清除覆盖',
         configEmpty: '没有可显示的项。',
         configGroupCompaction: '压缩',
-        configGroupVector: '向量',
-        configRisk: '说明'
+        configGroupVector: '语义召回',
+        configIntroCompaction: '这一组决定引擎什么时候压缩、保留多少原文、一次压缩最多花多久。这些值在每次决策时重新读取，改完下一步就按新值走。',
+        configIntroVector: '这一组是 lcm_search 背后的语义层，默认关闭；关着时搜索完全走词法匹配。换模型或换端点会让已经算好的向量全部作废。',
+        configRisk: '注意'
       }
     };
 
@@ -284,8 +290,8 @@ window.__ModuleLoader__.load({
       }
       .lcmi-tab[aria-selected='true'] { color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-brand-primary); }
       /* ── config form ──────────────────────────────────────────────────── */
-      .lcmi-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 14px; }
-      .lcmi-field { display: flex; flex-direction: column; gap: 4px; }
+      .lcmi-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px 20px; align-items: start; }
+      .lcmi-field { display: flex; flex-direction: column; gap: 3px; }
       .lcmi-field > label { font-size: 11px; color: var(--dsw-alias-label-secondary); display: flex; align-items: center; gap: 6px; }
       .lcmi-field > label code { font-size: 11px; }
       .lcmi-field input[type='text'], .lcmi-field input[type='number'], .lcmi-field textarea {
@@ -296,9 +302,17 @@ window.__ModuleLoader__.load({
       }
       .lcmi-field input:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
       .lcmi-field[data-dirty='true'] input { border-color: var(--dsw-alias-brand-primary); }
+      .lcmi-field .lcmi-field-name { font-size: 12px; color: var(--dsw-alias-label-primary); font-weight: 500; }
+      .lcmi-field .lcmi-field-key { font-size: 10px; color: var(--dsw-alias-label-secondary); opacity: .75; }
+      .lcmi-field .lcmi-field-unset { font-size: 10px; color: var(--dsw-alias-label-secondary); }
+      .lcmi-field .lcmi-desc {
+        font-size: 11px; line-height: 1.5; color: var(--dsw-alias-label-secondary);
+        margin: 2px 0 4px;
+      }
       .lcmi-field .lcmi-risk {
-        font-size: 11px; line-height: 1.4; color: var(--dsw-alias-label-secondary);
-        border-left: 2px solid var(--lcmi-track); padding-left: 7px;
+        font-size: 11px; line-height: 1.45; color: var(--dsw-alias-label-primary);
+        border-left: 2px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-brand-primary));
+        padding-left: 7px; margin-top: 4px;
       }
       .lcmi-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
       .lcmi-btn {
@@ -1145,8 +1159,8 @@ window.__ModuleLoader__.load({
       };
 
       const groups = [
-        { id: 'compaction', label: t('configGroupCompaction') },
-        { id: 'vector', label: t('configGroupVector') }
+        { id: 'compaction', label: t('configGroupCompaction'), intro: t('configIntroCompaction') },
+        { id: 'vector', label: t('configGroupVector'), intro: t('configIntroVector') }
       ];
 
       return h(React.Fragment, null,
@@ -1154,16 +1168,24 @@ window.__ModuleLoader__.load({
           groups.map((group) => {
             const keys = (data.keys ?? []).filter((entry) => entry.surface === group.id);
             if (keys.length === 0) return null;
-            return h('div', { key: group.id, style: { marginBottom: '14px' } },
-              h('div', { className: 'lcmi-sub', style: { marginBottom: '8px' } }, group.label),
+            return h('div', { key: group.id, style: { marginBottom: '22px' } },
+              h('div', { className: 'lcmi-sub', style: { marginBottom: '4px' } }, group.label),
+              // A group intro says what this block of settings is FOR, before a
+              // reader starts scanning 39 field names.
+              h('div', { className: 'lcmi-desc', style: { marginBottom: '10px' } }, group.intro),
               h('div', { className: 'lcmi-fields' }, keys.map((entry) => {
                 const current = draft[entry.key] !== undefined ? draft[entry.key] : values[entry.key];
                 const isDirty = draft[entry.key] !== undefined;
                 return h('div', { key: entry.key, className: 'lcmi-field', 'data-dirty': isDirty ? 'true' : 'false' },
                   h('label', { htmlFor: 'lcmi-' + entry.key },
-                    h('code', null, entry.key),
-                    current === undefined ? h('span', null, '(unset)') : null
+                    h('span', { className: 'lcmi-field-name' }, entry.label ?? entry.key),
+                    // The raw config key stays visible: it is what appears in
+                    // cordis.patch.yml and in the live overlay, so a reader who
+                    // wants to set it outside the panel needs the exact spelling.
+                    h('code', { className: 'lcmi-field-key' }, entry.key),
+                    current === undefined ? h('span', { className: 'lcmi-field-unset' }, t('configUnset')) : null
                   ),
+                  entry.desc === null || entry.desc === undefined ? null : h('div', { className: 'lcmi-desc' }, entry.desc),
                   entry.type === 'boolean'
                     ? h('select', {
                         id: 'lcmi-' + entry.key,
@@ -1192,7 +1214,7 @@ window.__ModuleLoader__.load({
                         value: current === undefined ? '' : String(current),
                         onChange: (event) => set(entry.key, event.target.value, entry.type)
                       }),
-                  entry.risk === null || entry.risk === undefined ? null : h('div', { className: 'lcmi-risk' }, h('strong', null, t('configRisk') + ': '), entry.risk)
+                  entry.risk === null || entry.risk === undefined ? null : h('div', { className: 'lcmi-risk' }, h('strong', null, t('configRisk') + '：'), entry.risk)
                 );
               }))
             );

@@ -255,4 +255,60 @@ test("a JSON-typed key round-trips through the engine's resolver", async () => {
   off();
 });
 
+
+test("every field carries a Chinese name and an explanation", async () => {
+  // The panel is read by a Chinese operator: a bare camelCase key is not a label,
+  // and a label without a sentence about what the value does leaves the reader
+  // guessing at 39 compaction knobs.
+  const keys = live.describeKeys();
+  assert.equal(keys.length, 56, "the whole surface is exposed");
+  for (const entry of keys) {
+    assert.equal(typeof entry.label, "string", entry.key + " has a label");
+    assert.notEqual(entry.label, entry.key, entry.key + " must have a human name, not the raw key");
+    assert.match(entry.label, /[\u4e00-\u9fff]/u, entry.key + " label must be Chinese");
+    assert.equal(typeof entry.desc, "string", entry.key + " has a description");
+    assert.ok(entry.desc.length >= 30, entry.key + " description must actually explain (" + entry.desc.length + " chars)");
+    assert.match(entry.desc, /[\u4e00-\u9fff]/u, entry.key + " description must be Chinese");
+    assert.equal(entry.desc.includes("\n"), false, entry.key + " description must be one paragraph");
+  }
+  // A warning is only for keys whose change has a side effect; the rest are pure
+  // decisions. Both groups must exist, or the field is either over- or under-warned.
+  const warned = keys.filter((entry) => entry.risk !== null);
+  assert.ok(warned.length > 10, "keys with a runtime side effect are flagged");
+  assert.ok(warned.length < keys.length, "not every key needs a warning");
+  for (const entry of warned) assert.match(entry.risk, /[\u4e00-\u9fff]/u, entry.key + " warning must be Chinese");
+});
+
+
+test("no field's explanation describes a different field", async () => {
+  // Measured defect: a regex sweep over the entry table pasted the sweep-reserve
+  // sentence into retainTokens and the search-hits sentence into legacyNames. Both
+  // passed the "has a description" check and both would have shipped a lie next to
+  // a control. Each key names its own subject, so the copy is checked against it.
+  const keys = live.describeKeys();
+  const subject = {
+    retainTokens: /token|原文/,
+    legacyNames: /旧名字|recall|search/,
+    fullSweepReserveSeconds: /预留|余量/,
+    maxSearchHits: /命中/,
+    maxRecallTokens: /expand|恢复/,
+    vectorConcurrency: /并发/,
+    vectorDim: /维度/,
+    vectorModel: /模型/,
+    vectorBaseUrl: /端点|地址/,
+    vectorCacheDir: /缓存/,
+    vectorApiKeyEnv: /环境变量|变量名/,
+    condensationFanin: /合并|扇入/,
+    thresholdRatio: /触发|阈值|比例/,
+    summaryFloorTokens: /下限|不得低于/,
+    checkpointCap: /上限|不得高于/,
+    stallCooldownMs: /冷却|等多久/
+  };
+  for (const [key, pattern] of Object.entries(subject)) {
+    const entry = keys.find((candidate) => candidate.key === key);
+    assert.notEqual(entry, undefined, key + " exists");
+    assert.match(entry.desc, pattern, key + " must describe itself, got: " + entry.desc.slice(0, 50));
+  }
+});
+
 test.after(() => { fs.rmSync(home, { recursive: true, force: true }); });

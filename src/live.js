@@ -30,200 +30,468 @@ function overlayPath() {
 }
 
 /**
- * Every key the panel may change.
+ * 面板可以修改的每一项配置。
  *
- * `surface` says which row owns the key: the engine row reads `compaction`, the
- * tool and command rows read `vector`. `risk` is shown beside the field in the
- * panel — it does not block the edit, it says what changing it at runtime means.
+ * `surface` 说明这一项归哪一行所有：引擎行读 `compaction`，工具行与命令行读
+ * `vector`。`label` 是中文名，`desc` 是这一项到底做什么（面板上直接显示），
+ * `risk` 只在"运行时改它会有副作用"时出现——它不阻止修改，只是把后果写在
+ * 字段旁边，让人在点之前就知道。
  *
- * The two keys with no risk note are the ones this panel exists for: thresholds,
- * token budgets and embedding fan-out are pure decisions re-read on every use, so
- * a new value is in force at the next decision with nothing left half-applied.
- * Everything else is editable because the operator asked for the whole surface,
- * and carries the note that makes its consequence visible before the click.
+ * 没有 `risk` 的是纯决策型参数：阈值、token 预算、并发度这类值在每次使用时
+ * 重新读取，改完下一次决策就生效，没有留下半套状态。带 `risk` 的也照样可改，
+ * 因为这一栏存在的意义就是把整张配置表摊开。
  */
 export const HOT_KEYS = Object.freeze([
-  // ── compaction: pure decisions, safe by construction ──────────────────
-  { key: "thresholdRatio", surface: "compaction", type: "number", min: 0, exclusiveMax: 1 },
-  { key: "retainRatio", surface: "compaction", type: "number", min: 0, exclusiveMax: 1 },
-  { key: "summaryRatio", surface: "compaction", type: "number", min: 0, exclusiveMax: 1 },
-  { key: "summaryFloorTokens", surface: "compaction", type: "integer", min: 1 },
-  { key: "checkpointCap", surface: "compaction", type: "integer", min: 1 },
-  { key: "leafSpanTokens", surface: "compaction", type: "integer", min: 1 },
-  { key: "condensationFanin", surface: "compaction", type: "integer", min: 2 },
-  { key: "thresholdFullSweep", surface: "compaction", type: "boolean" },
-  { key: "fullSweepMaxPasses", surface: "compaction", type: "integer", min: 1 },
-  { key: "fullSweepMaxSeconds", surface: "compaction", type: "integer", min: 1 },
-  { key: "fullSweepSoftSeconds", surface: "compaction", type: "integer", min: 1 },
-  { key: "fullSweepTargetShare", surface: "compaction", type: "number", min: 0, exclusiveMax: 1 },
-  { key: "fullSweepReserveSeconds", surface: "compaction", type: "number", min: 0 },
-  { key: "leafEstimateFloorSeconds", surface: "compaction", type: "number", min: 0 },
-  { key: "stallCooldownMs", surface: "compaction", type: "integer", min: 0 },
-  { key: "anchorPointers", surface: "compaction", type: "boolean" },
-  { key: "emptySummaryRetries", surface: "compaction", type: "integer", min: 0 },
-  { key: "backgroundLeafPrep", surface: "compaction", type: "boolean" },
-  { key: "auto", surface: "compaction", type: "boolean" },
-  { key: "maxTokens", surface: "compaction", type: "integer", min: 1 },
-  { key: "headroomTokens", surface: "compaction", type: "integer", min: 1 },
-  { key: "compactionRetries", surface: "compaction", type: "integer", min: 0 },
-  { key: "maxOverflowRetries", surface: "compaction", type: "integer", min: 0 },
-  // ── compaction: changes an in-flight decision's inputs ────────────────
+  // ── 压缩：纯决策，改完即生效 ────────────────────────────────────────
+  {
+    key: "thresholdRatio",
+    surface: "compaction",
+    type: "number",
+    min: 0,
+    exclusiveMax: 1,
+    label: "压缩触发比例",
+    desc: "上下文用到窗口的多少比例时开始压缩。默认 0.75，也就是 100 万窗口在 75 万 token 时触发。调低会压缩得更早、更频繁，但留出更多请求余量；调高会用到更满，压缩次数更少。"
+  },
+  {
+    key: "retainRatio",
+    surface: "compaction",
+    type: "number",
+    min: 0,
+    exclusiveMax: 1,
+    label: "保留原文比例",
+    desc: "压缩后保留多少比例的最新原文不动。默认 0.05，100 万窗口约保留 5 万 token。这部分是最新的对话，保持原样以保证连续性；调大更连贯但每次压缩能腾出的空间更少。"
+  },
+  {
+    key: "summaryRatio",
+    surface: "compaction",
+    type: "number",
+    min: 0,
+    exclusiveMax: 1,
+    label: "摘要目标比例",
+    desc: "一条 checkpoint 的摘要目标大小，按被压缩区间的比例算，再被下面的下限和上限夹住。默认 0.2，但与下限、上限同为 2000 时比例实际不起作用，每条摘要固定 2000 token。"
+  },
+  {
+    key: "summaryFloorTokens",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "摘要下限（token）",
+    desc: "摘要大小不得低于这个值。默认 2000，与上限相等，所以每条摘要就是 2000 token，不随源区间变化。想按比例缩放就把这个值调小、让比例说话。"
+  },
+  {
+    key: "checkpointCap",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "摘要上限（token）",
+    desc: "摘要大小不得高于这个值。默认 2000。调大会让每条 checkpoint 保留更多细节、压缩比降低，后续每一步的提示词也更大。"
+  },
+  {
+    key: "leafSpanTokens",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "单叶跨度（token）",
+    desc: "一次压缩最少吞掉多少 token 的原文。默认 24000。调小压缩更细、次数更多；调大一次处理更多，但单次摘要会丢掉更多细节。"
+  },
+  {
+    key: "condensationFanin",
+    surface: "compaction",
+    type: "integer",
+    min: 2,
+    label: "凝聚扇入",
+    desc: "多少个同级 checkpoint 合并成一个上层节点。默认 4，也就是四层结构每层收窄四倍。这是多层压缩的开关，最小为 2。"
+  },
+  {
+    key: "thresholdFullSweep",
+    surface: "compaction",
+    type: "boolean",
+    label: "越阈值时连续扫多个叶",
+    desc: "打开后，一次越过阈值会连续压缩多个叶，直到回到阈值以下；关闭则每次只压一个叶，恢复得更慢但每一步更轻。默认打开。"
+  },
+  {
+    key: "fullSweepMaxPasses",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "单次扫描最多几个叶",
+    desc: "一次 sweep 最多释放多少个叶。默认 12，按每叶 24000 token 算是 28.8 万 token，足够把一次越界拉回阈值内。这是花费上限，不是必须用完的额度。"
+  },
+  {
+    key: "fullSweepMaxSeconds",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "单次扫描硬上限（秒）",
+    desc: "一次 sweep 的墙钟硬上限。默认 120 秒。到点就停，剩下的欠账由下一次越阈值或空闲续跑接手。"
+  },
+  {
+    key: "fullSweepSoftSeconds",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "单次扫描软上限（秒）",
+    desc: "更早结束 sweep 的软时钟。默认 0 表示不启用。设成比目标所需时间还短会变成真正的约束，让 sweep 每次都半途而废，所以只在想主动收紧时才填。"
+  },
+  {
+    key: "fullSweepTargetShare",
+    surface: "compaction",
+    type: "number",
+    min: 0,
+    exclusiveMax: 1,
+    label: "单次扫描目标份额",
+    desc: "一次 sweep 想回收多少比例的阈值。默认 0.08，配合 120 秒硬时钟，让目标能在一次越界内达成——这样 sweep 是因为做完了才停，而不是被时钟截断。"
+  },
+  {
+    key: "fullSweepReserveSeconds",
+    surface: "compaction",
+    type: "number",
+    min: 0,
+    label: "扫描预留时间（秒）",
+    desc: "从硬上限里预留出来的余量，避免最后一个叶刚好卡在时钟边界上。默认 10 秒。"
+  },
+  {
+    key: "leafEstimateFloorSeconds",
+    surface: "compaction",
+    type: "number",
+    min: 0,
+    label: "单叶耗时估算下限（秒）",
+    desc: "估算下一个叶要多久时用的地板值。默认 15 秒。地板的作用是防止一次很快的压缩让系统误判后续也快，从而放进过多的叶。"
+  },
+  {
+    key: "stallCooldownMs",
+    surface: "compaction",
+    type: "integer",
+    min: 0,
+    label: "无进展冷却（毫秒）",
+    desc: "一次压缩没取得进展后，等多久再试。默认 60000，也就是一分钟。避免每一步都重新判断同一个无法压缩的区间，同时又能自己恢复。"
+  },
+  {
+    key: "anchorPointers",
+    surface: "compaction",
+    type: "boolean",
+    label: "摘要里保留 seq 锚点",
+    desc: "打开后每条摘要都带 (seq N) 指针，指向被折叠的原始事件，lcm_expand 靠它精确恢复。默认打开。关掉会失去按 seq 恢复的能力，不建议。"
+  },
+  {
+    key: "emptySummaryRetries",
+    surface: "compaction",
+    type: "integer",
+    min: 0,
+    label: "空摘要重试次数",
+    desc: "模型返回零文本时的额外重试次数。默认 2，也就是同一提示词最多试三次。这是采样偶发问题，重试通常就出文本了；换路由不试，因为那样失败就不可复现。"
+  },
+  {
+    key: "backgroundLeafPrep",
+    surface: "compaction",
+    type: "boolean",
+    label: "后台预生成摘要",
+    desc: "打开后在空闲时提前为下一个叶写好摘要，真正压缩时直接用。默认关闭。打开能缩短压缩停顿，代价是空闲时也在花模型调用。"
+  },
+  {
+    key: "auto",
+    surface: "compaction",
+    type: "boolean",
+    label: "自动压缩",
+    desc: "总开关。关闭后只有手动 /compact 才会压缩，上下文会一直涨到上游拒绝为止。默认关闭，打开后按上面的阈值自动触发。"
+  },
+  {
+    key: "maxTokens",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "上下文上限（token）",
+    desc: "这个引擎认定的上下文上限。默认 65536，但更常见的是按实际模型窗口走 modelPolicies。这个值直接决定阈值算出来是多少。"
+  },
+  {
+    key: "headroomTokens",
+    surface: "compaction",
+    type: "integer",
+    min: 1,
+    label: "预留余量（token）",
+    desc: "从上限里预先扣掉、不参与压缩计算的空间。默认 65536。留出来给回复和工具结果，防止刚压完就又被撑满。"
+  },
+  {
+    key: "compactionRetries",
+    surface: "compaction",
+    type: "integer",
+    min: 0,
+    label: "压缩失败重试次数",
+    desc: "一次压缩事务失败后的重试次数。默认 1。压缩失败通常是路由或校验问题，重试能救活偶发的传输失败。"
+  },
+  {
+    key: "maxOverflowRetries",
+    surface: "compaction",
+    type: "integer",
+    min: 0,
+    label: "溢出重试次数",
+    desc: "上游报上下文溢出后，再压缩一轮并重发请求的次数。默认 1。调大会在真的超窗时多试几次，但每次都要重新压缩。"
+  },
+  // ── 压缩：会改变进行中决策的输入 ──────────────────────────────────
   {
     key: "retainTokens",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "Exclusive with retainRatio: setting it drops retainRatio, and a compaction already priced against the ratio keeps the old boundary."
+    label: "保留原文 token 数",
+    desc: "用绝对 token 数代替上面的保留比例。两者互斥：填这个就会自动丢掉 retainRatio，反之亦然。默认不填，走比例。适合想固定一个「最近多少 token 原文绝不动」的场景，比如 24000 对应 lcm-x 的 fresh_tail_max_tokens。",
+    risk: "与「保留原文比例」互斥。改这一项会清掉那一项；已经按比例定价过的压缩会沿用旧边界。"
   },
   {
     key: "summarizationProvider",
     surface: "compaction",
     type: "string",
-    risk: "Re-routes summarization. The next leaf uses it; a request already streaming to the old route finishes there. Must be set together with summarizationModel."
+    label: "摘要模型提供商",
+    desc: "写摘要用的提供商，与下面一项成对出现。留空表示跟会话本身走。填了之后摘要不再消耗主模型的额度。",
+    risk: "会改变摘要路由。下一个叶用新路由；已经在流式返回的请求仍在旧路由上跑完。必须与摘要模型一起设。"
   },
   {
     key: "summarizationModel",
     surface: "compaction",
     type: "string",
-    risk: "Re-routes summarization. Same rule as summarizationProvider: both or neither."
+    label: "摘要模型",
+    desc: "写摘要用的模型名，例如 mistral-proxy/codestral-embed 或某个便宜的小模型。必须与上面的提供商成对填写，只填一个不生效；留空则摘要跟会话本身用同一个模型。",
+    risk: "同上：要么两个都填，要么都不填。"
   },
   {
     key: "temporalRollups",
     surface: "compaction",
     type: "boolean",
-    risk: "Toggles the background rollup pass. Turning it off leaves already-built rollups on disk; nothing deletes them."
+    label: "按天时间线",
+    desc: "空闲时把每天发生的事汇总成一条时间线，让「11 号做了什么」这类问题不用扫全量日志。默认打开，因为成本被下面的预算和条数双重限制。",
+    risk: "关掉不会删除已经生成的时间线，只是不再生成新的。"
   },
   {
     key: "rollupBuildsPerPass",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "Background rollup budget per idle pass. No effect while temporalRollups is off."
+    label: "每次生成几条时间线",
+    desc: "一次空闲维护最多生成几条日时间线。默认 2。调大能在一次空闲里补完更多天，代价是这一趟占用的模型调用更多；时间线只在打开「按天时间线」时才会生成。"
   },
   {
     key: "rollupMaintenanceBudgetMs",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "Wall clock for one rollup pass. Raising it holds the idle slot longer."
+    label: "时间线维护预算（毫秒）",
+    desc: "一次空闲维护最多占用多少毫秒。默认 5000。调大能在一趟里做完更多时间线，但空闲槽位被占用的时间也更长。"
   },
   {
     key: "rollupDailyTargetTokens",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "Target size of one day's rollup; the pass asks the model for this many tokens."
+    label: "日时间线目标长度（token）",
+    desc: "要求模型把一天的汇总写到多大。默认 5000 token。这是给模型的长度指令，不是硬限制；真正封顶的是下面的上限。"
   },
   {
     key: "rollupDailyMaxTokens",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "Ceiling for one day's rollup. A value below rollupDailyTargetTokens makes the target unreachable."
+    label: "日时间线上限（token）",
+    desc: "一天的汇总不得超过这个值。默认 15000。设得比目标还小会让目标永远达不成。"
   },
   {
     key: "assertionExtraction",
     surface: "compaction",
     type: "boolean",
-    risk: "Toggles the background assertion mining pass. Existing sidecar rows stay on disk."
+    label: "断言抽取",
+    desc: "一天的汇总不得超过这个值。默认 15000。设得比上面的目标还小会让目标永远达不成，那样模型会一直被要求写更长却写不出来。",
+    risk: "关掉不会删除已抽取的断言，只是不再新增。"
   },
   {
     key: "assertionMaxSourcesPerPass",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "How many checkpoints one mining pass reads. It is also the pass's cost."
+    label: "每次抽取几条来源",
+    desc: "一次抽取最多读几条 checkpoint。默认 4，这个数字同时也是这一趟的花费。"
   },
   {
     key: "assertionTimeoutSeconds",
     surface: "compaction",
     type: "integer",
     min: 1,
-    risk: "Deadline for one mining pass; a slower model needs a larger value or the pass is skipped."
+    label: "抽取超时（秒）",
+    desc: "一趟抽取的时限。默认 30 秒。模型慢的时候要给得更大，否则这一趟直接跳过。"
   },
   {
     key: "rollupDir",
     surface: "compaction",
     type: "string",
-    risk: "Where rollups are read from. Changing it makes every existing rollup look absent; the files stay where they were."
+    label: "时间线目录",
+    desc: "时间线文件放在哪。默认 .lcm-rollups，相对进程工作目录。",
+    risk: "改这一项会让已有时间线全部看起来不存在，文件仍在原处，不会迁移。"
   },
   {
     key: "assertionDir",
     surface: "compaction",
     type: "string",
-    risk: "Where assertions are read from. Same consequence as rollupDir."
+    label: "断言目录",
+    desc: "断言文件放在哪。默认 .lcm-assertions，相对进程工作目录。断言是 checkpoint 里的事实三元组，按天分文件。",
+    risk: "同时间线目录：改了旧文件就看不见了。"
   },
   {
     key: "debug",
     surface: "compaction",
     type: "boolean",
-    risk: "Diagnostic logging. On, every decision appends a line to debugLogPath."
-  },
-  {
-    key: "modelPolicies",
-    surface: "compaction",
-    type: "json",
-    risk: "Per-route overrides, as a JSON array of {provider, model, ...policy}. A policy that names a model with no exact-target match does nothing, and an entry missing provider or model is rejected. Edited as raw JSON because the shape is a table, not a field."
+    label: "诊断日志",
+    desc: "打开后每次决策都往下面的路径追加一行。默认关闭。排查压缩为什么不触发时先开这个。",
+    risk: "打开会持续写文件，长期开着要注意磁盘占用。"
   },
   {
     key: "debugLogPath",
     surface: "compaction",
     type: "string",
-    risk: "Where diagnostic lines go. Only read while debug is on."
+    label: "诊断日志路径",
+    desc: "诊断日志写到哪个文件。默认 /tmp/dsh-compaction-debug.log。只在诊断日志打开时被读取。"
   },
-  // ── vector surface: the tool and command rows ────────────────────────
-  { key: "vectorEnabled", surface: "vector", type: "boolean" },
-  { key: "vectorConcurrency", surface: "vector", type: "integer", min: 1 },
-  { key: "vectorTimeoutMs", surface: "vector", type: "integer", min: 1 },
-  { key: "vectorTopK", surface: "vector", type: "integer", min: 1 },
-  { key: "vectorCandidateTokens", surface: "vector", type: "integer", min: 1 },
-  { key: "vectorCandidateLimit", surface: "vector", type: "integer", min: 1 },
-  { key: "embedMaintenanceLimit", surface: "vector", type: "integer", min: 1 },
+  {
+    key: "modelPolicies",
+    surface: "compaction",
+    type: "json",
+    label: "按模型覆盖参数",
+    desc: "为指定 provider/model 单独设一套阈值与预算，填一个 JSON 数组，每项是 {provider, model, ...}，其余字段与上面同名。默认空数组，表示所有模型共用一套参数。",
+    risk: "写错格式会被直接拒绝。provider 与 model 都必填；同名模型重复出现也会被拒绝。填了但匹配不到任何路由的条目不会生效。"
+  },
+  // ── 向量：工具行与命令行 ───────────────────────────────────────────
+  {
+    key: "vectorEnabled",
+    surface: "vector",
+    type: "boolean",
+    label: "语义召回",
+    desc: "打开后 lcm_search 增加一条按向量相似度排序的通道，能命中字面不匹配但语义相近的原文。默认关闭。关着时搜索完全走词法匹配。"
+  },
+  {
+    key: "vectorConcurrency",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "嵌入并发数",
+    desc: "回填时同时发出几个请求。默认 19，等于凭据池的账号数——网关一个账号服务一个请求，19 是不排队的前提下能拿到的最大吞吐。超时是上游模型自身延迟，每个并发度都会发生，所以调低并不减少超时，只是变慢。"
+  },
+  {
+    key: "vectorTimeoutMs",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "单请求超时（毫秒）",
+    desc: "一次嵌入请求的墙钟上限。默认 20000。批越大越容易超，回填行用的是 240000。超时会重试，但重试救不活已经挂掉的端点。"
+  },
+  {
+    key: "vectorTopK",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "向量召回条数",
+    desc: "向量通道取回多少条候选交给排序。默认 8。调大召回更全，但每条候选都要算一次相似度。"
+  },
+  {
+    key: "vectorCandidateTokens",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "候选窗口（token）",
+    desc: "参与向量排序的最近原文窗口有多大。默认 100000 token。窗口越大越可能命中旧内容，嵌入成本也越高。"
+  },
+  {
+    key: "vectorCandidateLimit",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "候选条数上限",
+    desc: "候选窗口里最多取多少条事件。默认 500。与上面的 token 窗口共同决定候选集合。"
+  },
+  {
+    key: "embedMaintenanceLimit",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "空闲预嵌入条数",
+    desc: "每次空闲维护最多补多少条嵌入。默认 64，大约一到两个批次，不是把整个语料一次灌完。"
+  },
   {
     key: "rank",
     surface: "vector",
     type: "string",
-    risk: "Changes how lcm_search ranks. A vector or hybrid value is inert unless vectorEnabled is on."
+    label: "排序方式",
+    desc: "每次空闲维护最多补多少条嵌入。默认 64，大约一到两个批次，不是把整个语料一次灌完——这样空闲时不会把网关占满，回填仍然交给 /lcm-embed backfill。",
+    risk: "只影响 lcm_search 这个工具。斜杠命令 /lcm-search 刻意保持纯词法，不接受向量排序——它是人的 grep，要求即时回答。"
   },
-  { key: "maxRecallTokens", surface: "vector", type: "integer", min: 1 },
-  { key: "maxSearchHits", surface: "vector", type: "integer", min: 1 },
+  {
+    key: "maxRecallTokens",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "恢复输出上限（token）",
+    desc: "lcm_expand 一次最多返回多少 token。默认按内置上限。调小可以避免一次恢复就把上下文撑爆。"
+  },
+  {
+    key: "maxSearchHits",
+    surface: "vector",
+    type: "integer",
+    min: 1,
+    label: "搜索命中上限",
+    desc: "lcm_search 一次最多返回多少条命中。默认按内置上限。超出部分会被标记为省略并给出总数。"
+  },
   {
     key: "legacyNames",
     surface: "vector",
     type: "boolean",
-    risk: "The legacy recall/search aliases are chosen when the tools are registered, so this one keeps the old aliases until dsh restarts. Every other key here is live."
+    label: "保留旧工具名",
+    desc: "是否额外注册 recall 和 search 这两个旧名字，让为旧名字写好的提示词继续可用。默认打开。关掉只保留 lcm_expand / lcm_search / lcm_timeline 这三个新名字，工具列表更短。",
+    risk: "这一项在工具注册时就定了，改完要重启 dsh 才生效——这是全表唯一需要重启的参数。"
   },
-  { key: "allowLanAccess", surface: "vector", type: "boolean", risk: "Serving the insight endpoints beyond loopback. This panel writes config; leaving it off keeps the write path local." },
+  {
+    key: "allowLanAccess",
+    surface: "vector",
+    type: "boolean",
+    label: "允许非本机访问面板",
+    desc: "默认关闭，只服务本机。打开后面板的接口能被局域网访问，而它读的是会话历史与文件路径，也会写入这份配置。",
+    risk: "打开等于把会话内容和配置写入能力暴露到局域网。默认关闭是有原因的。"
+  },
   {
     key: "vectorBaseUrl",
     surface: "vector",
     type: "string",
-    risk: "Points the layer at a different endpoint. Vectors already cached were produced by the old one and are keyed by model, so a mismatched pair mixes two spaces."
+    label: "嵌入端点地址",
+    desc: "任意 OpenAI 兼容的 /v1 地址。默认指向本机网关。",
+    risk: "换端点后，已缓存的向量是旧端点产的、按模型名分目录存的；模型名相同而端点不同会把两个向量空间混在一起。"
   },
   {
     key: "vectorModel",
     surface: "vector",
     type: "string",
-    risk: "Changes the embedding model. The cache is keyed by model, so nothing embedded so far is reused."
+    label: "嵌入模型",
+    desc: "用来算向量的模型名。默认 mistral-proxy/codestral-embed。",
+    risk: "缓存按模型名分目录，换模型等于已有向量全部作废，需要重新回填。"
   },
   {
     key: "vectorDim",
     surface: "vector",
     type: "integer",
     min: 1,
-    risk: "Must match the model's real width; a mismatch makes every stored vector unusable."
+    label: "向量维度",
+    desc: "模型输出的向量长度，必须与模型真实维度一致。默认 1536。",
+    risk: "填错会让已存的每个向量都不可用，而且不会报错——只是相似度全是噪声。"
   },
   {
     key: "vectorCacheDir",
     surface: "vector",
     type: "string",
-    risk: "Switching it makes the whole existing cache look absent."
+    label: "向量缓存目录",
+    desc: "向量缓存放在哪。默认 .lcm-vectors，按模型名再分一层子目录。",
+    risk: "换目录等于现有缓存全部看不见，需要重新回填。"
   },
   {
     key: "vectorApiKeyEnv",
     surface: "vector",
     type: "string",
-    risk: "Names an environment variable, never the key itself. A name the process does not export sends no Authorization header."
+    label: "密钥环境变量名",
+    desc: "填的是环境变量名，不是密钥本身。默认空，表示不发 Authorization 头（无鉴权端点）。",
+    risk: "填了一个进程里没有导出的变量名，请求就不带鉴权头，端点会直接拒绝。"
   }
 ]);
 
@@ -403,8 +671,10 @@ export function describeKeys() {
     type: entry.type,
     min: entry.min ?? null,
     exclusiveMax: entry.exclusiveMax ?? null,
-    // Carried to the form so the warning sits beside the field it applies to. A key
-    // without one is a pure decision that the next use re-reads.
+    // The form renders these three: the name a reader understands, what the value
+    // does, and — only where it applies — what changing it at runtime costs.
+    label: entry.label ?? entry.key,
+    desc: entry.desc ?? null,
     risk: entry.risk ?? null
   }));
 }
