@@ -24,8 +24,9 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { DEFAULT_MAX_RECALL_TOKENS, MAX_RECALL_TOKENS, recallSession, resolveRecallBudget, resolveRecallReference } from "./recall.js";
 import { DEFAULT_MAX_SEARCH_HITS, HYBRID_RANK_MODES, InvalidSearchPatternError, RANK_MODES, searchSessionHybrid } from "./search.js";
 import { resolveVectorConfig } from "./vectors.js";
+import { hotKeysFor, overlayFor, registerLiveConsumer } from "./live.js";
 import { embedBackfill } from "./command.js";
-import { insightRoutes } from "./insight.js";
+import { insightRoutes, warmReports } from "./insight.js";
 import { readRollups } from "./rollup.js";
 
 const name = "tool-lcm-expand";
@@ -363,7 +364,26 @@ function defineSearchTool(resolved, toolName = "lcm_search") {
  * @returns the installed registrations' combined disposer.
  */
 function apply(ctx, config) {
-  const resolved = resolveConfig(config);
+  // The overlay is merged before resolving so a value set from the panel is also
+  // what a freshly booted process starts with, not only what a running one got
+  // patched to.
+  const declared = config;
+  const resolved = resolveConfig({ ...config, ...overlayFor("vector") });
+  // Live surface for the panel: the search row owns the vector keys, so it is the
+  // row that receives them. `Object.assign` onto the SAME resolved record is the
+  // mechanism — every handler reads `resolved.key` at call time, so replacing the
+  // record would strand the closures that tools were registered with.
+  const liveKeys = () => hotKeysFor("vector");
+  const applyConfig = (patch, options = {}) => {
+    const next = resolveConfig({ ...declared, ...overlayFor("vector"), ...patch });
+    const commit = () => { Object.assign(resolved, next); };
+    if (options.dryRun === true) return commit;
+    commit();
+    return undefined;
+  };
+  if (typeof ctx.effect === "function") {
+    ctx.effect(() => registerLiveConsumer("tool-lcm-expand", "vector", liveKeys, applyConfig, () => ({ ...resolved })));
+  }
   // Sessions with an incremental embedding pass in flight.
   const embedPasses = new Set();
   ctx.effect(() => {
@@ -444,6 +464,21 @@ function apply(ctx, config) {
     for (const route of insightRoutes(ctx, resolved)) {
       ctx.effect(() => ctx.webServer.register(route));
     }
+    // Warm the report cache while nobody is looking. The first panel open after a
+    // restart otherwise pays the cold sweep (~15 s on 279 logs), and the operator
+    // spends it watching a spinner. Deferred one macrotask so activation itself is
+    // not delayed, and failures are logged rather than surfaced: this is an
+    // optimisation, and a broken cache must never keep the tools from loading.
+    ctx.effect(() => {
+      const timer = setTimeout(() => {
+        warmReports(ctx, resolved).catch((error) => {
+          ctx.logger?.warn?.("lcm insight prewarm failed: " + (error instanceof Error ? error.message : String(error)));
+        });
+      }, 0);
+      // An unref'd timer cannot hold the process open on its own.
+      if (typeof timer.unref === "function") timer.unref();
+      return () => clearTimeout(timer);
+    });
   }
 }
 

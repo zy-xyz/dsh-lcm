@@ -78,6 +78,16 @@ window.__ModuleLoader__.load({
         embedOff: 'The vector layer is off for this profile, so there is nothing to measure.',
         embedCoverage: 'Coverage',
         unreadable: 'unreadable',
+        config: 'Config',
+        configNote: 'Edits apply to the running engine at its next decision; no restart. Saved to ~/.dsh/lcm-live.json and reused on boot.',
+        configSave: 'Apply',
+        configSaving: 'Applying…',
+        configSaved: 'Applied',
+        configReset: 'Clear overrides',
+        configEmpty: 'Nothing to show.',
+        configGroupCompaction: 'Compaction',
+        configGroupVector: 'Embedding',
+        configRisk: 'note',
         estimated: 'Estimated from checkpoint bodies; spans are engine-recorded.',
         noPressure: 'No session is loaded in this process, so live pressure is unavailable.',
         noSession: 'No session is open. Open one and this window follows it.',
@@ -152,6 +162,16 @@ window.__ModuleLoader__.load({
         colDepth: '深度',
         colSession: '会话',
         colTokens: 'token',
+        config: '参数',
+        configNote: '改完立即生效，不用重启；会写入 ~/.dsh/lcm-live.json，重启后沿用。',
+        configSave: '应用',
+        configSaving: '应用中…',
+        configSaved: '已生效',
+        configReset: '清除覆盖',
+        configEmpty: '没有可显示的项。',
+        configGroupCompaction: '压缩',
+        configGroupVector: '向量',
+        configRisk: '说明'
       }
     };
 
@@ -263,7 +283,36 @@ window.__ModuleLoader__.load({
         border-bottom: 2px solid transparent; margin-bottom: -1px;
       }
       .lcmi-tab[aria-selected='true'] { color: var(--dsw-alias-label-primary); border-bottom-color: var(--dsw-alias-brand-primary); }
-      .lcmi-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+      /* ── config form ──────────────────────────────────────────────────── */
+      .lcmi-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 14px; }
+      .lcmi-field { display: flex; flex-direction: column; gap: 4px; }
+      .lcmi-field > label { font-size: 11px; color: var(--dsw-alias-label-secondary); display: flex; align-items: center; gap: 6px; }
+      .lcmi-field > label code { font-size: 11px; }
+      .lcmi-field input[type='text'], .lcmi-field input[type='number'], .lcmi-field textarea {
+        font: inherit; font-size: 12px; padding: 6px 8px; min-height: 32px;
+        color: var(--dsw-alias-label-primary);
+        background: var(--dsw-alias-bg-base);
+        border: var(--lcmi-line); border-radius: var(--lcmi-radius-tile);
+      }
+      .lcmi-field input:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+      .lcmi-field[data-dirty='true'] input { border-color: var(--dsw-alias-brand-primary); }
+      .lcmi-field .lcmi-risk {
+        font-size: 11px; line-height: 1.4; color: var(--dsw-alias-label-secondary);
+        border-left: 2px solid var(--lcmi-track); padding-left: 7px;
+      }
+      .lcmi-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .lcmi-btn {
+        appearance: none; font: inherit; font-size: 12px; cursor: pointer;
+        padding: 7px 14px; min-height: 32px; border-radius: var(--lcmi-radius-tile);
+        border: var(--lcmi-line); background: var(--dsw-alias-bg-base);
+        color: var(--dsw-alias-label-primary);
+      }
+      .lcmi-btn[data-primary='true'] { background: var(--dsw-alias-brand-primary); border-color: transparent; color: #fff; }
+      .lcmi-btn:disabled { opacity: .5; cursor: default; }
+      .lcmi-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+      .lcmi-config-status { font-size: 12px; }
+      .lcmi-config-status[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
+            .lcmi-tab:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
       /* The retry control sits at the end of the tab row. It is quiet until a read
          fails, then it carries the error colour — the only thing on this panel that
          changes appearance based on state, because it is the only control. */
@@ -522,7 +571,7 @@ window.__ModuleLoader__.load({
      * timer behind — the disposal rule this plugin's `ctx.effect` also follows.
      * @returns `{ data, error, loading, reload }`.
      */
-    function useEndpoint(url) {
+    function useEndpoint(url, refreshMs = REFRESH_MS) {
       const [state, setState] = useState({ data: null, error: null, loading: true });
       const [nonce, setNonce] = useState(0);
       const reload = useCallback(() => setNonce((n) => n + 1), []);
@@ -544,13 +593,15 @@ window.__ModuleLoader__.load({
           }
         };
         load();
-        const timer = setInterval(load, REFRESH_MS);
+        // A form must not be re-read under the operator's cursor: the config panel
+        // passes 0 and refreshes only after its own write.
+        const timer = refreshMs > 0 ? setInterval(load, refreshMs) : null;
         return () => {
           live = false;
           controller.abort();
-          clearInterval(timer);
+          if (timer !== null) clearInterval(timer);
         };
-      }, [url, nonce]);
+      }, [url, nonce, refreshMs]);
       return { ...state, reload };
     }
 
@@ -978,6 +1029,9 @@ window.__ModuleLoader__.load({
       // stays as a fallback for a host that does not pass it.
       const sessionId = props.sessionId ?? useActiveSessionId(props.sessions);
       const sessionUrl = sessionId === null ? null : '/lcm-insight/session?id=' + encodeURIComponent(sessionId);
+      // Read once, not on the poll: a form that re-reads under the cursor is a form
+      // that fights the operator. It refreshes after its own write.
+      const config = useEndpoint('/lcm-insight/config', 0);
       const session = useEndpoint(sessionUrl);
       const app = useEndpoint('/lcm-insight/app');
       // A View tab renders INSIDE the conversation column, which already owns the
@@ -996,12 +1050,12 @@ window.__ModuleLoader__.load({
               t(stale ? 'stale' : 'live')
             )
           ),
-          h(PanelBody, { t, sessionId, session, app })
+          h(PanelBody, { t, sessionId, session, app, config })
         );
       }
       return h('div', { className: 'lcmi-view' },
         h(Style),
-        h(PanelBody, { t, sessionId, session, app })
+        h(PanelBody, { t, sessionId, session, app, config })
       );
     }
 
@@ -1011,15 +1065,163 @@ window.__ModuleLoader__.load({
      * The profile leads because it is the wider view; a reader who wants one
      * session's history moves to the second tab.
      */
-    function PanelBody({ t, sessionId, session, app }) {
+    /**
+     * The live-config form.
+     *
+     * The field list comes from the endpoint, not from a copy here: the whitelist
+     * lives in the plugin (one place that knows which keys are live-tunable and
+     * what each one costs to change), and a second copy in the browser would drift
+     * the moment a key is added.
+     *
+     * Saving posts only the fields the operator actually changed, so an untouched
+     * field keeps whatever value the running row resolved — including a value that
+     * came from the patch file rather than from this overlay.
+     */
+    function ConfigView({ t, state, onSaved }) {
+      const { data, error, loading } = state;
+      const [draft, setDraft] = useState({});
+      const [busy, setBusy] = useState(false);
+      const [status, setStatus] = useState(null);
+
+      if (error !== null && data === null) {
+        return h('div', { className: 'lcmi-msg', 'data-tone': 'error', role: 'alert' }, t('offline') + ' (' + error + ')');
+      }
+      if (loading && data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+      if (data === null) return h('div', { className: 'lcmi-msg' }, t('configEmpty'));
+
+      const values = data.values ?? {};
+      const set = (key, raw, type) => {
+        setDraft((prev) => {
+          const next = { ...prev };
+          // An emptied field means "leave this key alone", not "set it to 0 or ''":
+          // posting '' to a numeric key would be rejected by the row's resolver and
+          // the operator would see a validation error for clearing an input.
+          if (raw === '') delete next[key];
+          else if (type === 'boolean') next[key] = raw === 'true';
+          else if (type === 'number' || type === 'integer') next[key] = Number(raw);
+          // JSON fields stay raw text until save: parsing on every keystroke would
+          // reject every intermediate state of a half-typed array.
+          else if (type === 'json') next[key] = raw;
+          // A text key keeps its string: coercing "8080" to a number would be a type
+          // error the resolver reports as the operator's mistake.
+          else next[key] = raw;
+          return next;
+        });
+        setStatus(null);
+      };
+      const dirty = Object.keys(draft).length > 0;
+
+      const save = async () => {
+        if (!dirty || busy) return;
+        setBusy(true);
+        setStatus(null);
+        try {
+          // A JSON field is text in the form and data on the wire; the parse
+          // failure belongs to the operator's edit, not to the row's resolver.
+          const payload = { ...draft };
+          for (const entry of data.keys ?? []) {
+            if (entry.type !== 'json') continue;
+            const raw = payload[entry.key];
+            if (typeof raw !== 'string') continue;
+            try { payload[entry.key] = JSON.parse(raw); }
+            catch (err) { throw new Error(entry.key + ': ' + String(err.message ?? err)); }
+          }
+          const response = await fetch('/lcm-insight/config', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.error ?? 'HTTP ' + response.status);
+          setDraft({});
+          setStatus({ tone: 'ok', text: t('configSaved') });
+          onSaved();
+        } catch (err) {
+          setStatus({ tone: 'error', text: String(err.message ?? err) });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const groups = [
+        { id: 'compaction', label: t('configGroupCompaction') },
+        { id: 'vector', label: t('configGroupVector') }
+      ];
+
+      return h(React.Fragment, null,
+        h(Card, { title: t('config'), note: t('configNote') },
+          groups.map((group) => {
+            const keys = (data.keys ?? []).filter((entry) => entry.surface === group.id);
+            if (keys.length === 0) return null;
+            return h('div', { key: group.id, style: { marginBottom: '14px' } },
+              h('div', { className: 'lcmi-sub', style: { marginBottom: '8px' } }, group.label),
+              h('div', { className: 'lcmi-fields' }, keys.map((entry) => {
+                const current = draft[entry.key] !== undefined ? draft[entry.key] : values[entry.key];
+                const isDirty = draft[entry.key] !== undefined;
+                return h('div', { key: entry.key, className: 'lcmi-field', 'data-dirty': isDirty ? 'true' : 'false' },
+                  h('label', { htmlFor: 'lcmi-' + entry.key },
+                    h('code', null, entry.key),
+                    current === undefined ? h('span', null, '(unset)') : null
+                  ),
+                  entry.type === 'boolean'
+                    ? h('select', {
+                        id: 'lcmi-' + entry.key,
+                        value: current === undefined ? '' : String(current),
+                        onChange: (event) => set(entry.key, event.target.value, 'boolean'),
+                        style: { font: 'inherit', fontSize: '12px', padding: '6px 8px', minHeight: '32px', borderRadius: 'var(--lcmi-radius-tile)', border: 'var(--lcmi-line)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)' }
+                      },
+                        h('option', { value: '' }, '—'),
+                        h('option', { value: 'true' }, 'true'),
+                        h('option', { value: 'false' }, 'false')
+                      )
+                    : entry.type === 'json'
+                    ? h('textarea', {
+                        id: 'lcmi-' + entry.key,
+                        rows: 6,
+                        spellCheck: false,
+                        style: { font: 'inherit', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', padding: '6px 8px', borderRadius: 'var(--lcmi-radius-tile)', border: 'var(--lcmi-line)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', resize: 'vertical' },
+                        value: current === undefined ? '' : typeof current === 'string' ? current : JSON.stringify(current, null, 2),
+                        onChange: (event) => set(entry.key, event.target.value, 'json')
+                      })
+                    : h('input', {
+                        id: 'lcmi-' + entry.key,
+                        type: entry.type === 'number' || entry.type === 'integer' ? 'number' : 'text',
+                        step: entry.type === 'integer' ? '1' : entry.type === 'number' && entry.exclusiveMax === null && entry.min !== null ? 'any' : 'any',
+                        min: entry.min ?? undefined,
+                        value: current === undefined ? '' : String(current),
+                        onChange: (event) => set(entry.key, event.target.value, entry.type)
+                      }),
+                  entry.risk === null || entry.risk === undefined ? null : h('div', { className: 'lcmi-risk' }, h('strong', null, t('configRisk') + ': '), entry.risk)
+                );
+              }))
+            );
+          })
+        ),
+        h('div', { className: 'lcmi-actions' },
+          h('button', {
+            type: 'button', className: 'lcmi-btn', 'data-primary': 'true',
+            disabled: !dirty || busy, onClick: save
+          }, busy ? t('configSaving') : t('configSave')),
+          dirty ? h('button', {
+            type: 'button', className: 'lcmi-btn',
+            onClick: () => { setDraft({}); setStatus(null); }
+          }, t('configReset')) : null,
+          status === null ? null : h('span', { className: 'lcmi-config-status', 'data-tone': status.tone, role: status.tone === 'error' ? 'alert' : 'status' }, status.text)
+        )
+      );
+    }
+
+    function PanelBody({ t, sessionId, session, config, app }) {
       const [tab, setTab] = useState('app');
-      const active = tab === 'app' ? app : session;
+      const active = tab === 'config' ? config : tab === 'app' ? app : session;
 
       const body = (() => {
         if (active.error !== null && active.data === null) {
           return h('div', { className: 'lcmi-msg', 'data-tone': 'error', role: 'alert' }, t('offline') + ' (' + active.error + ')');
         }
         if (active.loading && active.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
+        if (tab === 'config') return h(ConfigView, { t, state: config, onSaved: config.reload });
         if (tab === 'app') {
           if (app.data === null) return h('div', { className: 'lcmi-msg' }, t('loading'));
           return h(AppView, { data: app.data, t });
@@ -1030,7 +1232,8 @@ window.__ModuleLoader__.load({
       })();
 
       const retry = () => {
-        if (tab === 'app') app.reload();
+        if (tab === 'config') config.reload();
+        else if (tab === 'app') app.reload();
         else session.reload();
       };
       const failed = active.error !== null;
@@ -1047,6 +1250,11 @@ window.__ModuleLoader__.load({
             'aria-selected': tab === 'session' ? 'true' : 'false',
             onClick: () => setTab('session')
           }, t('session')),
+          h('button', {
+            className: 'lcmi-tab', role: 'tab', type: 'button',
+            'aria-selected': tab === 'config' ? 'true' : 'false',
+            onClick: () => setTab('config')
+          }, t('config')),
           // A manual retry, because the panel is read-only and there is no other
           // way to recover from a failed read: the poll is every 5 s but a failure
           // that repeats is indistinguishable from a panel that stopped trying.

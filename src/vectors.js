@@ -114,8 +114,15 @@ export const DEFAULT_VECTOR_TIMEOUT_MS = 20000;
  * too (measured: 2.6 s, 8.9 s, 12 s, and 30 s timeouts among five one-text calls),
  * so a low concurrency still meets them — the retry budget is what absorbs those.
  * Concurrency is for the throughput the accounts already allow.
+ *
+ *   19 — the credential pool size, not a latency measurement. OmniRoute serves one
+ *        account per request, so 19 in flight is the ceiling that adds throughput
+ *        without forcing a request to queue behind another. Timeouts are the
+ *        upstream model's own latency and occur at every concurrency (measured:
+ *        single texts at 2.6 s through 30 s), which is why the per-request ceiling
+ *        and the retry budget absorb them instead of a lower fan-out.
  */
-export const DEFAULT_VECTOR_CONCURRENCY = 8;
+export const DEFAULT_VECTOR_CONCURRENCY = 19;
 
 /**
  * Wall-clock ceiling one SEARCH may spend embedding, across every request.

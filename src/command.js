@@ -27,6 +27,7 @@ import { DEFAULT_MAX_RECALL_TOKENS } from "./recall.js";
 import { deriveDag } from "./summarize.js";
 import { DEFAULT_MAX_SEARCH_HITS, InvalidSearchPatternError, RANK_MODES, collectVectorItems, searchSession } from "./search.js";
 import { batchSizeFor, VECTOR_TEXT_LIMIT, embedTextsTolerant, resolveVectorAuth, resolveVectorConfig, vectorCache, vectorCacheStats, vectorSearchBudgetMs } from "./vectors.js";
+import { hotKeysFor, overlayFor, registerLiveConsumer } from "./live.js";
 
 const name = "command-lcm-search";
 const inject = ["commands"];
@@ -230,7 +231,32 @@ function defineRecallCommand(resolved, commandName = "lcm-search") {
  * @param config - `{ commandSet?, maxRecallTokens?, maxSearchHits?, vector* }`.
  */
 function apply(ctx, config) {
-  const resolved = resolveConfig(config);
+  // Same overlay-before-resolve rule as the tool row: a panel edit is also the
+  // value a restart starts with.
+  const declared = config;
+  const resolved = resolveConfig({ ...config, ...overlayFor("vector") });
+  // The embed commands read `resolved.concurrency` etc. at call time, so the SAME
+  // record is updated in place — replacing it would strand the closures the
+  // commands were registered with.
+  const applyConfig = (patch, options = {}) => {
+    const next = resolveConfig({ ...declared, ...overlayFor("vector"), ...patch });
+    const commit = () => { Object.assign(resolved, next); };
+    if (options.dryRun === true) return commit;
+    commit();
+    return undefined;
+  };
+  if (typeof ctx.effect === "function") {
+    // Every vector key EXCEPT `rank`: this row's resolver refuses a semantic rank
+    // on purpose (`/lcm-search` is the operator's grep and answers inline), so
+    // claiming the key would make every hybrid rank setting fail on a row that was
+    // never going to honor it. The tool row owns `rank`; this row owns the rest.
+    const liveKeys = () => {
+      const keys = hotKeysFor("vector");
+      keys.delete("rank");
+      return keys;
+    };
+    ctx.effect(() => registerLiveConsumer("command-lcm", "vector", liveKeys, applyConfig, () => ({ ...resolved })));
+  }
   ctx.effect(() => {
     const disposers = [];
     if (resolved.commandSet === "embed") {

@@ -173,9 +173,12 @@
         # endpoint measured 14 s for 256 texts when healthy and degrades to
         # minutes under load, so the ceiling is generous and a refusal bisects.
         vectorTimeoutMs: 240000
-        # Requests in flight. The gateway's own latency is ~140 ms, so the
-        # slowness is the upstream model and overlapping requests help.
-        vectorConcurrency: 4
+        # Requests in flight, sized to the credential pool: 19 accounts, so 19 is
+        # the most the gateway can serve without one request queueing behind
+        # another. Timeouts happen at every concurrency (they are the upstream
+        # model's own latency, not contention), so raising this only adds
+        # throughput — the per-request ceiling is what absorbs a slow batch.
+        vectorConcurrency: 19
     - id: lcm-compaction-gate
       name: dsh-lcm/gate
 

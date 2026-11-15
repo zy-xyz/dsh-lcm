@@ -21,6 +21,7 @@ import zlib from "node:zlib";
 
 import { VECTOR_TEXT_LIMIT, resolveVectorConfig, vectorCacheDirOf } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
+import { applyLive, describeKeys, describeLive } from "./live.js";
 
 /** Chars per token, measured against `dsh-token-meter` on real checkpoint bodies. */
 const CHARS_PER_TOKEN = 3.9;
@@ -463,6 +464,9 @@ const ROUTE_APP = "/lcm-insight/app";
 /** Route for one session's report. */
 const ROUTE_SESSION = "/lcm-insight/session";
 
+/** Read and write the live-tunable configuration. */
+const ROUTE_CONFIG = "/lcm-insight/config";
+
 /** Skip a log bigger than this; inflating a huge log would block the event loop. */
 const MAX_LOG_BYTES = 96 * 1024 * 1024;
 
@@ -554,8 +558,96 @@ function sessionFiles() {
   return found.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-/** Reports keyed by file plus mtime, so a repaint does not re-inflate every log. */
+/**
+ * Reports keyed by file plus mtime, so a repaint does not re-inflate every log.
+ *
+ * Persisted to `<dsh home>/lcm-insight-cache.json`, because the process is what
+ * usually restarts: measured on 279 logs / 325 MB, a cold in-memory cache costs
+ * 16.8 s to rebuild (zstd inflate plus JSON.parse per 22 MB log) and every panel
+ * open after a restart paid it again. The persisted report is what
+ * {@link analyzeSession} already returns — a few hundred bytes each, 0.3 MB for
+ * the whole profile — so loading it is a single read and the expensive path only
+ * runs for a log whose mtime actually moved.
+ */
 const reportCache = new Map();
+
+/** Floor between two disk re-analyses of the same session while the panel polls. */
+const RECHECK_INTERVAL_MS = 30_000;
+
+/** Bumped when the persisted report shape changes; a mismatch is a cold start. */
+const REPORT_CACHE_VERSION = 1;
+
+/** Whether the on-disk report cache has been consulted in this process. */
+let reportCacheLoaded = false;
+
+/** Whether this process has added entries the file does not have yet. */
+let reportCacheDirty = false;
+
+/** Where the persisted reports live, beside the session logs they describe. */
+function reportCacheFile() {
+  return path.join(dshHome(), "lcm-insight-cache.json");
+}
+
+/**
+ * Load the persisted reports once per process.
+ *
+ * A missing, unreadable or version-mismatched file is a cold start, not an error:
+ * the cache only ever saves work, and every entry is re-validated against the
+ * log's mtime before it is trusted.
+ */
+function loadReportCache() {
+  if (reportCacheLoaded) return;
+  reportCacheLoaded = true;
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(reportCacheFile(), "utf8"));
+  } catch {
+    return;
+  }
+  if (parsed === null || typeof parsed !== "object" || parsed.version !== REPORT_CACHE_VERSION) return;
+  const entries = parsed.entries;
+  if (entries === null || typeof entries !== "object") return;
+  for (const [file, entry] of Object.entries(entries)) {
+    if (entry === null || typeof entry !== "object") continue;
+    if (typeof entry.mtimeMs !== "number") continue;
+    if (entry.report === undefined) continue;
+    // A deleted log must not survive in the cache forever: the file is the only
+    // thing that makes an entry meaningful, so entries are bounded by it.
+    try {
+      fs.accessSync(file);
+    } catch {
+      continue;
+    }
+    reportCache.set(file, { mtimeMs: entry.mtimeMs, report: entry.report });
+  }
+}
+
+/**
+ * Write the cache back, atomically and only when this process added something.
+ *
+ * Rewrite-through-rename: a half-written file would be discarded by the next
+ * load anyway (it would fail to parse), but a truncated one would also throw away
+ * every other entry, so the write is atomic rather than truncate-in-place.
+ */
+function saveReportCache() {
+  if (!reportCacheDirty) return;
+  reportCacheDirty = false;
+  const entries = {};
+  for (const [file, entry] of reportCache) {
+    if (typeof entry.mtimeMs !== "number") continue;
+    // `analysedAt` is per-process: a persisted timestamp from an earlier run would
+    // suppress the first refresh of a session that changed while dsh was down.
+    entries[file] = { mtimeMs: entry.mtimeMs, report: entry.report };
+  }
+  const target = reportCacheFile();
+  const tmp = target + ".tmp";
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ version: REPORT_CACHE_VERSION, entries }));
+    fs.renameSync(tmp, target);
+  } catch {
+    // The cache is an optimisation; failing to persist it must not fail the panel.
+  }
+}
 
 /**
  * Embedding coverage keyed by file plus mtime, like {@link reportCache}.
@@ -577,12 +669,35 @@ const COVERAGE_BUDGET_PER_REQUEST = 2;
  * @param mtimeMs - the stat that decides freshness.
  * @returns the report, or null when the log is unreadable.
  */
-function cachedReport(file, mtimeMs) {
+function cachedReport(file, mtimeMs, liveLog = null) {
+  loadReportCache();
+  // A session the host still holds is analysed from its in-memory log: the live
+  // session's file is 22 MB and is rewritten on every turn, so its mtime changes
+  // constantly and the disk path cost 1.4 s per poll. `log.length` is the same
+  // freshness signal without the inflate, and it grows monotonically.
+  const key = liveLog === null ? mtimeMs : "live:" + liveLog.length;
   const hit = reportCache.get(file);
-  if (hit !== undefined && hit.mtimeMs === mtimeMs) return hit.report;
-  const records = readLog(file);
-  const report = records === null ? null : analyzeSession(records.filter((record) => Number.isSafeInteger(record.seq)));
-  reportCache.set(file, { mtimeMs, report });
+  if (hit !== undefined && hit.mtimeMs === key) return hit.report;
+  // A log the host does NOT hold is re-analysed at most this often. The panel
+  // polls every 5 s and the live session's 22 MB file changes on every turn, so
+  // without a floor one open cost 1.4 s per poll. Staleness of half a minute is
+  // invisible in a table of checkpoint counts; re-inflating 22 MB five times a
+  // minute is not.
+  if (liveLog === null && hit !== undefined && Number.isFinite(hit.analysedAt)
+      && Date.now() - hit.analysedAt < RECHECK_INTERVAL_MS) {
+    return hit.report;
+  }
+  let report;
+  if (liveLog !== null) {
+    report = analyzeSession(liveLog.filter((record) => Number.isSafeInteger(record.seq)));
+  } else {
+    const records = readLog(file);
+    report = records === null ? null : analyzeSession(records.filter((record) => Number.isSafeInteger(record.seq)));
+  }
+  reportCache.set(file, { mtimeMs: key, report, analysedAt: Date.now() });
+  // A live entry is keyed by log length, not by an mtime, so it is meaningless to
+  // a later process: it would never match and would only bloat the file.
+  if (liveLog === null) reportCacheDirty = true;
   return report;
 }
 
@@ -601,10 +716,24 @@ function cachedReport(file, mtimeMs) {
  * @param sessionId - the session whose title is wanted.
  * @returns the title, or null when the cache has none.
  */
+/** Titles keyed by projection file plus mtime. */
+const titleCache = new Map();
+
 function sessionTitle(dir, sessionId) {
+  // Cached by the projection file's mtime: measured at 99 ms for 293 files, this
+  // is paid on every repaint and the files almost never change.
+  const file = path.join(dir, sessionId + ".json");
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return null;
+  }
+  const cached = titleCache.get(file);
+  if (cached !== undefined && cached.mtimeMs === stat.mtimeMs) return cached.title;
   let text;
   try {
-    text = fs.readFileSync(path.join(dir, sessionId + ".json"), "utf8");
+    text = fs.readFileSync(file, "utf8");
   } catch {
     return null;
   }
@@ -612,12 +741,9 @@ function sessionTitle(dir, sessionId) {
   // the one field rather than parsing the whole document: a JSON.parse here would
   // cost more than every other read on this route combined.
   const match = /"title"\s*:\s*\{[^{}]*?"val"\s*:\s*"((?:[^"\\]|\\.)*)"/u.exec(text);
-  if (match === null) return null;
-  try {
-    return JSON.parse('"' + match[1] + '"');
-  } catch {
-    return null;
-  }
+  const title = match === null ? null : (() => { try { return JSON.parse('"' + match[1] + '"'); } catch { return null; } })();
+  titleCache.set(file, { mtimeMs: stat.mtimeMs, title });
+  return title;
 }
 
 /**
@@ -720,7 +846,8 @@ export async function livePressure(ctx, sessionId) {
   let measured;
   try {
     header = session.requestHeader();
-    measured = meter.measure(session, header);
+    measured = meter.measure(session);
+    if (measured === undefined || measured.totalTokens === undefined) measured = meter.measure(session, header);
   } catch {
     return null;
   }
@@ -763,6 +890,44 @@ export async function livePressure(ctx, sessionId) {
  * @param status - HTTP status.
  * @param body - serializable value.
  */
+/**
+ * Read and parse a JSON request body.
+ *
+ * Bounded on purpose: this endpoint writes configuration, and an unbounded body
+ * is the one way a local caller could make the host allocate without limit.
+ * @param req - the request.
+ * @returns the parsed body.
+ * @throws Error with a message the panel can show.
+ */
+function readJsonBody(req, limitBytes = 1 << 20) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(new Error("lcm live config: request body is too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("error", (error) => reject(error));
+    req.on("end", () => {
+      const text = Buffer.concat(chunks).toString("utf8").trim();
+      if (text === "") {
+        reject(new Error("lcm live config: empty request body"));
+        return;
+      }
+      try {
+        resolve(JSON.parse(text));
+      } catch {
+        reject(new Error("lcm live config: request body must be JSON"));
+      }
+    });
+  });
+}
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -790,6 +955,57 @@ function refused(req, res, allowLan) {
   if (loopback) return false;
   sendJson(res, 403, { error: "lcm insight is loopback-only; set allowLanAccess to serve it" });
   return true;
+}
+
+/**
+ * Fold every session log the panel will ask about, in the background.
+ *
+ * The cold sweep is ~15 s on 279 logs / 325 MB, and paying it on the first panel
+ * open means the operator waits for it while looking at a spinner. Called once at
+ * row activation it happens while nobody is looking, and the persisted cache makes
+ * the NEXT process skip it entirely — so this is the last cold sweep a machine
+ * ever pays unless the corpus grows.
+ *
+ * One session per macrotask: measured, a tight loop froze the host for 6.1 s
+ * because zstd inflate and JSON.parse are synchronous; yielding per session brings
+ * the longest stall to 1.5 s, which is one big log's own cost.
+ * @param ctx - the plugin context, for the live session list.
+ * @param resolved - the tool row's resolved config.
+ * @returns `{ analysed, skipped }` counts.
+ */
+export async function warmReports(ctx, resolved) {
+  loadReportCache();
+  const cwd = process.cwd();
+  const home = dshHome();
+  const titleDir = firstExisting([path.join(home, "storages", "session_projcache", "sessions")]);
+  const vector = resolved.enabled === true ? resolveVectorConfig(resolved) : null;
+  const digests = vector === null ? null : cachedDigests(vectorCacheDirOf(vector));
+  const liveSessions = new Map((ctx.get("sessions")?.list() ?? []).map((session) => [session.id, session]));
+  const since = Date.now() - RECENT_WINDOW_MS;
+  let analysed = 0;
+  let skipped = 0;
+  for (const entry of sessionFiles()) {
+    if (entry.mtimeMs < since) {
+      skipped += 1;
+      continue;
+    }
+    const liveLog = liveSessions.get(entry.id)?.log ?? null;
+    const before = reportCache.get(entry.file);
+    cachedReport(entry.file, entry.mtimeMs, liveLog);
+    if (reportCache.get(entry.file) !== before) analysed += 1;
+    // Titles are read on every repaint; warming them costs 99 ms once.
+    if (titleDir !== null) sessionTitle(titleDir, entry.id);
+    if (vector !== null && digests !== null && !coverageCache.has(entry.file)) {
+      const records = liveLog ?? readLog(entry.file) ?? [];
+      coverageCache.set(entry.file, {
+        mtimeMs: entry.mtimeMs,
+        coverage: embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests)
+      });
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  saveReportCache();
+  return { analysed, skipped };
 }
 
 /**
@@ -838,7 +1054,10 @@ export function insightRoutes(ctx, resolved) {
           const rollups = sidecarCounts(rollupDir);
           const assertions = sidecarCounts(assertionDir);
           const since = Date.now() - RECENT_WINDOW_MS;
-          const held = new Set((ctx.get("sessions")?.list() ?? []).map((session) => session.id));
+          // Live sessions by id: their in-memory log is what the report is built
+          // from, which skips re-inflating a file the host is still writing.
+          const liveSessions = new Map((ctx.get("sessions")?.list() ?? []).map((session) => [session.id, session]));
+          const held = new Set(liveSessions.keys());
           const recent = sessionFiles().filter((entry) => entry.mtimeMs >= since);
           // Coverage is measured incrementally: each request analysises at most
           // COVERAGE_BUDGET_PER_REQUEST sessions it has not seen at this mtime, and the
@@ -847,7 +1066,14 @@ export function insightRoutes(ctx, resolved) {
           let budget = COVERAGE_BUDGET_PER_REQUEST;
           let covered = 0;
           const sessions = [];
+          let yielded = 0;
           for (const entry of recent) {
+            // A cold sweep folds 325 MB of logs. Done in one synchronous pass it
+            // freezes the WHOLE host for ~15 s — the panel is not merely slow, dsh
+            // stops answering. Yielding every few sessions keeps the process live;
+            // the cost is a few ms of scheduling across the sweep.
+            yielded += 1;
+            await new Promise((resolve) => setImmediate(resolve));
             const pressure = held.has(entry.id) ? await livePressure(ctx, entry.id) : null;
             let embedding = null;
             if (vector !== null && digests !== null) {
@@ -866,7 +1092,7 @@ export function insightRoutes(ctx, resolved) {
             sessions.push({
               id: entry.id,
               title: sessionTitle(titleDir, entry.id),
-              report: cachedReport(entry.file, entry.mtimeMs),
+              report: cachedReport(entry.file, entry.mtimeMs, liveSessions.get(entry.id)?.log ?? null),
               tokens: pressure?.tokens ?? null,
               threshold: pressure?.threshold ?? null,
               embedding
@@ -907,6 +1133,9 @@ export function insightRoutes(ctx, resolved) {
             };
           });
           body.held = held.size;
+          // Persist after the response is composed: the write is a few hundred
+          // kilobytes and must never delay the first paint of the panel.
+          saveReportCache();
           sendJson(res, 200, body);
         } catch (error) {
           sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
@@ -938,7 +1167,10 @@ export function insightRoutes(ctx, resolved) {
           sendJson(res, 404, { error: "no log for " + id });
           return;
         }
-        const report = cachedReport(entry.file, entry.mtimeMs);
+        // Same live-log path as the app view: opening the live session's own row
+        // must not re-inflate a 22 MB file the host already holds in memory.
+        const liveSession = ctx.get("sessions")?.get?.(id) ?? null;
+        const report = cachedReport(entry.file, entry.mtimeMs, liveSession?.log ?? null);
         if (report === null) {
           sendJson(res, 500, { error: "the log for " + id + " could not be read" });
           return;
@@ -974,6 +1206,42 @@ export function insightRoutes(ctx, resolved) {
           rollups: rollups.get(id) ?? 0,
           assertions: assertions.get(id) ?? 0
         });
+      }
+    },
+    // ── live configuration ────────────────────────────────────────────────
+    // The panel edits the same keys the patch file sets, without a restart. GET
+    // returns the whitelist plus the rows' current effective values; POST applies
+    // a patch through the owning rows' own resolvers, so a value this endpoint
+    // accepts is a value the engine will actually use.
+    {
+      kind: "exact",
+      path: ROUTE_CONFIG,
+      async handler(req, res) {
+        if (refused(req, res, allowLan)) return;
+        if (req.method === "GET") {
+          sendJson(res, 200, { keys: describeKeys(), values: describeLive() });
+          return;
+        }
+        if (req.method !== "POST") {
+          sendJson(res, 405, { error: "GET or POST only" });
+          return;
+        }
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (error) {
+          sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        try {
+          const result = applyLive(body);
+          sendJson(res, 200, { ok: true, values: result.values });
+        } catch (error) {
+          // The row's own resolver message, verbatim: it names the key and the rule,
+          // and paraphrasing it here is how a panel starts lying about why a value
+          // was refused.
+          sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+        }
       }
     }
   ];

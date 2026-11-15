@@ -32,6 +32,7 @@ import { appendAssertions, buildAssertionInstruction, markMined, parseAssertions
 import { appendRollup, buildRollupInstruction, buildRollupRecord, isChronology, pendingRollups, planDayRollups, readRollups } from "./rollup.js";
 import { assertNoActiveCompaction, compactSurfaceRegion, prepareCompaction, selectCompactableRange, validateSurfaceRegion } from "./region.js";
 import { SUMMARY_SKELETON, summarizeLeaf } from "./summarize.js";
+import { HOT_KEYS, hotKeysFor, overlayFor, registerLiveConsumer } from "./live.js";
 
 export { TargetPressureConfigError, resolveCompactSpec, resolveConfig, resolveTargetPolicy };
 
@@ -358,6 +359,30 @@ const modelPolicy = z.object({
  * durable mutation strategy stay fixed so every pricing decision uses the
  * singleton token meter.
  */
+/**
+ * Merge declared config, the panel's overlay and one patch, honouring exclusivity.
+ *
+ * `retainRatio` and `retainTokens` are mutually exclusive in the resolver, and the
+ * merge is where both can end up present: the patch file may declare the ratio
+ * while the panel saved the token count. Deleting the loser here keeps a boot from
+ * throwing on a file the panel itself wrote.
+ * @param declared - the row's configuration as composed from the patch files.
+ * @param overlay - the panel's saved overrides, if any.
+ * @param patch - one live edit, when this is a write rather than a boot.
+ * @returns a configuration object safe to hand to `resolveConfig`.
+ */
+export function mergeCompactionConfig(declared, overlay, patch = {}) {
+  const merged = { ...declared, ...overlay, ...patch };
+  const tokensWins = Object.hasOwn(patch, "retainTokens") ? true
+    : Object.hasOwn(patch, "retainRatio") ? false
+      : Object.hasOwn(overlay, "retainTokens") ? true
+        : Object.hasOwn(overlay, "retainRatio") ? false
+          : undefined;
+  if (tokensWins === true) delete merged.retainRatio;
+  else if (tokensWins === false) delete merged.retainTokens;
+  return merged;
+}
+
 export class LcmCompactionEngine extends CompactionEngine {
   static inject = [
     "llm",
@@ -476,7 +501,11 @@ export class LcmCompactionEngine extends CompactionEngine {
   overflowAgents = new WeakMap();
   constructor(ctx, config = {}) {
     super(ctx);
-    this.config = resolveConfig(config);
+    // The declared configuration is kept beside the resolved one so a live patch
+    // re-resolves the same base instead of layering onto a config that already
+    // absorbed a previous patch (which would make "reset" unreachable).
+    this.declared = config;
+    this.config = resolveConfig(mergeCompactionConfig(config, overlayFor("compaction")));
     engineDebug(this.config, `constructed rev=${COMPILER_REV} debugLog=${this.config.debugLogPath} summaryRatio=${this.config.summaryRatio} cap=${this.config.checkpointCap}`);
     this._autoDisposer = null;
     this._autoActive = false;
@@ -484,6 +513,19 @@ export class LcmCompactionEngine extends CompactionEngine {
     // exists at all rather than re-deciding every step.
     this.stallBySession = new Map();
     this._syncAuto();
+    // The panel reaches this row through the live registry: the engine row and the
+    // tool row are separate Cordis rows, so a key on one of them has no other way
+    // to find the other's instance. Registration is an effect, so unloading the
+    // row also withdraws it from the panel's patch routing.
+    if (typeof this.ctx?.effect === "function") {
+      this.ctx.effect(() => registerLiveConsumer(
+        "compaction-lcm",
+        "compaction",
+        () => hotKeysFor("compaction"),
+        (patch, options) => this.applyConfig(patch, options),
+        () => this.describeLive()
+      ));
+    }
   }
   /** Register or dispose the automatic-compaction listeners with the `auto` flag. */
   _syncAuto() {
@@ -495,6 +537,38 @@ export class LcmCompactionEngine extends CompactionEngine {
     }
     this._autoActive = active;
     if (active) this._autoDisposer = this._registerAutomaticCompaction();
+  }
+  /**
+   * Absorb a live config patch from the panel, without a restart.
+   *
+   * Two-phase so a rejected value changes nothing: the dry run resolves and
+   * returns the commit closure, and only every row having resolved successfully
+   * makes the commits fire. Every read in this class is `this.config.key` at
+   * decision time, so swapping the reference is the whole mechanism; `auto`
+   * additionally re-registers the automatic listeners.
+   * @param patch - whitelisted key/value pairs.
+   * @param options - `{ dryRun }`; the panel's commit step calls without it.
+   * @returns a commit closure when `dryRun` is set, otherwise nothing.
+   */
+  applyConfig(patch, options = {}) {
+    // retainRatio and retainTokens are mutually exclusive in the resolver, so the
+    // panel must say which one it means: a patch naming one drops the other from
+    // the merged configuration. Without this, switching from ratio to tokens was
+    // impossible from the panel — the merge produced both and the resolver threw.
+    const next = resolveConfig(mergeCompactionConfig(this.declared, overlayFor("compaction"), patch));
+    const commit = () => {
+      this.config = next;
+      this._syncAuto();
+    };
+    if (options.dryRun === true) return commit;
+    commit();
+    return undefined;
+  }
+  /** Current effective values of the live-tunable keys this row owns. */
+  describeLive() {
+    const out = {};
+    for (const entry of HOT_KEYS) if (entry.surface === "compaction") out[entry.key] = this.config[entry.key];
+    return out;
   }
   /**
    * Register automatic between-step pressure, model-switch pressure, and
@@ -1210,7 +1284,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     if (target === undefined || target.provider.length === 0 || target.model.length === 0) return null;
     const policy = resolveTargetPolicy(this.config, target);
     const meter = this.ctx.tokenMeter;
-    let measurement = meter.measure(agent.session, header);
+    let measurement = meter.measure(agent.session);
     const prune = this.ctx.get("toolResultPruner");
     const info = await this.ctx.llm.resolveModelInfo(target.provider, target.model, signal);
     const context = info.context;
@@ -1235,7 +1309,7 @@ export class LcmCompactionEngine extends CompactionEngine {
     if (measurement.totalTokens < spec.thresholdTokens) return null;
     if (prune !== undefined) {
       prune.pruneSession(agent.session);
-      measurement = meter.measure(agent.session, header);
+      measurement = meter.measure(agent.session);
     }
     if (measurement.totalTokens < spec.thresholdTokens) {
       // Below the gate: whatever stalled is irrelevant now, and the next crossing

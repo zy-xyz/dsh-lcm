@@ -138,7 +138,11 @@ test("the vector layer is detected from the RESOLVED field name", () => {
 
 test("the routes are built from config and refuse a non-GET", async () => {
   const routes = insightRoutes({ get: () => undefined }, resolveConfig({}));
-  assert.equal(routes.length, 2, "one route per view");
+  // Two read-only views plus the live-config endpoint. The config route accepts a
+  // POST on purpose — it is the only writable surface this plugin exposes.
+  assert.equal(routes.length, 3, "one route per view, plus the config endpoint");
+  const config = routes.find((route) => route.path === "/lcm-insight/config");
+  assert.notEqual(config, undefined, "the live-config route is registered");
   const app = routes.find((route) => route.path === "/lcm-insight/app");
   assert.notEqual(app, undefined);
 

@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.38.0 — 2026-11-15 — the panel becomes a control surface, and stops costing 16 s to open
+
+Two things the sidebar panel could not do: change anything, and open quickly.
+
+### Added — a live config tab (`src/live.js`, `POST /lcm-insight/config`)
+
+The engine row and the tool/command rows are separate Cordis rows with separate
+configs, both resolved once at load. Resolved configs are read as `cfg.key` at
+decision time everywhere, never destructured at construction, so swapping the
+resolved object in place is the whole mechanism — no row reload, no restart.
+
+56 keys are editable, 24 of them with a note saying what changing them at runtime
+means. Two-phase commit: every touched row dry-runs through its OWN resolver first,
+and only when all accept is the overlay written and the commits fired. A refused
+value changes nothing, rather than leaving the process half-patched with a file
+holding a value no row accepted.
+
+`retainRatio` and `retainTokens` are mutually exclusive in the resolver and the
+merge is where both can end up present (patch file says one, the panel saved the
+other), so `mergeCompactionConfig` deletes the loser — otherwise switching from
+ratio to tokens from the panel was impossible: the merge produced both and the
+resolver threw.
+
+Edits persist to `~/.dsh/lcm-live.json` and every row merges its slice before
+resolving, so a panel value is also what a freshly booted process starts with.
+
+`legacyNames` is the one key that still needs a restart: the aliases are chosen at
+tool registration. The panel says so on that field.
+
+### Changed — the report cache survives the process (`src/insight.js`)
+
+Measured on this profile: 279 logs / 325 MB cost **16.8 s** to fold from cold,
+because every open re-inflated and re-parsed the whole corpus. The report is what
+`analyzeSession` already returns — a few hundred bytes, 0.3 MB for the profile — so
+it is now persisted to `~/.dsh/lcm-insight-cache.json` and validated per entry
+against the log's mtime.
+
+| scenario | before | after |
+|---|---:|---:|
+| first open after a restart | 16.8 s | **1.6 s** |
+| open while the host holds the live session | 1.4 s per poll | **12 ms** |
+| open with the cache warm | 99 ms | 12 ms |
+
+The live session is the one entry that never stops invalidating: 22 MB, rewritten
+on every turn. It is now analysed from `session.log` in memory (86 ms) instead of
+its file (636 ms), keyed by `log.length` rather than mtime.
+
+Two guards, both measured:
+
+- A 30 s floor between disk re-analyses of the same log. Without it one panel open
+  cost 1.4 s per 5 s poll, because the live session's mtime moves constantly.
+- The sweep yields to the event loop per session. A tight loop froze the whole host
+  for **6.1 s** — not a slow panel, a stopped dsh. Per-session yielding brings the
+  longest stall to 1.5 s, which is one big log's own inflate cost.
+
+Titles are cached by projection mtime (99 ms → 0 on hit), entries whose log is gone
+are pruned on load, and `analysedAt` is never persisted: a timestamp from an earlier
+run would suppress the first refresh of a session that changed while dsh was down.
+
+### Added — prewarm at row activation
+
+The first open after a restart no longer pays the cold sweep at all: `warmReports`
+folds the corpus one session per macrotask right after the routes register. Measured
+15.5 s in the background, longest stall 1.5 s, and the panel's first open is then
+**45 ms**. Combined with the persisted cache this is the last cold sweep a machine
+pays unless the corpus grows.
+
+
 ## 0.20.0 — 2026-11-13 — a fixed 2 000-token leaf target, like the reference
 
 Asked why the Hermes machine spends longer compacting and removes more per pass,
