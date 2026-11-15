@@ -910,6 +910,22 @@ test("a request is grouped by TOKENS, because the gateway caps the sum, not the 
   assert.equal(oversized[0].length, 1, "an oversized text is not dropped");
 });
 
+
+test("a caller can ask for a smaller request than the token cap", async () => {
+  // The cap (56 000 estimated) is what the gateway accepts, but a request also has
+  // to finish inside the per-request timeout. Measured on a corridor running at
+  // 270 characters/second, a 56k-token batch needs ~740 s against a 240 s ceiling,
+  // so every batch times out and the pass writes nothing.
+  const { groupIntoRequests } = await import("../src/vectors.js");
+  const cjk = "上".repeat(4000);
+  const texts = Array.from({ length: 20 }, () => cjk);
+  const wide = groupIntoRequests(texts);
+  const narrow = groupIntoRequests(texts, 12000);
+  assert.ok(narrow.length > wide.length, "a smaller budget yields more, smaller requests");
+  assert.equal(narrow.reduce((n, g) => n + g.length, 0), texts.length, "and still covers every text");
+  for (const group of narrow) assert.ok(group.length <= 3, "12 000 budget holds 3 texts of 4 000 CJK chars");
+});
+
 test("vectorCacheStats reports what is on disk, and pruneForeignVectorCaches drops a stale model", async () => {
   // No request is made here: these are the cache-management surfaces, and the
   // root is the layer's own directory.

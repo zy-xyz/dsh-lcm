@@ -77,9 +77,16 @@ for (const entry of sessions) {
   }
 }
 
-const groups = groupIntoRequests(pending);
+// 12 000 tokens per request, not 56 000. The cap is 65 536, but the cap is not the
+// binding constraint here: a request also has to finish inside vectorTimeoutMs
+// (240 s), and this corridor measured 270 characters/second, so a 56k-token batch
+// needs ~740 s and every batch times out. 12 000 tokens is ~3 long CJK texts,
+// ~45 s at that speed, with 5x headroom for the jitter (tiny requests measured
+// anywhere from 2.8 s to 36 s).
+const GROUPS_PER_REQUEST_TOKENS = Number(process.env.LCM_BACKFILL_REQUEST_TOKENS ?? 12_000);
+const groups = groupIntoRequests(pending, GROUPS_PER_REQUEST_TOKENS);
 log("queue: " + scannedSessions + " sessions | pending " + pending.length + " texts | " + groups.length + " groups | already cached " + alreadyCached);
-log("workers " + rv.concurrency + " | cache " + countCache() + " files");
+log("workers " + rv.concurrency + " | " + GROUPS_PER_REQUEST_TOKENS + " tokens/request | cache " + countCache() + " files");
 
 // ── drain the queue with a fixed worker pool ─────────────────────────────
 let cursor = 0;

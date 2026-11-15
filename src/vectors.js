@@ -254,15 +254,21 @@ export const MAX_EMBED_TOKENS = 56_000;
  * and the bisection in `embedTextsTolerant` is what isolates that one text instead
  * of dropping a whole batch. Silently skipping it would hide a real refusal.
  * @param texts - input strings, in order.
+ * @param maxTokens - the token ceiling for ONE request; defaults to
+ *   {@link MAX_EMBED_TOKENS}. A caller that knows its endpoint is slower than a
+ *   full batch passes a smaller budget, because the cap is not the only bound that
+ *   matters: a request must also finish inside the per-request timeout, and a
+ *   corridor running at 270 characters/second needs ~740 s for a 55k-token batch.
+ *   The count ceiling is unaffected.
  * @returns arrays whose concatenation is `texts`, each within both ceilings.
  */
-export function groupIntoRequests(texts) {
+export function groupIntoRequests(texts, maxTokens = MAX_EMBED_TOKENS) {
   const groups = [];
   let current = [];
   let tokens = 0;
   for (const text of texts) {
     const cost = estimateEntryTokens(text);
-    const wouldExceedTokens = tokens + cost > MAX_EMBED_TOKENS && current.length > 0;
+    const wouldExceedTokens = tokens + cost > maxTokens && current.length > 0;
     const wouldExceedCount = current.length >= MAX_EMBED_BATCH;
     if (wouldExceedTokens || wouldExceedCount) {
       groups.push(current);
