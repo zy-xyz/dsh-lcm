@@ -20,7 +20,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 
 import { embeddedIdOf, embeddedProbe, openVectorStore, storeVersion } from "./vector-store.js";
-import { VECTOR_TEXT_LIMIT, resolveVectorConfig } from "./vectors.js";
+import { VECTOR_TEXT_LIMIT, resolveVectorConfig, vectorCacheStats } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
 import { applyLive, describeKeys, describeLive } from "./live.js";
 
