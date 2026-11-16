@@ -180,11 +180,24 @@
         # applied by `groupIntoRequests`; this ceiling is only the wall clock, and
         # a refusal bisects.
         vectorTimeoutMs: 240000
-        # Requests in flight, sized to the credential pool: 19 accounts, so 19 is
-        # the most the gateway can serve without one request queueing behind
-        # another. Timeouts happen at every concurrency (they are the upstream
-        # model's own latency, not contention), so raising this only adds
-        # throughput — the per-request ceiling is what absorbs a slow batch.
+        # Requests in flight, sized to the credential pool: 19 accounts.
+        #
+        # Measured 2026-11-16, interleaved so the corridor's own drift could not
+        # masquerade as a concurrency effect (240 texts, 31 request groups, two
+        # rounds each):
+        #
+        #   19 in flight   51.4 then 58.6 texts/min
+        #    4 in flight   30.4 texts/min
+        #
+        # so 19 is ~1.7x the throughput of 4 on this deployment, which is what the
+        # credential pool predicts. The DEFAULT in code is 4 because a default
+        # cannot know a deployment's pool size; this row is where the topology
+        # belongs.
+        #
+        # A caution for whoever repeats the measurement: the first attempt used 30
+        # texts, which grouped into 4 requests, so both "levels" ran the same number
+        # of workers and the result (4 looked 1.9x faster) was pure time drift. A
+        # concurrency test needs MORE GROUPS THAN THE HIGHEST CONCURRENCY.
         vectorConcurrency: 19
     - id: lcm-compaction-gate
       name: dsh-lcm/gate
