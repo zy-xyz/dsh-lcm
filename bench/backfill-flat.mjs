@@ -14,7 +14,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { createHash } from "node:crypto";
 import { resolveConfig } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/tool.js";
-import { groupIntoRequests, resolveVectorConfig, vectorCacheDirOf, embedTextsTolerant } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/vectors.js";
+import { groupIntoRequests, resolveVectorConfig, embedTextsTolerant, vectorCache, vectorCacheStats } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/vectors.js";
 import { collectVectorItems } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/search.js";
 
 process.env.DSH_HOME = "/home/agent/.dsh";
@@ -29,8 +29,8 @@ const cfg = resolveConfig({
   vectorConcurrency: 19
 });
 const rv = resolveVectorConfig(cfg);
-const cacheDir = vectorCacheDirOf(rv);
-const countCache = () => { try { return fs.readdirSync(cacheDir).filter((n) => n.endsWith(".f32")).length; } catch { return 0; } };
+const cache = vectorCache(rv);
+const countCache = async () => (await vectorCacheStats(rv)).files;
 
 const LOG = "/tmp/lcm-backfill.log";
 const log = (line) => {
@@ -52,8 +52,11 @@ for (const w of fs.readdirSync(root, { withFileTypes: true })) {
 }
 sessions.sort((a, b) => b.m - a.m);
 
-const digests = new Set(fs.readdirSync(cacheDir).filter((n) => n.endsWith(".f32")).map((n) => n.slice(0, -4)));
-const keyOf = (text) => createHash("sha256").update(rv.model + "\n" + text, "utf8").digest("hex");
+const { allEmbeddedIds, openVectorStore } = await import("/home/agent/workspaces/lcmx-study/dsh-lcm/src/vector-store.js");
+const probe = openVectorStore(rv);
+const digests = allEmbeddedIds(probe);
+probe.db.close();
+const keyOf = cache.key;
 
 const pending = [];
 let scannedSessions = 0;
@@ -86,7 +89,7 @@ for (const entry of sessions) {
 const GROUPS_PER_REQUEST_TOKENS = Number(process.env.LCM_BACKFILL_REQUEST_TOKENS ?? 12_000);
 const groups = groupIntoRequests(pending, GROUPS_PER_REQUEST_TOKENS);
 log("queue: " + scannedSessions + " sessions | pending " + pending.length + " texts | " + groups.length + " groups | already cached " + alreadyCached);
-log("workers " + rv.concurrency + " | " + GROUPS_PER_REQUEST_TOKENS + " tokens/request | cache " + countCache() + " files");
+log("workers " + rv.concurrency + " | " + GROUPS_PER_REQUEST_TOKENS + " tokens/request | store " + (await countCache()) + " rows");
 
 // ── drain the queue with a fixed worker pool ─────────────────────────────
 let cursor = 0;
@@ -95,6 +98,7 @@ let failed = 0;
 let successesSinceFailure = 0;
 let consecutiveFailures = 0;
 let stopped = "";
+let rateLimited = 0;
 const t0 = Date.now();
 let lastReportAt = t0;
 // The first report waits a minute; without an interval the line only printed when
@@ -112,20 +116,35 @@ const worker = async () => {
       result = await embedTextsTolerant(cfg, batch);
       successesSinceFailure += 1;
       consecutiveFailures = 0;
+      if (rateLimited > 0) rateLimited = Math.max(0, rateLimited - 1);
     } catch (error) {
+      const message = String(error?.message ?? error);
+      // A 429 is the endpoint asking for a slower pace, not a dead endpoint. The
+      // breaker must not read it as one: measured, a run stopped 4 minutes in with
+      // "HTTP 429" after embedding 422 texts, while a direct probe minutes later
+      // answered 8/8. So a rate limit backs off, retries the SAME batch, and never
+      // counts toward the breaker.
+      if (message.includes("HTTP 429")) {
+        rateLimited += 1;
+        const wait = Math.min(60_000, 2_000 * 2 ** Math.min(rateLimited, 5));
+        log("429 on a batch of " + batch.length + ", waiting " + (wait / 1000).toFixed(0) + "s (rate limit #" + rateLimited + ")");
+        await new Promise((r) => setTimeout(r, wait));
+        cursor = index;      // put this batch back at the front of the queue
+        continue;
+      }
       failed += batch.length;
       consecutiveFailures += 1;
       // Same rule as the engine: a failure only counts when nothing has succeeded
       // since the previous one, so a live endpoint that drops a batch continues.
       const tripped = successesSinceFailure === 0 && consecutiveFailures >= 2;
       successesSinceFailure = 0;
-      if (tripped) { stopped = "failures: " + String(error.message).slice(0, 80); return; }
+      if (tripped) { stopped = "failures: " + message.slice(0, 80); return; }
       continue;
     }
     for (let i = 0; i < batch.length; i += 1) {
       const vector = result.vectors[i];
       if (vector === undefined) { failed += 1; continue; }
-      try { fs.writeFileSync(path.join(cacheDir, keyOf(batch[i]) + ".f32"), Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength)); embedded += 1; } catch { failed += 1; }
+      try { await cache.set(batch[i], vector); embedded += 1; } catch { failed += 1; }
     }
     const now = Date.now();
     if (now - lastReportAt >= 60_000) {
@@ -141,4 +160,5 @@ const worker = async () => {
 
 await Promise.all(Array.from({ length: Math.max(1, rv.concurrency) }, worker));
 const mins = ((Date.now() - t0) / 60000).toFixed(1);
-log("DONE: embedded " + embedded + ", failed " + failed + ", cache " + countCache() + " files in " + mins + "min" + (stopped ? " | stopped: " + stopped : ""));
+log("DONE: embedded " + embedded + ", failed " + failed + ", store " + (await countCache()) + " rows in " + mins + "min" + (stopped ? " | stopped: " + stopped : ""));
+cache.close();

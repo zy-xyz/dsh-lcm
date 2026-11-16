@@ -19,7 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
-import { VECTOR_TEXT_LIMIT, resolveVectorConfig, vectorCacheDirOf } from "./vectors.js";
+import { allEmbeddedIds, identityHashOf, openVectorStore, storeStats } from "./vector-store.js";
+import { VECTOR_TEXT_LIMIT, resolveVectorConfig } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
 import { applyLive, describeKeys, describeLive } from "./live.js";
 
@@ -385,76 +386,44 @@ export function analyzeApplication(sessions) {
  * @returns a Set of digests without the `.f32` suffix.
  */
 /**
- * The cached digests for one family directory, refreshed when that directory moves.
+ * Every embedded_id this model identity holds, and a generation that moves when it changes.
  *
- * The set IS the definition of "already embedded", and it changes on every search
- * and every backfill that writes a vector. Building it once at route registration
- * made the panel under-report for the rest of the process: measured here, five
- * vectors written after startup moved the cache count from 61 to 66 while the
- * embedded count stayed at 1136 across four polls.
+ * The set IS the definition of "already embedded". It used to be built from a
+ * directory listing of one file per vector; the store keeps the same answer in one
+ * indexed table, so the query returns the same identity space without a readdir.
  *
- * A rebuild is a readdir plus a Set of 20 000 names, measured at 60 ms, so it is
- * gated on the directory's own mtime — a 0.16 ms stat — rather than run per poll.
- * @param dir - the family directory, `<modelTag>-<dim>`.
- * @returns `{ digests, generation }`; the generation changes on every rebuild.
+ * The generation still exists: a search that writes a vector changes "already
+ * embedded" for every session at once, and a cached coverage measured against the
+ * old set would keep answering with it.
+ * @param cfg - resolved vector settings.
+ * @returns `{ digests, generation }`.
  */
-function digestsFor(dir) {
-  // The directory's own mtime is a 0.16 ms stat and answers the common case — the
-  // panel polling a cache that nothing is writing — without a readdir at all.
-  let mtimeMs;
+function digestsFor(cfg) {
+  const identity = identityHashOf(cfg);
+  let count;
   try {
-    mtimeMs = fs.statSync(dir).mtimeMs;
+    const store = openVectorStore(cfg);
+    try {
+      count = storeStats(store).entries;
+      if (digestCache.identity === identity && digestCache.count === count) {
+        return { digests: digestCache.digests, generation: digestCache.generation };
+      }
+      digestGeneration += 1;
+      digestCache = { identity, count, digests: allEmbeddedIds(store), generation: digestGeneration };
+      return { digests: digestCache.digests, generation: digestCache.generation };
+    } finally {
+      store.db.close();
+    }
   } catch {
     return { digests: digestCache.digests, generation: digestCache.generation };
   }
-  if (digestCache.dir === dir && digestCache.mtimeMs === mtimeMs) {
-    return { digests: digestCache.digests, generation: digestCache.generation };
-  }
-  let names;
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return { digests: digestCache.digests, generation: digestCache.generation };
-  }
-  // Merge instead of rebuild. A rebuild costs one readdir of the whole directory
-  // plus a fresh Set: measured 25 ms at 17 000 files, and that grows linearly —
-  // 120 000 files would be ~180 ms on every panel open. Merging is the same
-  // readdir (unavoidable: the directory has no "changed since" API) but adds only
-  // the names not already known, so the Set survives and the work is proportional
-  // to what was WRITTEN since the last call, which is a handful of files.
-  const known = digestCache.dir === dir ? digestCache.digests : new Set();
-  let added = 0;
-  for (const name of names) {
-    if (!name.endsWith(".f32")) continue;
-    const digest = name.slice(0, -4);
-    if (known.has(digest)) continue;
-    known.add(digest);
-    added += 1;
-  }
-  digestCache = { dir, mtimeMs, digests: known, generation: digestGeneration };
-  if (added > 0) digestGeneration += 1;
-  return { digests: known, generation: digestCache.generation };
 }
 
-/** The last digest set built, with the stat that says whether it is still current. */
-let digestCache = { dir: null, mtimeMs: -1, digests: new Set(), generation: 0 };
+/** The last id set built, keyed by model identity and its vector count. */
+let digestCache = { identity: null, count: -1, digests: new Set(), generation: 0 };
 
 /** Bumped on every rebuild, so a cached coverage knows it is out of date. */
 let digestGeneration = 0;
-
-function cachedDigests(dir) {
-  const digests = new Set();
-  let names;
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return digests;
-  }
-  for (const name of names) {
-    if (name.endsWith(".f32")) digests.add(name.slice(0, -4));
-  }
-  return digests;
-}
 
 /**
  * Embedding coverage for one session.
@@ -837,35 +806,6 @@ function sidecarCounts(dir) {
  * @param dir - `.lcm-vectors`.
  * @returns `[{ family, entries, bytes }]`.
  */
-function vectorStats(dir) {
-  let families;
-  try {
-    families = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const out = [];
-  for (const family of families) {
-    if (!family.isDirectory()) continue;
-    let entries = 0;
-    let bytes = 0;
-    try {
-      for (const entry of fs.readdirSync(path.join(dir, family.name))) {
-        if (!entry.endsWith(".f32")) continue;
-        entries += 1;
-        try {
-          bytes += fs.statSync(path.join(dir, family.name, entry)).size;
-        } catch {
-          // Raced with a write; the count still stands.
-        }
-      }
-    } catch {
-      continue;
-    }
-    out.push({ family: family.name, entries, bytes });
-  }
-  return out.sort((a, b) => b.entries - a.entries);
-}
 
 /**
  * The compaction threshold the engine would apply to one routed request.
@@ -1040,7 +980,7 @@ export async function warmReports(ctx, resolved) {
   // The FAMILY directory, not a frozen digest set: the set changes whenever a
   // search or a backfill writes a vector, and a snapshot taken at registration
   // reported a stale "already embedded" count for the rest of the process.
-  const vectorFamilyDir = vector === null ? null : vectorCacheDirOf(vector);
+  const vectorReady = vector !== null;
   const liveSessions = new Map((ctx.get("sessions")?.list() ?? []).map((session) => [session.id, session]));
   const since = Date.now() - RECENT_WINDOW_MS;
   let analysed = 0;
@@ -1085,15 +1025,7 @@ export function insightRoutes(ctx, resolved) {
   const home = dshHome();
   const rollupDir = firstExisting([resolved.rollupDir, path.join(cwd, ".lcm-rollups"), path.join(home, ".lcm-rollups")]);
   const assertionDir = firstExisting([path.join(cwd, ".lcm-assertions"), path.join(home, ".lcm-assertions")]);
-  // The ROOT, not the family directory: `vectorStats` iterates the model
-  // subdirectories under it, and handing it the family directory returned an empty
-  // list — the panel showed no cache at all. The root comes from the engine's own
-  // resolution so a pinned `vectorCacheDir` is what gets read.
-  const vectorDir = firstExisting([
-    path.dirname(vectorCacheDirOf(resolveVectorConfig(resolved))),
-    path.join(cwd, ".lcm-vectors"),
-    path.join(home, ".lcm-vectors")
-  ]);
+const vectorReadyForStats = resolved.enabled === true;
   const allowLan = resolved.allowLanAccess === true;
   // The vector layer's own resolution, so coverage is measured against the exact
   // model and width the search route uses. Off means the panel reports the layer as
@@ -1108,7 +1040,7 @@ export function insightRoutes(ctx, resolved) {
   // "already embedded", so it changes on every search and every backfill that
   // writes a vector; a snapshot taken here made the panel under-report for the
   // rest of the process. It is rebuilt per request, gated on the directory mtime.
-  const vectorFamilyDir = vector === null ? null : vectorCacheDirOf(vector);
+  const vectorReady = vector !== null;
   // Where the host keeps the titles the sidebar shows. Absent is normal: a profile
   // that has never rendered a session has no projection cache.
   const titleDir = firstExisting([path.join(home, "storages", "session_projcache", "sessions")]);
@@ -1127,7 +1059,7 @@ export function insightRoutes(ctx, resolved) {
           const rollups = sidecarCounts(rollupDir);
           const assertions = sidecarCounts(assertionDir);
           // Refreshed per request, but only rebuilt when the directory moved.
-          const digestState = vectorFamilyDir === null ? null : digestsFor(vectorFamilyDir);
+          const digestState = vectorReady ? digestsFor(vector) : null;
           const digests = digestState?.digests ?? null;
           const since = Date.now() - RECENT_WINDOW_MS;
           // Live sessions by id: their in-memory log is what the report is built
@@ -1192,7 +1124,7 @@ export function insightRoutes(ctx, resolved) {
             });
           }
           const body = analyzeApplication(sessions);
-          body.vectors = vectorStats(vectorDir);
+          body.vectors = vectorReadyForStats ? [await vectorCacheStats(resolveVectorConfig(resolved))] : [];
           body.embedding = {
             enabled: vector !== null,
             model: vector?.model ?? null,
@@ -1274,8 +1206,8 @@ export function insightRoutes(ctx, resolved) {
         // The session view is ONE session, so it pays for exact coverage and caches it
         // by mtime; a repeat poll on an unchanged log costs a map lookup.
         let embedding = null;
-        if (vector !== null && vectorFamilyDir !== null) {
-          const digestState = digestsFor(vectorFamilyDir);
+        if (vector !== null && vectorReady) {
+          const digestState = vectorReady ? digestsFor(vector) : null;
           const generation = digestState.generation;
           const hit = coverageCache.get(entry.file);
           if (hit !== undefined && hit.mtimeMs === entry.mtimeMs && hit.generation === generation) {

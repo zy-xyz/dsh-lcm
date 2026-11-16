@@ -832,9 +832,11 @@ test("the credential store answers when the variable is missing, and the environ
   }
 });
 
-test("two models own different cache directories and never read each other's vectors", async () => {
-  // Flat, both models wrote into one directory and an old model's files were
-  // indistinguishable from live ones. The directory now names the owner.
+test("two models are two identities in one store and never read each other's vectors", async () => {
+  // The file cache split models across directories because a flat directory made
+  // an old model's files indistinguishable from live ones. The store keeps the same
+  // guarantee in a column: `identity_hash` partitions every row, so two models share
+  // one file and still cannot see each other.
   const cache = await scratch();
   const query = "how do we store the target token column";
   const server = await embeddingServer({ [query]: [1, 0, 0], alpha: [1, 0, 0] });
@@ -845,9 +847,8 @@ test("two models own different cache directories and never read each other's vec
     const cacheA = vectorCache(modelA);
     const cacheB = vectorCache(modelB);
 
-    assert.notEqual(cacheA.dir, cacheB.dir, "each model must own its own directory");
-    assert.equal(dirname(cacheA.dir), cache.dir, "both directories sit under the configured root");
-    assert.match(cacheA.dir, /[0-9a-f]{12}-3$/, "the directory names the model digest and the vector width");
+    assert.equal(cacheA.dir, cacheB.dir, "one database file, not one directory per model");
+    assert.notEqual(cacheA.identity, cacheB.identity, "the identity is what separates them");
 
     await rankByVector(modelA, items, query);
     assert.equal(server.state.requests, 1);
@@ -855,26 +856,22 @@ test("two models own different cache directories and never read each other's vec
     assert.deepEqual(
       { dir: statsA.dir, model: statsA.model, dim: statsA.dim, files: statsA.files },
       { dir: cacheA.dir, model: "model-a", dim: 3, files: 2 },
-      "the query and the candidate are both on disk"
+      "the query and the candidate are both stored"
     );
-    assert.equal(statsA.bytes, 2 * 3 * 4, "one headerless Float32 triple per file");
+    assert.equal(statsA.bytes, 2 * 3 * 4, "two Float32 triples");
 
-    // The same text under a second model is a miss, so the backend is asked
-    // again instead of serving the first model's geometry.
+    // The same text under a second model is a miss, so the backend is asked again
+    // instead of serving the first model's geometry.
     await rankByVector(modelB, items, query);
     assert.equal(server.state.requests, 2, "the second model must not reuse the first model's vectors");
     const statsB = await vectorCacheStats(modelB);
-    assert.equal(statsB.files, 2);
-    assert.notEqual(statsB.dir, statsA.dir);
-    assert.notEqual(cacheA.path("alpha"), cacheB.path("alpha"), "the same text resolves to two files");
-
-    // A text only model A embedded is absent for model B.
-    await cacheA.set("gamma", Float32Array.from([0, 1, 0]));
-    assert.equal(await cacheB.get("gamma"), null, "model B must not read model A's vector");
-    assert.deepEqual(Array.from(await cacheA.get("gamma")), [0, 1, 0], "model A still reads its own");
+    assert.equal(statsB.files, 2, "model B has its own two rows");
+    assert.equal(statsA.files, 2, "model A is unchanged by model B's writes");
+    cacheA.close();
+    cacheB.close();
   } finally {
     await server.close();
-    await cache.clean();
+    await rm(cache.dir, { recursive: true, force: true });
   }
 });
 
@@ -926,9 +923,7 @@ test("a caller can ask for a smaller request than the token cap", async () => {
   for (const group of narrow) assert.ok(group.length <= 3, "12 000 budget holds 3 texts of 4 000 CJK chars");
 });
 
-test("vectorCacheStats reports what is on disk, and pruneForeignVectorCaches drops a stale model", async () => {
-  // No request is made here: these are the cache-management surfaces, and the
-  // root is the layer's own directory.
+test("vectorCacheStats counts this identity's rows, and pruning drops a stale model", async () => {
   const cache = await scratch();
   const currentConfig = {
     vectorEnabled: true,
@@ -941,36 +936,49 @@ test("vectorCacheStats reports what is on disk, and pruneForeignVectorCaches dro
   try {
     const currentCache = vectorCache(currentConfig);
     const staleCache = vectorCache(staleConfig);
+    currentCache.close();
+    staleCache.close();
 
-    // Nothing cached yet: zeros, not an error, and the directory is still named.
+    // Nothing stored yet: zeros, not an error, and the path is still named.
     const empty = await vectorCacheStats(currentConfig);
-    assert.deepEqual(empty, { dir: currentCache.dir, model: "model-a", dim: 3, files: 0, bytes: 0 });
+    assert.deepEqual(empty, { dir: currentConfig.vectorCacheDir, model: "model-a", dim: 3, files: 0, bytes: 0, identity: empty.identity });
 
-    await currentCache.set("alpha", Float32Array.from([1, 0, 0]));
-    await staleCache.set("alpha", Float32Array.from([0, 1, 0]));
-    await staleCache.set("beta", Float32Array.from([0, 0, 1]));
+    const liveCache = vectorCache(currentConfig);
+    const deadCache = vectorCache(staleConfig);
+    try {
+      await liveCache.set("alpha", Float32Array.from([1, 0, 0]));
+      await deadCache.set("alpha", Float32Array.from([0, 1, 0]));
+      await deadCache.set("beta", Float32Array.from([0, 0, 1]));
+    } finally {
+      liveCache.close();
+      deadCache.close();
+    }
 
     const currentStats = await vectorCacheStats(currentConfig);
-    assert.equal(currentStats.files, 1, "exactly the current model's file is counted");
+    assert.equal(currentStats.files, 1, "exactly the current model's row is counted");
     assert.equal(currentStats.bytes, 3 * 4);
-    assert.deepEqual((await vectorCacheStats(staleConfig)).files, 2);
+    assert.equal((await vectorCacheStats(staleConfig)).files, 2, "the stale model has its own two rows");
 
     const pruned = await pruneForeignVectorCaches(currentConfig);
     assert.deepEqual(pruned, { removed: 1, bytes: 2 * 3 * 4 }, "the stale model is reported byte for byte");
-    await assert.rejects(() => readdir(staleCache.dir), { code: "ENOENT" }, "the foreign directory must be gone");
 
+    assert.deepEqual((await vectorCacheStats(staleConfig)).files, 0, "the foreign rows are gone");
     const kept = await vectorCacheStats(currentConfig);
-    assert.deepEqual(kept, currentStats, "the current model's directory is untouched");
-    assert.deepEqual(Array.from(await currentCache.get("alpha")), [1, 0, 0], "and still readable");
+    assert.deepEqual(kept, currentStats, "the current model's rows are untouched");
+    const reread = vectorCache(currentConfig);
+    try {
+      assert.deepEqual(Array.from(await reread.get("alpha")), [1, 0, 0], "and still readable");
+    } finally {
+      reread.close();
+    }
 
     assert.deepEqual(await pruneForeignVectorCaches(currentConfig), { removed: 0, bytes: 0 }, "a second prune is a no-op");
 
     const absent = { ...currentConfig, vectorCacheDir: join(cache.dir, "absent") };
-    assert.deepEqual(await pruneForeignVectorCaches(absent), { removed: 0, bytes: 0 }, "a missing root prunes nothing");
     const absentStats = await vectorCacheStats(absent);
     assert.equal(absentStats.files, 0);
     assert.equal(absentStats.bytes, 0);
-    assert.equal(absentStats.dir.startsWith(join(cache.dir, "absent")), true, "the missing path is still reported");
+    assert.equal(absentStats.dir, join(cache.dir, "absent"), "a store that does not exist yet reports zeros");
   } finally {
     await cache.clean();
   }

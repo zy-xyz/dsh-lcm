@@ -90,14 +90,14 @@ test("a spent coverage budget keeps the last number instead of dropping it", asy
   assert.match(source, /embedding = hit\.coverage;\n\s*\}\n\s*\}/u, "and assigns it rather than leaving null");
 });
 
-test("the digest set follows the cache directory, not the process start", async () => {
+test("the digest set follows the store, not the process start", async () => {
   // The set IS the definition of "already embedded". A snapshot taken at route
-  // registration made five vectors written after startup invisible for the rest of
-  // the process: the cache count moved 61 -> 66 while the embedded count stayed put.
+  // registration made vectors written after startup invisible for the rest of the
+  // process: the cache count moved 61 -> 66 while the embedded count stayed put.
   const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
-  assert.match(source, /function digestsFor\(dir\)/u, "the refresh helper exists");
-  assert.match(source, /fs\.statSync\(dir\)\.mtimeMs/u, "it is gated on the directory's mtime");
-  assert.match(source, /digestCache\.mtimeMs === mtimeMs/u, "and rebuilds only when that moved");
+  assert.match(source, /function digestsFor\(cfg\)/u, "the refresh helper exists");
+  assert.match(source, /allEmbeddedIds\(store\)/u, "it reads the ids from the store");
+  assert.match(source, /digestCache\.count === count/u, "and only rebuilds when the row count moved");
   assert.match(source, /hit\.generation === generation/u, "cached coverage knows which set it was measured against");
 });
 
@@ -111,13 +111,13 @@ test("the default vector cache lives under the dsh home, not the process cwd", a
 });
 
 
-test("the cache panel reads the ROOT, because vectorStats iterates model subdirectories", async () => {
-  // Measured defect, introduced while fixing the cache path: handing vectorStats
-  // the family directory (…/<tag>-<dim>) instead of its parent returned [] and the
-  // panel showed no cache at all — 109 files on disk, "0.00 MB" in the page.
+test("the cache panel reports the store's own count, not a directory listing", async () => {
+  // The panel used to walk `.f32` files under a guessed root, and handing it the
+  // wrong level returned [] — 109 files on disk, "0.00 MB" in the page. A table has
+  // no such failure mode: the count is the count of rows for this identity.
   const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
-  assert.match(source, /path\.dirname\(vectorCacheDirOf\(resolveVectorConfig\(resolved\)\)\)/u, "the root is the family directory's parent");
-  assert.doesNotMatch(source, /firstExisting\(\[vectorCacheDirOf\(resolveVectorConfig\(resolved\)\)/u, "never the family directory itself");
+  assert.match(source, /vectorCacheStats\(resolveVectorConfig\(resolved\)\)/u, "the panel asks the store");
+  assert.doesNotMatch(source, /vectorStats\(/u, "the directory walk is gone");
 });
 
 

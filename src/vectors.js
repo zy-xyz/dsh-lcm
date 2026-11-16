@@ -21,11 +21,12 @@
  * @module dsh-lcm/vectors
  */
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 import { estimateEntryTokens } from "./compiler.js";
+import { allEmbeddedIds, embeddedIdOf, openVectorStore, readVector, storeStats, writeVector } from "./vector-store.js";
 
 // ── defaults ───────────────────────────────────────────────────────────────
 
@@ -294,9 +295,6 @@ export const RRF_K = 60;
  * were embedded.
  */
 export const VECTOR_TEXT_LIMIT = 4000;
-
-/** Cache file suffix; the payload is little-endian Float32 with no header. */
-const CACHE_EXT = ".f32";
 
 /** Credential store file name inside the dsh home. */
 const CREDENTIAL_STORE_FILE = ".credentials.yaml";
@@ -962,22 +960,6 @@ function decodeEmbeddings(payload, cfg, url, expected) {
 
 // ── disk cache ─────────────────────────────────────────────────────────────
 
-/**
- * The directory one model owns under the cache root.
- *
- * Flat, every model wrote into one directory and an old model's files were
- * indistinguishable from live ones — visible bytes with an invisible owner.
- * Twelve hex characters of the model digest plus the vector width name the
- * owner, so two models never share a directory, a stale model can be deleted as
- * one unit, and the per-text key stays what it always was.
- *
- * @param resolved - resolved vector settings.
- * @returns absolute directory path for this model and width.
- */
-export function vectorCacheDirOf(resolved) {
-  const modelTag = createHash("sha256").update(resolved.model, "utf8").digest("hex").slice(0, 12);
-  return join(resolved.cacheDir, `${modelTag}-${resolved.dim}`);
-}
 
 /**
  * Open the content-addressed vector cache.
@@ -995,41 +977,23 @@ export function vectorCacheDirOf(resolved) {
  */
 export function vectorCache(cfg) {
   const resolved = resolveVectorConfig(cfg);
-  const dir = vectorCacheDirOf(resolved);
-  const digest = (text) => createHash("sha256").update(resolved.model + "\n" + String(text ?? ""), "utf8").digest("hex");
-  const fileOf = (text) => join(dir, digest(text) + CACHE_EXT);
+  const store = openVectorStore(resolved);
+  // Kept for callers that report where the cache lives; the directory now holds one
+  // database instead of one file per vector, so it is the STORE that identifies the
+  // position, not a path built from the text.
+  const dir = resolved.cacheDir;
 
-  /** Read one cached vector, or null on a miss, a short file, or bad bytes. */
+  /** Read one cached vector, or null on a miss. */
   async function get(text) {
-    let bytes;
-    try {
-      bytes = await readFile(fileOf(text));
-    } catch {
-      return null;
-    }
-    if (bytes.byteLength !== resolved.dim * 4) return null;
-    const vector = new Float32Array(resolved.dim);
-    for (let index = 0; index < resolved.dim; index += 1) vector[index] = bytes.readFloatLE(index * 4);
-    return vector;
+    return readVector(store, text);
   }
 
-  /** Atomically store one vector. */
+  /** Store one vector. */
   async function set(text, vector) {
     if (!(vector instanceof Float32Array) || vector.length !== resolved.dim) {
       throw new Error(`vector cache: expected a ${resolved.dim}-dimensional Float32Array`);
     }
-    await mkdir(dir, { recursive: true });
-    const target = fileOf(text);
-    const temp = `${target}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-    try {
-      const bytes = Buffer.alloc(vector.length * 4);
-      for (let index = 0; index < vector.length; index += 1) bytes.writeFloatLE(vector[index], index * 4);
-      await writeFile(temp, bytes);
-      await rename(temp, target);
-    } catch (error) {
-      await unlink(temp).catch(() => {});
-      throw error;
-    }
+    writeVector(store, text, vector);
   }
 
   /** Read many; missing entries are simply absent from the returned map. */
@@ -1047,7 +1011,20 @@ export function vectorCache(cfg) {
     for (const entry of entries ?? []) await set(entry.text, entry.vector);
   }
 
-  return { dir, model: resolved.model, key: digest, path: fileOf, get, set, getMany, setMany };
+  return {
+    dir,
+    model: resolved.model,
+    identity: store.identity,
+    // The key is still `embeddedIdOf`, but it no longer covers the model: the model
+    // is the `identity_hash` column, so the same text under two models is two rows
+    // rather than two keys.
+    key: embeddedIdOf,
+    get,
+    set,
+    getMany,
+    setMany,
+    close: () => store.db.close()
+  };
 }
 
 /**
@@ -1062,21 +1039,13 @@ export function vectorCache(cfg) {
  */
 export async function vectorCacheStats(cfg) {
   const resolved = resolveVectorConfig(cfg);
-  const dir = vectorCacheDirOf(resolved);
-  const report = { dir, model: resolved.model, dim: resolved.dim, files: 0, bytes: 0 };
-  let entries;
+  const store = openVectorStore(resolved);
   try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") return report;
-    throw error;
+    const stats = storeStats(store);
+    return { dir: resolved.cacheDir, model: resolved.model, dim: resolved.dim, files: stats.entries, bytes: stats.bytes, identity: store.identity };
+  } finally {
+    store.db.close();
   }
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(CACHE_EXT)) continue;
-    report.bytes += (await stat(join(dir, entry.name))).size;
-    report.files += 1;
-  }
-  return report;
 }
 
 /**
@@ -1092,48 +1061,47 @@ export async function vectorCacheStats(cfg) {
  */
 export async function pruneForeignVectorCaches(cfg) {
   const resolved = resolveVectorConfig(cfg);
-  const keep = basename(vectorCacheDirOf(resolved));
-  let entries;
+  const store = openVectorStore(resolved);
   try {
-    entries = await readdir(resolved.cacheDir, { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") return { removed: 0, bytes: 0 };
-    throw error;
+    // A foreign model is another identity_hash in the same table. Its vectors are
+    // dead weight for this configuration and it cannot be selected without its own
+    // config, so the rows go and the profile row is archived rather than deleted:
+    // switching the model back re-registers the identity and its vectors are gone,
+    // which is the documented cost of pruning.
+    // Only profiles that still hold vectors, so a second prune is a no-op: the
+    // first one archives the identity, and an archived identity has nothing left to
+    // report. Counting archived rows would make the return value say "removed 1"
+    // forever while deleting nothing.
+    const foreign = store.db.prepare(
+      "SELECT DISTINCT v.identity_hash AS identity_hash FROM lcm_embedding_vectors v WHERE v.identity_hash != ?"
+    ).all(store.identity);
+    let bytes = 0;
+    let removed = 0;
+    for (const row of foreign) {
+      const identity = String(row.identity_hash);
+      const size = store.db.prepare(
+        "SELECT COALESCE(SUM(LENGTH(vec)), 0) AS bytes FROM lcm_embedding_vectors WHERE identity_hash = ?"
+      ).get(identity);
+      bytes += Number(size?.bytes ?? 0);
+      store.db.exec("BEGIN IMMEDIATE");
+      try {
+        store.db.prepare("DELETE FROM lcm_embedding_vectors WHERE identity_hash = ?").run(identity);
+        store.db.prepare("DELETE FROM lcm_embedding_meta WHERE identity_hash = ?").run(identity);
+        store.db.prepare("UPDATE lcm_embedding_profile SET active = 0, archived_at = ? WHERE identity_hash = ?")
+          .run(new Date().toISOString(), identity);
+        store.db.exec("COMMIT");
+      } catch (error) {
+        store.db.exec("ROLLBACK");
+        throw error;
+      }
+      removed += 1;
+    }
+    return { removed, bytes };
+  } finally {
+    store.db.close();
   }
-  let removed = 0;
-  let bytes = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === keep) continue;
-    const path = join(resolved.cacheDir, entry.name);
-    bytes += await directoryBytes(path);
-    await rm(path, { recursive: true, force: true });
-    removed += 1;
-  }
-  return { removed, bytes };
 }
 
-/**
- * Total bytes of the regular files under one directory, recursively.
- *
- * @param dir - directory to measure.
- * @returns bytes, or 0 for a directory that vanished before it could be read.
- */
-async function directoryBytes(dir) {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (error?.code === "ENOENT") return 0;
-    throw error;
-  }
-  let total = 0;
-  for (const entry of entries) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) total += await directoryBytes(path);
-    else if (entry.isFile()) total += (await stat(path)).size;
-  }
-  return total;
-}
 
 // ── ranking ────────────────────────────────────────────────────────────────
 
