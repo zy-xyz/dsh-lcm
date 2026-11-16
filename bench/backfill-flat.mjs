@@ -99,6 +99,9 @@ let successesSinceFailure = 0;
 let consecutiveFailures = 0;
 let stopped = "";
 let rateLimited = 0;
+let transientRetries = 0;
+/** How many times one batch is retried on a timeout before it is counted failed. */
+const MAX_TRANSIENT_ATTEMPTS = 3;
 const t0 = Date.now();
 let lastReportAt = t0;
 // The first report waits a minute; without an interval the line only printed when
@@ -111,6 +114,7 @@ const worker = async () => {
     cursor += 1;
     if (index >= groups.length) return;
     const batch = groups[index];
+    let attempt = 0;
     let result;
     try {
       result = await embedTextsTolerant(cfg, batch);
@@ -130,6 +134,20 @@ const worker = async () => {
         log("429 on a batch of " + batch.length + ", waiting " + (wait / 1000).toFixed(0) + "s (rate limit #" + rateLimited + ")");
         await new Promise((r) => setTimeout(r, wait));
         cursor = index;      // put this batch back at the front of the queue
+        continue;
+      }
+      // A TIMEOUT is not a verdict on these bytes, and treating it as one loses
+      // them permanently: the driver moves on and the texts never come back. The
+      // endpoint measured 7.1 s, 40.3 s and two 90 s timeouts on five one-text
+      // probes within the same minute, so this is the corridor, not the payload.
+      // Retry the same batch a bounded number of times before counting it.
+      const transient = message.includes("timed out") || message.includes("aborted") || message.includes("unreachable");
+      if (transient && attempt < MAX_TRANSIENT_ATTEMPTS) {
+        attempt += 1;
+        transientRetries += 1;
+        const wait = 3_000 * attempt;
+        await new Promise((r) => setTimeout(r, wait));
+        cursor = index;      // same batch, back at the front
         continue;
       }
       failed += batch.length;
@@ -153,7 +171,7 @@ const worker = async () => {
       const rate = mins > 0 ? (embedded / (mins / 60)).toFixed(0) : "0";
       const left = pending.length - embedded - failed;
       const eta = embedded > 0 ? ((left / (embedded / mins)) / 60).toFixed(1) : "?";
-      log("progress: " + embedded + "/" + pending.length + " embedded, " + failed + " failed | " + mins.toFixed(1) + "min | " + rate + "/h | eta " + eta + "h");
+      log("progress: " + embedded + "/" + pending.length + " embedded, " + failed + " failed, " + transientRetries + " transient retries | " + mins.toFixed(1) + "min | " + rate + "/h | eta " + eta + "h");
     }
   }
 };
