@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
-import { allEmbeddedIds, identityHashOf, openVectorStore, storeStats } from "./vector-store.js";
+import { embeddedProbe, openVectorStore, storeVersion } from "./vector-store.js";
 import { VECTOR_TEXT_LIMIT, resolveVectorConfig } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
 import { applyLive, describeKeys, describeLive } from "./live.js";
@@ -386,44 +386,28 @@ export function analyzeApplication(sessions) {
  * @returns a Set of digests without the `.f32` suffix.
  */
 /**
- * Every embedded_id this model identity holds, and a generation that moves when it changes.
+ * A probe for "is this text embedded", and a generation that moves when it changes.
  *
- * The set IS the definition of "already embedded". It used to be built from a
- * directory listing of one file per vector; the store keeps the same answer in one
- * indexed table, so the query returns the same identity space without a readdir.
- *
- * The generation still exists: a search that writes a vector changes "already
- * embedded" for every session at once, and a cached coverage measured against the
- * old set would keep answering with it.
+ * This used to return the whole id set, which cost 358 ms at 41 000 rows and had to
+ * be rebuilt whenever a vector was written — during a backfill, every poll. A session
+ * has ~94 candidates and each is a primary-key lookup, so the probe asks about those
+ * instead: 0.9 ms warm. Being a probe rather than a snapshot also means it cannot
+ * answer with a stale set, which is what the generation used to guard.
  * @param cfg - resolved vector settings.
- * @returns `{ digests, generation }`.
+ * @returns `{ probe, generation, close }`, or null when the store is unavailable.
  */
-function digestsFor(cfg) {
-  const identity = identityHashOf(cfg);
-  let count;
+function embeddedStateFor(cfg) {
   try {
     const store = openVectorStore(cfg);
-    try {
-      count = storeStats(store).entries;
-      if (digestCache.identity === identity && digestCache.count === count) {
-        return { digests: digestCache.digests, generation: digestCache.generation };
-      }
-      digestGeneration += 1;
-      digestCache = { identity, count, digests: allEmbeddedIds(store), generation: digestGeneration };
-      return { digests: digestCache.digests, generation: digestCache.generation };
-    } finally {
-      store.db.close();
-    }
+    return {
+      probe: embeddedProbe(store),
+      generation: storeVersion(store),
+      close: () => store.db.close()
+    };
   } catch {
-    return { digests: digestCache.digests, generation: digestCache.generation };
+    return null;
   }
 }
-
-/** The last id set built, keyed by model identity and its vector count. */
-let digestCache = { identity: null, count: -1, digests: new Set(), generation: 0 };
-
-/** Bumped on every rebuild, so a cached coverage knows it is out of date. */
-let digestGeneration = 0;
 
 /**
  * Embedding coverage for one session.
@@ -439,7 +423,8 @@ let digestGeneration = 0;
  * a failure writes nothing. The panel says so rather than inventing a success rate.
  * @param events - the session log in seq order.
  * @param vector - the resolved vector config (`model`, `dim`, `cacheDir`).
- * @param digests - the cached digests for this family, from {@link cachedDigests}.
+ * @param digests - anything with `has(embeddedId)`: an {@link embeddedProbe}, or a Set
+ *   in tests. A probe is current; a Set is a snapshot.
  * @returns `{ candidates, embedded, pending, coverage }`.
  */
 export function embeddingCoverage(events, vector, digests) {
@@ -977,10 +962,13 @@ export async function warmReports(ctx, resolved) {
   const home = dshHome();
   const titleDir = firstExisting([path.join(home, "storages", "session_projcache", "sessions")]);
   const vector = resolved.enabled === true ? resolveVectorConfig(resolved) : null;
-  // The FAMILY directory, not a frozen digest set: the set changes whenever a
-  // search or a backfill writes a vector, and a snapshot taken at registration
-  // reported a stale "already embedded" count for the rest of the process.
+  // A PROBE, not a frozen digest set: a snapshot taken at registration reported a
+  // stale "already embedded" count for the rest of the process, and loading the
+  // whole set per poll cost 358 ms at 41 000 rows.
   const vectorReady = vector !== null;
+  // One probe for the whole sweep, closed at the end: opening a store per session
+  // would pay the schema check 279 times.
+  const digestState = vectorReady ? embeddedStateFor(vector) : null;
   const liveSessions = new Map((ctx.get("sessions")?.list() ?? []).map((session) => [session.id, session]));
   const since = Date.now() - RECENT_WINDOW_MS;
   let analysed = 0;
@@ -996,16 +984,17 @@ export async function warmReports(ctx, resolved) {
     if (reportCache.get(entry.file) !== before) analysed += 1;
     // Titles are read on every repaint; warming them costs 99 ms once.
     if (titleDir !== null) sessionTitle(titleDir, entry.id);
-    if (vector !== null && digests !== null && !coverageCache.has(entry.file)) {
+    if (vector !== null && digestState !== null && !coverageCache.has(entry.file)) {
       const records = liveLog ?? readLog(entry.file) ?? [];
       coverageCache.set(entry.file, {
         mtimeMs: entry.mtimeMs,
-        coverage: embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests)
+        coverage: embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digestState.probe)
       });
     }
     await new Promise((resolve) => setImmediate(resolve));
   }
   saveReportCache();
+  try { digestState?.close(); } catch {}
   return { analysed, skipped };
 }
 
@@ -1059,8 +1048,11 @@ const vectorReadyForStats = resolved.enabled === true;
           const rollups = sidecarCounts(rollupDir);
           const assertions = sidecarCounts(assertionDir);
           // Refreshed per request, but only rebuilt when the directory moved.
-          const digestState = vectorReady ? digestsFor(vector) : null;
-          const digests = digestState?.digests ?? null;
+          // A probe, not a set: it answers about the ~94 texts a session actually has
+          // instead of loading every id in the store (358 ms at 41 000 rows, and the
+          // backfill moved that count every poll).
+          const digestState = vectorReady ? embeddedStateFor(vector) : null;
+          const digests = digestState?.probe ?? null;
           const since = Date.now() - RECENT_WINDOW_MS;
           // Live sessions by id: their in-memory log is what the report is built
           // from, which skips re-inflating a file the host is still writing.
@@ -1207,14 +1199,14 @@ const vectorReadyForStats = resolved.enabled === true;
         // by mtime; a repeat poll on an unchanged log costs a map lookup.
         let embedding = null;
         if (vector !== null && vectorReady) {
-          const digestState = vectorReady ? digestsFor(vector) : null;
+          const digestState = vectorReady ? embeddedStateFor(vector) : null;
           const generation = digestState.generation;
           const hit = coverageCache.get(entry.file);
           if (hit !== undefined && hit.mtimeMs === entry.mtimeMs && hit.generation === generation) {
             embedding = hit.coverage;
           } else {
             const records = readLog(entry.file) ?? [];
-            embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digestState.digests);
+            embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digestState.probe);
             coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding, generation });
           }
         }

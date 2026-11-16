@@ -90,15 +90,18 @@ test("a spent coverage budget keeps the last number instead of dropping it", asy
   assert.match(source, /embedding = hit\.coverage;\n\s*\}\n\s*\}/u, "and assigns it rather than leaving null");
 });
 
-test("the digest set follows the store, not the process start", async () => {
+test("the embedded check is a probe, not a snapshot of every id", async () => {
   // The set IS the definition of "already embedded". A snapshot taken at route
   // registration made vectors written after startup invisible for the rest of the
   // process: the cache count moved 61 -> 66 while the embedded count stayed put.
   const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
-  assert.match(source, /function digestsFor\(cfg\)/u, "the refresh helper exists");
-  assert.match(source, /allEmbeddedIds\(store\)/u, "it reads the ids from the store");
-  assert.match(source, /digestCache\.count === count/u, "and only rebuilds when the row count moved");
-  assert.match(source, /hit\.generation === generation/u, "cached coverage knows which set it was measured against");
+  // A probe answers about the ~94 texts a session has, so there is nothing to keep
+  // fresh: loading 41 000 ids into a Set cost 358 ms and went stale on every write.
+  assert.match(source, /function embeddedStateFor\(cfg\)/u, "the probe helper exists");
+  assert.match(source, /embeddedProbe\(store\)/u, "it asks the store by primary key");
+  assert.match(source, /storeVersion\(store\)/u, "and takes a cheap generation for cache invalidation");
+  assert.doesNotMatch(source, /allEmbeddedIds\(/u, "the whole-table load is gone");
+  assert.match(source, /hit\.generation === generation/u, "cached coverage knows which generation it was measured against");
 });
 
 test("the default vector cache lives under the dsh home, not the process cwd", async () => {
