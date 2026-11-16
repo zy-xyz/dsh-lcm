@@ -101,7 +101,7 @@ let stopped = "";
 let rateLimited = 0;
 let transientRetries = 0;
 /** How many times one batch is retried on a timeout before it is counted failed. */
-const MAX_TRANSIENT_ATTEMPTS = 3;
+const MAX_TRANSIENT_ATTEMPTS = 4;
 const t0 = Date.now();
 let lastReportAt = t0;
 // The first report waits a minute; without an interval the line only printed when
@@ -141,7 +141,17 @@ const worker = async () => {
       // endpoint measured 7.1 s, 40.3 s and two 90 s timeouts on five one-text
       // probes within the same minute, so this is the corridor, not the payload.
       // Retry the same batch a bounded number of times before counting it.
-      const transient = message.includes("timed out") || message.includes("aborted") || message.includes("unreachable");
+      // What counts as "this corridor is having a moment" rather than "these bytes
+      // are unacceptable". A 5xx is the server failing, not a verdict on the payload:
+      // measured 2026-11-16, a run stopped with "returned HTTP 500" after embedding
+      // 1 637 texts, and the same texts embedded 35/35 minutes later. 429 is the same
+      // family and is handled above with its own backoff.
+      const transient =
+        message.includes("timed out") ||
+        message.includes("aborted") ||
+        message.includes("unreachable") ||
+        /returned HTTP 5\d\d/u.test(message) ||
+        message.includes("HTTP 429");
       if (transient && attempt < MAX_TRANSIENT_ATTEMPTS) {
         attempt += 1;
         transientRetries += 1;
