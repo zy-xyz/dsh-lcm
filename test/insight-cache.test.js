@@ -87,7 +87,9 @@ test("a spent coverage budget keeps the last number instead of dropping it", asy
   // a poll is not a measurement, it is a scheduling artifact.
   const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
   assert.match(source, /\} else if \(hit !== undefined\) \{/u, "the spent-budget branch keeps the previous coverage");
-  assert.match(source, /embedding = hit\.coverage;\n\s*\}\n\s*\}/u, "and assigns it rather than leaving null");
+  // It now re-derives the counts from the cached digests, so a vector written by a
+  // search shows up even when the budget cannot afford a re-measure.
+  assert.match(source, /embedding = coverageFrom\(hit\.digests, digests\);/u, "and recomputes it from the cached digests");
 });
 
 test("the embedded check is a probe, not a snapshot of every id", async () => {
@@ -101,7 +103,9 @@ test("the embedded check is a probe, not a snapshot of every id", async () => {
   assert.match(source, /embeddedProbe\(store\)/u, "it asks the store by primary key");
   assert.match(source, /storeVersion\(store\)/u, "and takes a cheap generation for cache invalidation");
   assert.doesNotMatch(source, /allEmbeddedIds\(/u, "the whole-table load is gone");
-  assert.match(source, /hit\.generation === generation/u, "cached coverage knows which generation it was measured against");
+  // The generation no longer guards the cached coverage: the digests depend on the
+  // log only, and the counts are derived per poll from the probe, which is current.
+  assert.match(source, /coverageFrom\(hit\.digests/u, "cached coverage is re-derived from its digests");
 });
 
 test("the default vector cache lives under the dsh home, not the process cwd", async () => {

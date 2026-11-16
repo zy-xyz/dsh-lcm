@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
-import { embeddedProbe, openVectorStore, storeVersion } from "./vector-store.js";
+import { embeddedIdOf, embeddedProbe, openVectorStore, storeVersion } from "./vector-store.js";
 import { VECTOR_TEXT_LIMIT, resolveVectorConfig } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
 import { applyLive, describeKeys, describeLive } from "./live.js";
@@ -427,7 +427,18 @@ function embeddedStateFor(cfg) {
  *   in tests. A probe is current; a Set is a snapshot.
  * @returns `{ candidates, embedded, pending, coverage }`.
  */
-export function embeddingCoverage(events, vector, digests) {
+/**
+ * The candidate texts of one session, as digests.
+ *
+ * This is the expensive half of coverage: it walks the log and renders every
+ * candidate's text (~600 ms on a 50 000-event session). What it produces depends
+ * ONLY on the log, which is why it is the thing worth caching and persisting.
+ * @param events - the session log in seq order.
+ * @param vector - resolved vector settings (for the model, though the digest is
+ *   text-only now).
+ * @returns an array of embedded_id digests, or null when the fold refuses.
+ */
+export function coverageCandidates(events, vector) {
   const session = {
     id: "coverage",
     snapshotEvents: () => events,
@@ -437,28 +448,47 @@ export function embeddingCoverage(events, vector, digests) {
   };
   let items;
   try {
-    const collected = collectVectorItems(session, { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER });
-    items = collected.items ?? [];
+    items = collectVectorItems(session, { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER }).items ?? [];
   } catch {
-    // A third-party replacement event the fold refuses; the engine degrades the same
-    // way, so report "unknown" rather than zero.
-    return { candidates: 0, embedded: 0, pending: 0, coverage: null };
+    return null;
   }
-  let candidates = 0;
-  let embedded = 0;
+  const digests = [];
   for (const item of items) {
     const text = String(item.text ?? "").slice(0, VECTOR_TEXT_LIMIT);
     if (text.trim().length === 0) continue;
-    candidates += 1;
-    const digest = createHash("sha256").update(vector.model + "\n" + text, "utf8").digest("hex");
-    if (digests.has(digest)) embedded += 1;
+    digests.push(embeddedIdOf(text));
   }
-  return {
-    candidates,
-    embedded,
-    pending: candidates - embedded,
-    coverage: candidates === 0 ? null : embedded / candidates
-  };
+  return digests;
+}
+
+/**
+ * Coverage for one session, from cached candidate digests and a live probe.
+ *
+ * The count of "already embedded" is derived on every call instead of being cached
+ * with the digests, because the two change for different reasons: the digests change
+ * when the LOG changes, the embedded count changes when a VECTOR is written. Caching
+ * the pair together meant a backfill invalidated the expensive half.
+ * @param digests - candidate digests, or null when the fold refused.
+ * @param probe - `{ has(embeddedId) }`, or a Set in tests.
+ * @returns `{ candidates, embedded, pending, coverage }`.
+ */
+export function coverageFrom(digests, probe) {
+  if (digests === null) return { candidates: 0, embedded: 0, pending: 0, coverage: null };
+  const candidates = digests.length;
+  let embedded = 0;
+  for (const digest of digests) if (probe.has(digest)) embedded += 1;
+  return { candidates, embedded, pending: candidates - embedded, coverage: candidates === 0 ? null : embedded / candidates };
+}
+
+/**
+ * One-shot coverage: the candidate digests and the counts together.
+ * @param events - the session log in seq order.
+ * @param vector - resolved vector settings.
+ * @param probe - anything with `has(embeddedId)`.
+ * @returns `{ candidates, embedded, pending, coverage }`.
+ */
+export function embeddingCoverage(events, vector, probe) {
+  return coverageFrom(coverageCandidates(events, vector), probe);
 }
 
 // ── the read-only HTTP surface ─────────────────────────────────────────────
@@ -632,6 +662,18 @@ function loadReportCache() {
     }
     reportCache.set(file, { mtimeMs: entry.mtimeMs, report: entry.report });
   }
+  // The digest lists ride along. They depend only on the log, so an entry whose
+  // mtime still matches is still valid — and it saves the inflate that made a cold
+  // open slow.
+  const coverage = parsed.coverage;
+  if (coverage !== null && typeof coverage === "object") {
+    for (const [file, entry] of Object.entries(coverage)) {
+      if (entry === null || typeof entry !== "object") continue;
+      if (typeof entry.mtimeMs !== "number" || !Array.isArray(entry.digests)) continue;
+      try { fs.accessSync(file); } catch { continue; }
+      coverageCache.set(file, { mtimeMs: entry.mtimeMs, digests: entry.digests });
+    }
+  }
 }
 
 /**
@@ -642,7 +684,8 @@ function loadReportCache() {
  * every other entry, so the write is atomic rather than truncate-in-place.
  */
 function saveReportCache() {
-  if (!reportCacheDirty) return;
+  if (!reportCacheDirty && !coverageCacheDirty) return;
+  coverageCacheDirty = false;
   reportCacheDirty = false;
   const entries = {};
   for (const [file, entry] of reportCache) {
@@ -651,10 +694,18 @@ function saveReportCache() {
     // suppress the first refresh of a session that changed while dsh was down.
     entries[file] = { mtimeMs: entry.mtimeMs, report: entry.report };
   }
+  // Coverage travels with it. Without this, every dsh restart re-inflates 279 logs
+  // two at a time across ~140 polls — which is exactly the "cold start is slow"
+  // complaint, and it was not the table scan.
+  const coverage = {};
+  for (const [file, entry] of coverageCache) {
+    if (typeof entry.mtimeMs !== "number" || !Array.isArray(entry.digests)) continue;
+    coverage[file] = { mtimeMs: entry.mtimeMs, digests: entry.digests };
+  }
   const target = reportCacheFile();
   const tmp = target + ".tmp";
   try {
-    fs.writeFileSync(tmp, JSON.stringify({ version: REPORT_CACHE_VERSION, entries }));
+    fs.writeFileSync(tmp, JSON.stringify({ version: REPORT_CACHE_VERSION, entries, coverage }));
     fs.renameSync(tmp, target);
   } catch {
     // The cache is an optimisation; failing to persist it must not fail the panel.
@@ -671,6 +722,9 @@ function saveReportCache() {
  * measured or absent — never a guess.
  */
 const coverageCache = new Map();
+
+/** Set when the digest cache gained an entry, so a restart does not re-inflate 279 logs. */
+let coverageCacheDirty = false;
 
 /** How many sessions one /lcm-insight/app request may analyse. */
 const COVERAGE_BUDGET_PER_REQUEST = 2;
@@ -1080,10 +1134,13 @@ const vectorReadyForStats = resolved.enabled === true;
               // Keyed by log mtime AND digest generation: a vector written by a
               // search changes "already embedded" for every session at once, so a
               // cache keyed by the log alone kept reporting the old coverage.
-              const generation = digestState?.generation ?? 0;
+              // The CANDIDATE DIGESTS are what the log decides and what costs 600 ms to
+              // rebuild; the embedded count is derived from the probe, which is 0.9 ms
+              // and always current. Caching the pair together meant a backfill (which
+              // changes the count, not the log) threw the expensive half away.
               const hit = coverageCache.get(entry.file);
-              if (hit !== undefined && hit.mtimeMs === entry.mtimeMs && hit.generation === generation) {
-                embedding = hit.coverage;
+              if (hit !== undefined && hit.mtimeMs === entry.mtimeMs) {
+                embedding = coverageFrom(hit.digests, digests);
                 covered += 1;
               } else if (budget > 0) {
                 budget -= 1;
@@ -1093,8 +1150,10 @@ const vectorReadyForStats = resolved.enabled === true;
                 // the same work, so the inflate is pure loss on every poll.
                 const liveLog = liveSessions.get(entry.id)?.log ?? null;
                 const records = liveLog ?? readLog(entry.file) ?? [];
-                embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digests);
-                coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding, generation });
+                const candidates = coverageCandidates(records.filter((record) => Number.isSafeInteger(record.seq)), vector);
+                embedding = coverageFrom(candidates, digests);
+                coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, digests: candidates });
+                coverageCacheDirty = true;
                 covered += 1;
               } else if (hit !== undefined) {
                 // The budget for this request is spent, but the previous number is
@@ -1103,7 +1162,7 @@ const vectorReadyForStats = resolved.enabled === true;
                 // sessions took candidates from 139 468 to 97 884 and back, purely
                 // because the sum only covered the sessions measured in that pass.
                 // A number one poll old is honest; a total that halves is not.
-                embedding = hit.coverage;
+                embedding = coverageFrom(hit.digests, digests);
               }
             }
             sessions.push({
@@ -1200,14 +1259,15 @@ const vectorReadyForStats = resolved.enabled === true;
         let embedding = null;
         if (vector !== null && vectorReady) {
           const digestState = vectorReady ? embeddedStateFor(vector) : null;
-          const generation = digestState.generation;
           const hit = coverageCache.get(entry.file);
-          if (hit !== undefined && hit.mtimeMs === entry.mtimeMs && hit.generation === generation) {
-            embedding = hit.coverage;
+          if (hit !== undefined && hit.mtimeMs === entry.mtimeMs) {
+            embedding = coverageFrom(hit.digests, digestState.probe);
           } else {
             const records = readLog(entry.file) ?? [];
-            embedding = embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digestState.probe);
-            coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, coverage: embedding, generation });
+            const candidates = coverageCandidates(records.filter((record) => Number.isSafeInteger(record.seq)), vector);
+            embedding = coverageFrom(candidates, digestState.probe);
+            coverageCache.set(entry.file, { mtimeMs: entry.mtimeMs, digests: candidates });
+            coverageCacheDirty = true;
           }
         }
         sendJson(res, 200, {

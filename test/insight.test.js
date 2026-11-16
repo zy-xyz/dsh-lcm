@@ -223,13 +223,14 @@ test("embedding coverage is measured against the cache, never inferred", () => {
   assert.equal(empty.pending, empty.candidates);
   assert.equal(empty.coverage, 0);
 
-  // With every digest present, coverage is complete. The digest is the engine's own
-  // key: sha256(model + "\n" + text-slice).
+  // With every digest present, coverage is complete. The digest is the text ALONE:
+  // the model is now a separate partition key (lcm-x's identity_hash), so switching
+  // models no longer orphans every vector.
   const digests = new Set();
   for (const seq of [1, 2]) {
     const message = events[seq - 1].data.message;
     const text = message.content[0].text.slice(0, 4000);
-    digests.add(createHash("sha256").update(vector.model + "\n" + text, "utf8").digest("hex"));
+    digests.add(createHash("sha256").update(text, "utf8").digest("hex"));
   }
   const full = embeddingCoverage(events, vector, digests);
   assert.equal(full.embedded, full.candidates, "every candidate found in the cache");
