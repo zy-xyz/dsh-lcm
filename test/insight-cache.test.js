@@ -97,14 +97,14 @@ test("the embedded check is a probe, not a snapshot of every id", async () => {
   // registration made vectors written after startup invisible for the rest of the
   // process: the cache count moved 61 -> 66 while the embedded count stayed put.
   const source = fs.readFileSync(path.join(process.cwd(), "src", "insight.js"), "utf8");
-  // A probe answers about the ~94 texts a session has, so there is nothing to keep
-  // fresh: loading 41 000 ids into a Set cost 358 ms and went stale on every write.
-  assert.match(source, /function embeddedStateFor\(cfg\)/u, "the probe helper exists");
-  assert.match(source, /embeddedProbe\(store\)/u, "it asks the store by primary key");
-  assert.match(source, /storeVersion\(store\)/u, "and takes a cheap generation for cache invalidation");
-  assert.doesNotMatch(source, /allEmbeddedIds\(/u, "the whole-table load is gone");
-  // The generation no longer guards the cached coverage: the digests depend on the
-  // log only, and the counts are derived per poll from the probe, which is current.
+  // Per-candidate lookups were 144 096 point queries per poll (measured 15.9 s). One
+  // SELECT of every id costs 504 ms and the counts then come from a Set in 58 ms, so
+  // the set is loaded once and reused until data_version moves.
+  assert.match(source, /function embeddedStateFor\(cfg\)/u, "the state helper exists");
+  assert.match(source, /allEmbeddedIds\(store\)/u, "it loads the ids in one query");
+  assert.match(source, /idCache\.version === version/u, "and reuses them until the store version moves");
+  assert.match(source, /storeVersion\(store\)/u, "the version is one row read");
+  assert.doesNotMatch(source, /embeddedProbe\(store\)/u, "the per-candidate probe is gone");
   assert.match(source, /coverageFrom\(hit\.digests/u, "cached coverage is re-derived from its digests");
 });
 

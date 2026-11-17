@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 
-import { embeddedIdOf, embeddedProbe, openVectorStore, storeVersion } from "./vector-store.js";
+import { allEmbeddedIds, embeddedIdOf, openVectorStore, storeVersion } from "./vector-store.js";
 import { VECTOR_TEXT_LIMIT, resolveVectorConfig, vectorCacheStats } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
 import { applyLive, describeKeys, describeLive } from "./live.js";
@@ -386,28 +386,47 @@ export function analyzeApplication(sessions) {
  * @returns a Set of digests without the `.f32` suffix.
  */
 /**
- * A probe for "is this text embedded", and a generation that moves when it changes.
+ * The embedded-id set, rebuilt only when the store says it changed.
  *
- * This used to return the whole id set, which cost 358 ms at 41 000 rows and had to
- * be rebuilt whenever a vector was written — during a backfill, every poll. A session
- * has ~94 candidates and each is a primary-key lookup, so the probe asks about those
- * instead: 0.9 ms warm. Being a probe rather than a snapshot also means it cannot
- * answer with a stale set, which is what the generation used to guard.
+ * The probe this replaces asked SQLite about each candidate individually. With the
+ * digests cached per session that is 144 096 point lookups on EVERY poll: measured
+ * 15.9 s, which was the whole "the panel takes 20 seconds" complaint. Every one of
+ * those lookups already knew the answer.
+ *
+ * One `SELECT embedded_id` costs 504 ms for 75 843 rows, and the counts then come out
+ * of a Set in 58 ms, so the work happens once and is reused until
+ * `lcm_embedding_profile.data_version` moves — a single row read, O(1). A vector
+ * written by a search still appears on the next poll, because that write bumps the
+ * same counter.
  * @param cfg - resolved vector settings.
- * @returns `{ probe, generation, close }`, or null when the store is unavailable.
+ * @returns `{ probe, generation, close }` — `probe` is a Set, which `has()` satisfies.
  */
 function embeddedStateFor(cfg) {
+  let store;
   try {
-    const store = openVectorStore(cfg);
-    return {
-      probe: embeddedProbe(store),
-      generation: storeVersion(store),
-      close: () => store.db.close()
-    };
+    store = openVectorStore(cfg);
   } catch {
     return null;
   }
+  try {
+    // The DATABASE FILE is part of the key: two stores can hold the same model, so
+    // their identity hashes are equal and their version counters collide.
+    const key = store.file + "\u0000" + store.identity;
+    const version = storeVersion(store);
+    if (idCache.key === key && idCache.version === version) {
+      return { probe: idCache.ids, generation: version, close: () => store.db.close() };
+    }
+    const ids = allEmbeddedIds(store);
+    idCache = { key, version, ids };
+    return { probe: ids, generation: version, close: () => store.db.close() };
+  } catch {
+    try { store.db.close(); } catch {}
+    return null;
+  }
 }
+
+/** The last id set, keyed by model identity and the store's own data_version. */
+let idCache = { key: null, version: -1, ids: new Set() };
 
 /**
  * Embedding coverage for one session.
@@ -423,7 +442,8 @@ function embeddedStateFor(cfg) {
  * a failure writes nothing. The panel says so rather than inventing a success rate.
  * @param events - the session log in seq order.
  * @param vector - the resolved vector config (`model`, `dim`, `cacheDir`).
- * @param digests - anything with `has(embeddedId)`: an {@link embeddedProbe}, or a Set
+ * @param digests - anything with `has(embeddedId)`: the version-keyed Set from
+ *   {@link embeddedStateFor}, or any Set in tests.
  *   in tests. A probe is current; a Set is a snapshot.
  * @returns `{ candidates, embedded, pending, coverage }`.
  */

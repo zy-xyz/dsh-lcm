@@ -26,7 +26,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 import { estimateEntryTokens } from "./compiler.js";
-import { allEmbeddedIds, embeddedIdOf, openVectorStore, readVector, storeStats, writeVector } from "./vector-store.js";
+import { allEmbeddedIds, embeddedIdOf, openVectorStore, readVector, storeStats, storeVersion, writeVector } from "./vector-store.js";
 
 // ── defaults ───────────────────────────────────────────────────────────────
 
@@ -1041,12 +1041,29 @@ export async function vectorCacheStats(cfg) {
   const resolved = resolveVectorConfig(cfg);
   const store = openVectorStore(resolved);
   try {
+    // COUNT and SUM(LENGTH(vec)) scan the whole table: measured 1.3 s at 75 843
+    // rows, paid on every panel poll for numbers that only change when a vector is
+    // written. `data_version` is bumped inside every write transaction, so it is the
+    // exact invalidation key.
+    // Keyed by the DATABASE FILE as well as the identity: two stores (two cacheDirs)
+    // can hold the same model, so their identity hashes are equal and their version
+    // counters collide. Measured as a wrong row count in a test before this.
+    const key = store.file + "\u0000" + store.identity;
+    const version = storeVersion(store);
+    if (cacheStatsCache.key === key && cacheStatsCache.version === version) {
+      return { ...cacheStatsCache.value, dir: resolved.cacheDir };
+    }
     const stats = storeStats(store);
-    return { dir: resolved.cacheDir, model: resolved.model, dim: resolved.dim, files: stats.entries, bytes: stats.bytes, identity: store.identity };
+    const value = { dir: resolved.cacheDir, model: resolved.model, dim: resolved.dim, files: stats.entries, bytes: stats.bytes, identity: store.identity };
+    cacheStatsCache = { key, version, value };
+    return value;
   } finally {
     store.db.close();
   }
 }
+
+/** The last cache-stats answer, keyed by identity and the store's data_version. */
+let cacheStatsCache = { key: null, version: -1, value: null };
 
 /**
  * Delete every sibling cache directory that belongs to another model.
@@ -1087,7 +1104,10 @@ export async function pruneForeignVectorCaches(cfg) {
       try {
         store.db.prepare("DELETE FROM lcm_embedding_vectors WHERE identity_hash = ?").run(identity);
         store.db.prepare("DELETE FROM lcm_embedding_meta WHERE identity_hash = ?").run(identity);
-        store.db.prepare("UPDATE lcm_embedding_profile SET active = 0, archived_at = ? WHERE identity_hash = ?")
+        // Bump data_version: deleting rows changes every cached count for this
+        // identity, and the stats/coverage caches key on exactly this counter.
+        // Without it a pruned model kept reporting its old row count.
+        store.db.prepare("UPDATE lcm_embedding_profile SET active = 0, archived_at = ?, data_version = data_version + 1 WHERE identity_hash = ?")
           .run(new Date().toISOString(), identity);
         store.db.exec("COMMIT");
       } catch (error) {
