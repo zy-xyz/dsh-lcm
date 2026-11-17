@@ -1214,6 +1214,11 @@ const vectorReadyForStats = resolved.enabled === true;
           saveReportCache();
           sendJson(res, 200, body);
         } catch (error) {
+          // The stack, not just the message. "Cannot read properties of undefined
+          // (reading 'length')" names no file and no line, so a 500 from this route
+          // was undebuggable from the browser; the message stays in the response and
+          // the stack goes to the log.
+          reportRouteFailure(ctx, "app", error);
           sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
         }
       }
