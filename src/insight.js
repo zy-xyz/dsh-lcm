@@ -1093,11 +1093,16 @@ const vectorReadyForStats = resolved.enabled === true;
       kind: "exact",
       path: ROUTE_APP,
       async handler(req, res) {
-        if (refused(req, res, allowLan)) return;
-        if (req.method !== "GET") {
-          sendJson(res, 405, { error: "GET only" });
-          return;
-        }
+        // Everything, including the guards, is inside one catch. The host's dispatcher
+        // turns an escaping rejection into a BARE 400 with no body and no usable
+        // message, which is what the panel showed as "the insight endpoint did not
+        // answer"; an error this route can describe is worth more than that.
+        try {
+          if (refused(req, res, allowLan)) return;
+          if (req.method !== "GET") {
+            sendJson(res, 405, { error: "GET only" });
+            return;
+          }
         try {
           const rollups = sidecarCounts(rollupDir);
           const assertions = sidecarCounts(assertionDir);
@@ -1220,6 +1225,19 @@ const vectorReadyForStats = resolved.enabled === true;
           // the stack goes to the log.
           reportRouteFailure(ctx, "app", error);
           sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
+        }
+        } catch (error) {
+          // Anything that escaped the inner catch: a throw from sendJson itself (a
+          // value JSON cannot carry), or from a guard. Answering 500 here is what
+          // keeps the host's dispatcher from converting it into an empty 400.
+          reportRouteFailure(ctx, "app-outer", error);
+          if (!res.headersSent) {
+            try {
+              sendJson(res, 500, { error: String(error instanceof Error ? error.message : error) });
+            } catch {
+              try { res.destroy(); } catch {}
+            }
+          }
         }
       }
     },
