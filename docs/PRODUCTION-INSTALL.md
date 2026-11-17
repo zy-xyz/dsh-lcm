@@ -185,3 +185,42 @@ live tail would be pure waste: those messages are already in the model's context
 A session that has never compacted therefore has no semantic candidates at all and
 the hybrid result is exactly the lexical one.
 
+## Presets that assemble their composition in JavaScript
+
+The gate covers **Loader rows**: a row-level latch (`inject: [lcmCompactionPolicy]`)
+plus an `internal/config` middleware over resolved row configs. A preset that builds
+its plugin list in JS has neither, so the gate cannot reach it and it keeps the stock
+engine no matter what the profile patch says.
+
+Measured on `dsh-ptc-cordis-preset` (`agentPreset: ptc-cordis`), whose
+`src/composition.js` nests `compaction-basic` under `isolate: {compaction: true}`:
+one manual `/compact` in such a session ran basic — one call over 688 544 tokens
+returning 2 990 (230:1), `maxTokens` 65 536, no lcm checkpoint header — while a
+session on a Loader-row preset in the same process ran lcm (leaves of 24 000 in,
+"手动 /compact" header, 4 096 cap).
+
+The row is replaced in place:
+
+```js
+{
+  id: 'compaction-lcm',
+  name: 'dsh-lcm',
+  config: { fullSweepMaxSeconds: 120, fullSweepSoftSeconds: 0,
+            fullSweepTargetShare: 0.08, fullSweepReserveSeconds: 10,
+            leafEstimateFloorSeconds: 15 },
+}
+```
+
+Two things to know about that patch:
+
+- It lives in the profile's installed copy
+  (`profiles/<name>/node_modules/dsh-ptc-cordis-preset/src/composition.js`), so a
+  package update restores the stock row. Re-apply it after upgrading that package,
+  or the sessions silently fall back to basic.
+- The inline config does **not** fork the panel: hot keys (`thresholdRatio`,
+  `retainRatio`, `leafSpanTokens`, …) are still overlaid from
+  `$DSH_HOME/lcm-live.json` when the engine resolves its config.
+
+Detection, without reading code: run `/compact` in such a session and read the
+checkpoint header. `手动 /compact: 将 N 个节点 …` means lcm holds the slot; a headerless
+body starting with prose means the stock engine is back.

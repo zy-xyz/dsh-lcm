@@ -26,6 +26,16 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+// The live panel persists hot keys (leafSpanTokens, fullSweep*, retainRatio, …) into
+// $DSH_HOME/lcm-live.json, and the engine overlays them when it resolves a config. A
+// test that sets one of those keys must not inherit the host's file: measured here,
+// `leafSpanTokens: 451` resolved as 24 000 and the assertion "several leaves" failed
+// for a reason that had nothing to do with the code under test.
+process.env.DSH_HOME = mkdtempSync(path.join(tmpdir(), "lcm-manual-"));
 
 import { findCheckpointSeqs, recallSession } from "../src/recall.js";
 import { deriveDag } from "../src/summarize.js";
@@ -105,7 +115,10 @@ function seedFor(turns) {
 }
 
 /** One text-only model response, in the harness's chunk protocol. */
-async function* textStream(text) {
+async function* textStream(text, delayMs = 0) {
+  // A real summariser call is the expensive part of a leaf (measured: 22-108 s).
+  // Tests that care about the time budget make it observable at a smaller scale.
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   yield { type: "block-start", index: 0, blockType: "text" };
   yield { type: "text-delta", index: 0, text: text };
   yield { type: "block-end", index: 0, block: { type: "text", text: text } };
@@ -120,7 +133,7 @@ async function* textStream(text) {
  * @param contextWindow - routed model window the automatic path prices against.
  * @returns the world plus its observation points.
  */
-function buildWorld(seed, contextWindow, config = { auto: false, retainTokens: 1 }) {
+function buildWorld(seed, contextWindow, config = { auto: false, retainTokens: 1 }, summaryDelayMs = 0) {
   const { Session, Context, TokenMeter, LcmCompactionEngine } = harnessPackages;
   const session = Session.create("manual-compact-" + seed.length, seed);
   const ctx = new Context();
@@ -131,7 +144,7 @@ function buildWorld(seed, contextWindow, config = { auto: false, retainTokens: 1
   ctx.set("llm", {
     stream(options) {
       llmCalls.push(options);
-      return textStream(MODEL_SUMMARY);
+      return textStream(MODEL_SUMMARY, summaryDelayMs);
     },
     imageRequestPricing() {
       return undefined;
@@ -436,6 +449,38 @@ test("a manual /compact keeps the fresh tail it priced, and never swallows it", 
   assert.ok(
     result.shadowedRange.end < kept[0].seq,
     "the checkpoint must end before the first kept node"
+  );
+});
+
+test("one /compact finishes the work it planned, instead of stopping at a fixed clock", { skip }, async () => {
+  // The measured defect: a 641k-token session at 22-108 s per leaf compacted only
+  // 44 559 tokens per command, because the pass was cut by a fixed 120 s clock. The
+  // budget is now the planned work priced at the measured leaf wall, so a single
+  // command consumes the whole backlog it selected.
+  // Size the leaves from this seed's own pricing rather than a guessed constant, so
+  // the assertion "several leaves" cannot drift with the filler text.
+  const probe = buildWorld(seedFor(12), 200000, { auto: false, retainTokens: 1 });
+  const total = probe.meter.measure(probe.session).totalTokens;
+  const config = {
+    auto: false,
+    retainTokens: 1,
+    leafSpanTokens: Math.max(1, Math.floor(total / 6)),
+    fullSweepMaxSeconds: 1, // the floor: too small for the work on purpose
+    leafEstimateFloorSeconds: 1,
+    fullSweepReserveSeconds: 0
+  };
+  const { session, engine, agent, llmCalls } = buildWorld(seedFor(12), 200000, config, 500);
+
+  const first = await engine.compactNow(agent, new AbortController().signal, "cmd-plan");
+  assert.ok(first !== null, "the pass must compact");
+  assert.ok(llmCalls.length > 1, "the work needs several leaves, or this proves nothing: calls=" + llmCalls.length + " total=" + total + " span=" + config.leafSpanTokens);
+
+  const second = await engine.compactNow(agent, new AbortController().signal, "cmd-plan-2");
+  assert.equal(second, null, "one command consumed the whole backlog; a second has nothing left");
+  assert.equal(
+    session.log.filter((event) => event.type === "compaction/end").length,
+    llmCalls.length,
+    "every leaf committed exactly one transaction"
   );
 });
 

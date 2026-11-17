@@ -1642,7 +1642,27 @@ export class LcmCompactionEngine extends CompactionEngine {
           // its leaf at the oldest surface node — the previous checkpoint — so each
           // /compact re-summarised its own last summary and depth grew 1,2,3,... per
           // repeat.
-          const deadline = Date.now() + this.config.fullSweepMaxSeconds * 1000;
+          // How long this command may run is the WORK it was asked to do, not a clock.
+          //
+          // lcm-x bounds a pass with `hard` (120 s) and decides per leaf whether the
+          // next call still fits (`ForegroundBudget.admit`, escalation.py:159 — the
+          // route's measured p90 plus a 5-20 s finalize reserve). Its `hard` is a
+          // constant because an automatic sweep runs behind a turn. A manual pass is
+          // the operator asking for the whole backlog: measured here, a 641k-token
+          // session needs 26 leaves at 22-108 s each, so a 120 s clock ended the
+          // command after 44 559 tokens and looked like "nothing left to compact".
+          //
+          // So: plan the leaves from the span, price them with the measured per-leaf
+          // wall, and let the estimate grow as leaves are measured. The configured
+          // sweep budget stays as a FLOOR, so a short session keeps a usable window.
+          const plannedLeaves = Math.max(
+            1,
+            Math.ceil(Math.max(0, measurement.totalTokens - retainTokens) / Math.max(1, this.config.leafSpanTokens))
+          );
+          const reserveMs = this.config.fullSweepReserveSeconds * 1000;
+          let leafWallMs = this.config.leafEstimateFloorSeconds * 1000;
+          const startedAt = Date.now();
+          let passes = 0;
           let result = null;
           for (;;) {
             operationSignal.throwIfAborted();
@@ -1651,6 +1671,20 @@ export class LcmCompactionEngine extends CompactionEngine {
             // prefix shorter than the summary floor is still theirs to compact.
             const range = selectCompactableRange(agent.session, current, retainTokens, 0, this.config.leafSpanTokens, this.config.condensationFanin);
             if (range === null) return result;
+            const deadline = startedAt + Math.max(
+              this.config.fullSweepMaxSeconds * 1000,
+              plannedLeaves * leafWallMs + reserveMs
+            );
+            // Admission BEFORE the call: the first pass is exempt because nothing has
+            // been measured yet, later ones must fit together with the finalize reserve.
+            if (passes > 0 && Date.now() + leafWallMs + reserveMs > deadline) {
+              engineDebug(
+                this.config,
+                `manual compaction stop: derived budget of ${deadline - startedAt}ms spent after ${passes}/${plannedLeaves} leaf(s) at ${leafWallMs}ms/leaf`
+              );
+              return result;
+            }
+            const leafStarted = Date.now();
             result = await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
               owner: null,
               stability: "selected-span",
@@ -1659,7 +1693,8 @@ export class LcmCompactionEngine extends CompactionEngine {
                 await this.ctx.sessions.flush(agent.session);
               }
             }, operationSignal);
-            if (Date.now() >= deadline) return result;
+            leafWallMs = Math.max(Date.now() - leafStarted, this.config.leafEstimateFloorSeconds * 1000);
+            passes += 1;
           }
         } catch (error) {
           if (agentSignal.aborted && operationSignal.reason === agentSignal.reason) throw new ManualCompactionError("cancelled", "manual compaction was cancelled", { cause: error });
