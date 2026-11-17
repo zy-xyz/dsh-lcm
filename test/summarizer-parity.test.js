@@ -47,6 +47,24 @@ function stubLlm(text = "## 逐字锚点\n- src/index.js") {
  * @param extra - additional session fields (header, toolHistory, ...).
  * @returns the session-shaped value.
  */
+/** The harness's per-type projection, so the fixtures match real events. */
+function deriveFor(event) {
+  switch (event.type) {
+    case "user/message":
+      if (typeof event.data?.id === "string" && event.data.id.indexOf("rewind-") === 0) return null;
+      return event.data ?? null;
+    case "system/message":
+    case "developer/message":
+    case "assistant/message":
+      if (!Array.isArray(event.data?.message?.content) || event.data.message.content.length === 0) return null;
+      return event.data.message;
+    case "tool/result":
+      return event.data?.message ?? null;
+    default:
+      return null;
+  }
+}
+
 function sessionOf(events, extra = {}) {
   const bySeq = new Map(events.map((event) => [event.seq, event]));
   return {
@@ -54,19 +72,23 @@ function sessionOf(events, extra = {}) {
     events,
     surface: { nodes: events.map((event) => event.seq), replaceGeneration: 1 },
     eventAt: (seq) => bySeq.get(seq),
-    deriveEventMessage: (event) => event.message ?? null,
+    // The harness's rules (dsh-session/lib/index.js:217-232). This used to be
+    // `event.message ?? null` against fixtures that also carried a top-level
+    // `message`, so the pair was self-consistent and the real `data` /
+    // `data.message` extraction was never exercised.
+    deriveEventMessage: (event) => deriveFor(event),
     requestHeader: () => ({ config: { provider: "p", model: "m" }, tools: [] }),
     ...extra
   };
 }
 
 /** One user message at seq 0, distinct text so duplication is countable. */
-const USER_ONLY = [{ seq: 0, type: "user/message", message: { role: "user", content: [{ type: "text", text: "ONLY_USER_NODE" }] } }];
+const USER_ONLY = [{ seq: 0, type: "user/message", data: { role: "user", id: "u0", content: [{ type: "text", text: "ONLY_USER_NODE" }] } }];
 
 /** A real system head plus a user message, the ordinary session shape. */
 const SYSTEM_HEADED = [
-  { seq: 0, type: "system/message", message: { role: "system", content: [{ type: "text", text: "SYSTEM_HEAD_TEXT" }] } },
-  { seq: 1, type: "user/message", message: { role: "user", content: [{ type: "text", text: "user body" }] } }
+  { seq: 0, type: "system/message", data: { message: { role: "system", content: [{ type: "text", text: "SYSTEM_HEAD_TEXT" }] } } },
+  { seq: 1, type: "user/message", data: { role: "user", id: "u1", content: [{ type: "text", text: "user body" }] } }
 ];
 
 /** Count how many message contents mention one marker. */

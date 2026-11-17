@@ -65,7 +65,27 @@ function realSessionShape(events) {
       return { nodes: folded.nodes, replaceGeneration: folded.replaceGeneration ?? 0 };
     },
     eventAt: (seq) => list.find((event) => event.seq === seq),
-    deriveEventMessage: (event) => event.data?.message ?? event.message ?? null,
+    // The harness's own rules (dsh-session/lib/index.js:217-232), not an
+    // approximation. `data?.message ?? event.message` was the latter: on a REAL
+    // `user/message` the message IS `data` (keys role/content/id/source, verified
+    // against a live log), so that derive returned null for every user turn — which
+    // the fixture never showed because it also wrote `data.message`.
+    deriveEventMessage: (event) => {
+      switch (event.type) {
+        case "user/message":
+          if (typeof event.data?.id === "string" && event.data.id.indexOf("rewind-") === 0) return null;
+          return event.data ?? null;
+        case "system/message":
+        case "developer/message":
+        case "assistant/message":
+          if (!Array.isArray(event.data?.message?.content) || event.data.message.content.length === 0) return null;
+          return event.data.message;
+        case "tool/result":
+          return event.data?.message ?? null;
+        default:
+          return null;
+      }
+    },
     requestHeader: () => ({ config: { provider: "p", model: "m" }, tools: [] }),
     append(type, data, metadata) {
       const event = withMarker({ type, seq: list.length, time: 1_790_000_000_000 + list.length, data, ...(metadata ?? {}) });
@@ -90,7 +110,9 @@ function openTurnEvents(turns = 3) {
       type: "user/message",
       seq: seq++,
       time: 1,
-      data: { message: { role: "user", content: [{ type: "text", text: `question ${turn} NEEDLE_${turn} ${"x".repeat(200)}` }] } }
+      // A real user/message carries the message AS `data`: verified against a live
+      // log, keys are content/source/role/id, never `data.message`.
+      data: { role: "user", id: `u${turn}`, content: [{ type: "text", text: `question ${turn} NEEDLE_${turn} ${"x".repeat(200)}` }] }
     });
     events.push({
       type: "assistant/message",
@@ -224,4 +246,29 @@ test("a full compile→commit lands on the real shape and shrinks the surface", 
   const recalled = recallSession(session, [{ start: result.summarySeq, end: result.summarySeq }], { maxRecallTokens: 4000 });
   assert.equal(recalled.missing, 0);
   assert.equal(session.log.length, result.endSeq + 1, "start + summary + replacement + end are the only new records");
+});
+
+test("the fixture's derive follows the harness's per-type rules, user/message included", () => {
+  // A user message's payload IS `data` in the host, not `data.message`. An
+  // approximate derive (`data?.message ?? event.message`) returns null for every
+  // real user turn, which is what this fixture did until an audit caught it.
+  const { session } = realSessionShape(openTurnEvents(1));
+  const user = session.log.find((event) => event.type === "user/message");
+  const assistant = session.log.find((event) => event.type === "assistant/message");
+  const system = session.log.find((event) => event.type === "system/message");
+
+  const derivedUser = session.deriveEventMessage(user);
+  assert.equal(derivedUser?.role, "user", "a user message derives from data, not data.message");
+  assert.deepEqual(derivedUser.content, user.data.content, "and its content is the payload's");
+
+  assert.equal(session.deriveEventMessage(assistant)?.role, "assistant", "assistant derives from data.message");
+  assert.equal(session.deriveEventMessage(system)?.role, "system", "system derives from data.message");
+
+  // The rewind guard: a user message whose id starts with `rewind-` derives nothing.
+  const rewind = { type: "user/message", seq: 99, data: { role: "user", id: "rewind-7", content: [{ type: "text", text: "x" }] } };
+  assert.equal(session.deriveEventMessage(rewind), null, "rewind markers stay off the transcript");
+
+  // An assistant message with empty content derives nothing either.
+  const empty = { type: "assistant/message", seq: 98, data: { message: { role: "assistant", content: [] } } };
+  assert.equal(session.deriveEventMessage(empty), null, "empty content is not a message");
 });
