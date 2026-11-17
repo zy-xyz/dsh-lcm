@@ -211,8 +211,12 @@ test("embedding coverage is measured against the cache, never inferred", () => {
   // engine's own collector rather than re-deriving its four filters. A second copy
   // would report coverage for texts the search route never looks up.
   const vector = { model: "test/model", dim: 4, cacheDir: "/nonexistent" };
+  // The harness shapes: a user message carries the message AS `data`, an assistant
+  // message under `data.message` (dsh-session/lib/index.js:217-232). The fixture used
+  // `data.message` for both, which the approximate derive in coverageCandidates
+  // happened to accept and the harness's own rules do not.
   const events = [
-    { type: "user/message", seq: 1, time: T0, data: { message: { role: "user", content: [{ type: "text", text: "alpha" }] } } },
+    { type: "user/message", seq: 1, time: T0, data: { role: "user", id: "u1", content: [{ type: "text", text: "alpha" }] } },
     { type: "assistant/message", seq: 2, time: T0, data: { message: { role: "assistant", content: [{ type: "text", text: "beta" }] } } }
   ];
   // No digests cached: every candidate is pending, and coverage is zero rather than
@@ -228,7 +232,7 @@ test("embedding coverage is measured against the cache, never inferred", () => {
   // models no longer orphans every vector.
   const digests = new Set();
   for (const seq of [1, 2]) {
-    const message = events[seq - 1].data.message;
+    const message = events[seq - 1].type === "user/message" ? events[seq - 1].data : events[seq - 1].data.message;
     const text = message.content[0].text.slice(0, 4000);
     digests.add(createHash("sha256").update(text, "utf8").digest("hex"));
   }

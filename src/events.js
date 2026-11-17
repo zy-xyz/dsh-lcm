@@ -75,3 +75,40 @@ export function resolveEventAt(session, seq) {
   if (events.length === 0) return undefined;
   return seqMap(events).get(seq);
 }
+
+/**
+ * The harness's per-type message projection, for a session synthesised from events.
+ *
+ * `renderEventBody` calls `session.deriveEventMessage(event)`, and a real Session
+ * supplies the harness's implementation. When a caller builds a session-shaped value
+ * out of a bare event array it has to supply the same rules, or it renders DIFFERENT
+ * bytes than the search and embedding routes do.
+ *
+ * That is not hypothetical. The panel's coverage used
+ * `(event) => event?.data?.message ?? null`, which is null for every `user/message` —
+ * a real user message carries the message AS `data` (keys content/source/role/id,
+ * verified against a live log; dsh-session/lib/index.js:217-223). `renderEventBody`
+ * then fell back to a labelled JSON dump, so those candidates hashed to a text no
+ * embedding would ever write. Measured on one 79 884-event log: the same 16 066
+ * candidates, 1 337 of them with the wrong text — phantom "pending" rows that could
+ * never be satisfied.
+ * @param event - one session event.
+ * @returns the derived message, or null when the event projects none.
+ */
+export function deriveEventMessage(event) {
+  switch (event?.type) {
+    case "user/message":
+      // The harness drops rewind markers from the transcript.
+      if (typeof event.data?.id === "string" && event.data.id.indexOf("rewind-") === 0) return null;
+      return event.data ?? null;
+    case "system/message":
+    case "developer/message":
+    case "assistant/message":
+      if (!Array.isArray(event.data?.message?.content) || event.data.message.content.length === 0) return null;
+      return event.data.message;
+    case "tool/result":
+      return event.data?.message ?? null;
+    default:
+      return null;
+  }
+}

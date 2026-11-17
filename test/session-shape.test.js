@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { sessionEvents } from "../src/events.js";
+import { deriveEventMessage, sessionEvents } from "../src/events.js";
 import { collectVectorItems } from "../src/search.js";
 import { planDayRollups } from "../src/rollup.js";
 import { unminedCheckpoints } from "../src/assertion.js";
@@ -20,7 +20,8 @@ function snapshotSession(events) {
     id: "real-shape",
     snapshotEvents: () => frozen,
     eventAt: (seq) => events.find((event) => event.seq === seq),
-    deriveEventMessage: (event) => event?.data?.message ?? null,
+    // The harness's rules, shared with src so a fixture cannot drift from them.
+    deriveEventMessage,
     requestHeader: () => ({ config: { provider: "p", model: "m" }, tools: [] })
   };
 }
@@ -83,4 +84,29 @@ test("the vector collector reads a real-shaped session, and the fixture shape ag
     fromFixture.map((item) => item.text),
     "both session shapes must rank the same bytes"
   );
+});
+
+test("the panel counts the same corpus embedding writes, user messages included", async () => {
+  // coverageCandidates synthesises a session from a bare event array, so it must
+  // supply the harness's own projection. With an approximate one
+  // (`event?.data?.message ?? null`) every user/message derived nothing,
+  // renderEventBody fell back to a JSON dump, and those candidates hashed to text no
+  // embedding ever writes: measured, 1 337 phantom "pending" rows on one 79 884-event
+  // log, which is why the panel's pending count never reached zero.
+  const { coverageCandidates } = await import("../src/insight.js");
+  const { createHash } = await import("node:crypto");
+  const events = [
+    { seq: 0, type: "user/message", data: { role: "user", id: "u0", content: [{ type: "text", text: "alpha note" }] } },
+    { seq: 1, type: "assistant/message", data: { message: { role: "assistant", content: [{ type: "text", text: "beta note" }] } } }
+  ];
+  const panel = coverageCandidates(events, {});
+  // What embedding writes: the host's derive on the same events.
+  const host = collectVectorItems(snapshotSession(events), { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER }).items;
+  const hostDigests = host.map((item) => createHash("sha256").update(String(item.text).slice(0, 4000), "utf8").digest("hex"));
+
+  assert.equal(panel.length, hostDigests.length, "same candidate count");
+  const panelSet = new Set(panel);
+  for (const digest of hostDigests) {
+    assert.ok(panelSet.has(digest), "every text embedding writes is counted by the panel");
+  }
 });

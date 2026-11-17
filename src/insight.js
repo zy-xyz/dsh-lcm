@@ -22,6 +22,7 @@ import zlib from "node:zlib";
 import { allEmbeddedIds, embeddedIdOf, openVectorStore, storeVersion } from "./vector-store.js";
 import { VECTOR_TEXT_LIMIT, resolveVectorConfig, vectorCacheStats } from "./vectors.js";
 import { collectVectorItems } from "./search.js";
+import { deriveEventMessage } from "./events.js";
 import { applyLive, describeKeys, describeLive } from "./live.js";
 
 /** Chars per token, measured against `dsh-token-meter` on real checkpoint bodies. */
@@ -496,7 +497,11 @@ export function coverageCandidates(events, vector) {
     snapshotEvents: () => events,
     get seq() { return events.length; },
     eventAt: () => undefined,
-    deriveEventMessage: (event) => event?.data?.message ?? null
+    // The harness's rules, not an approximation. `(event) => event?.data?.message ??
+    // null` is null for every `user/message`, so `renderEventBody` fell back to a JSON
+    // dump and those candidates hashed to text no embedding ever writes: measured,
+    // 1 337 phantom "pending" rows on one log.
+    deriveEventMessage
   };
   let items;
   try {
