@@ -387,7 +387,10 @@ export class LcmCompactionEngine extends CompactionEngine {
   static inject = [
     "llm",
     "tokenMeter",
-    "sessions"
+    "sessions",
+    // The idle listeners find their agent through this registry: `agent/status`
+    // carries only `{ status }`, so without it every idle pass is a silent no-op.
+    "agents"
   ];
   static Config = z.object({
     thresholdRatio: thresholdRatioSchema,
@@ -627,8 +630,14 @@ export class LcmCompactionEngine extends CompactionEngine {
       }
       return next();
     }));
-    disposers.push(ctx.on("agent/status", ({ agent, status }) => {
-      if (status === "idle") this.overflowRetries.delete(agent);
+    // The event payload is ONLY `{ status }`. Destructuring `agent` out of it gave
+    // undefined, so every idle pass below was a no-op that threw nothing: the idle
+    // continuation, the leaf preparation, the rollup maintenance and the assertion
+    // extraction had never run in any boot. The registry is the way in.
+    disposers.push(ctx.on("agent/status", ({ status }) => {
+      if (status !== "idle") return;
+      for (const agent of ctx.agents?.roots?.() ?? []) {
+      this.overflowRetries.delete(agent);
       // ── the idle continuation ───────────────────────────────────────────
       // A sweep that stops on its soft target leaves the session still over
       // threshold, and the only thing that used to pick it up was the NEXT
@@ -647,16 +656,17 @@ export class LcmCompactionEngine extends CompactionEngine {
       // middleware chain, and blocking it would stall whatever the host does
       // next. Failures go to the debug log only — an idle pass that cannot make
       // progress must never surface as an error the operator has to dismiss.
-      if (status === "idle") this._continueOnIdle(agent);
+      this._continueOnIdle(agent);
       // Prep is the opposite case to the idle sweep: it runs when the session is
       // still UNDER threshold, so the next crossing has a leaf already written.
-      if (status === "idle") this._prepareNextLeaf(agent);
+      this._prepareNextLeaf(agent);
       // Rollups are time-indexed, not pressure-driven: idle is the only moment they
       // can be built without competing with a request for the model.
-      if (status === "idle") this._maintainRollups(agent);
+      this._maintainRollups(agent);
       // Assertions are derived from checkpoints, so they run after the rollup pass and
       // never compete with it: both are idle-only and both are bounded.
-      if (status === "idle") this._extractAssertions(agent);
+      this._extractAssertions(agent);
+      }
     }));
     // A model switch is a pressure event: the next request runs on a DIFFERENT
     // window, and if the new one is smaller the history that comfortably fit the

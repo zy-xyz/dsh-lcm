@@ -44,6 +44,13 @@ function sessionShape() {
  */
 function harness(config) {
   const listeners = new Map();
+  /**
+   * The live-agent registry. Not how the handler reaches a session: `agent/status` is
+   * dispatched through `agentEvents`, whose fused payload is `{ ...payload, agent }`.
+   * Kept so a handler that wrongly reached for the registry instead would find an
+   * empty `roots()` here and fail loudly, as it did in production.
+   */
+  const registry = [];
   const calls = [];
   let release = () => {};
   const gate = new Promise((resolve) => { release = resolve; });
@@ -81,12 +88,19 @@ function harness(config) {
     return () => listeners.delete(event);
   };
   root.get = () => undefined;
+  // The registry is NOT how the handler finds a session: the dispatcher injects
+  // `agent` into the payload (`agentEvents` fuses `{ ...payload, agent }`). It is
+  // wired here only so a handler that reaches for `roots()` gets an empty list.
+  root.agents = {
+    roots: () => registry,
+    list: () => registry
+  };
   root.logger = { info: () => {}, warn: () => {} };
   root.tokenMeter = ctx.tokenMeter;
   root.llm = ctx.llm;
   const engine = new LcmCompactionEngine(root, { auto: true, temporalRollups: true, ...config });
   engine.leafPrep = { hasCapacity: true, has: () => false, take: () => undefined, put: () => {}, describe: () => "" };
-  return { engine, listeners, calls, release };
+  return { engine, listeners, calls, release, registry };
 }
 
 /**
@@ -102,12 +116,13 @@ function harness(config) {
 
 test("going idle starts the rollup pass", async () => {
   const dir = await scratch();
-  const { engine, listeners, calls, release } = harness({ rollupDir: dir });
+  const { engine, listeners, calls, release, registry } = harness({ rollupDir: dir });
   const session = sessionShape();
   const handler = listeners.get("agent/status");
   assert.equal(typeof handler, "function", "apply() must subscribe to agent/status");
 
-  handler({ status: "idle", agent: { session, options: {} } });
+  registry.push({ session, options: {} });
+  handler({ status: "idle" });
   // The pass is detached, so the guard is the observable proof it started.
   assert.equal(engine.rollupPasses.size, 1, "the rollup guard was taken");
 
@@ -126,7 +141,7 @@ test("a non-idle status starts nothing", async () => {
   const { engine, listeners } = harness({ rollupDir: dir });
   const session = sessionShape();
   const handler = listeners.get("agent/status");
-  handler({ status: "running", agent: { session, options: {} } });
+  handler({ status: "running" });
   assert.equal(engine.rollupPasses.size, 0, "running is not the trigger");
   assert.equal(engine.idlePasses.size, 0);
   assert.equal(engine.prepPasses.size, 0);
@@ -137,10 +152,12 @@ test("the assertion pass is wired too, and stays off by default", async () => {
   const dir = await scratch();
   const off = harness({ assertionDir: dir });
   const session = sessionShape();
-  off.listeners.get("agent/status")({ status: "idle", agent: { session, options: {} } });
+  off.registry.push({ session, options: {} });
+  off.listeners.get("agent/status")({ status: "idle", agent: { session: sessionShape(), options: {} } });
   assert.equal(off.engine.assertionPasses.size, 0, "assertionExtraction defaults false: no pass");
 
   const on = harness({ assertionDir: dir, assertionExtraction: true });
+  on.registry.push({ session: sessionShape(), options: {} });
   on.listeners.get("agent/status")({ status: "idle", agent: { session: sessionShape(), options: {} } });
   assert.equal(on.engine.assertionPasses.size, 1, "switched on, it runs");
   on.release();
@@ -154,6 +171,7 @@ test("the leaf-prep pass runs only under threshold and only when enabled", async
   assert.equal(off.engine.prepPasses.size, 0, "off by default");
 
   const on = harness({ backgroundLeafPrep: true, rollupDir: dir, assertionDir: dir });
+  on.registry.push({ session: sessionShape(), options: {} });
   on.listeners.get("agent/status")({ status: "idle", agent: { session: sessionShape(), options: {} } });
   assert.equal(on.engine.prepPasses.size, 1, "enabled, it takes its guard");
   on.release();
