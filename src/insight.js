@@ -677,6 +677,18 @@ const reportCache = new Map();
 /** Floor between two disk re-analyses of the same session while the panel polls. */
 const RECHECK_INTERVAL_MS = 30_000;
 
+/**
+ * The last app payload and when it was built.
+ *
+ * The panel polls this route every few seconds, and a warm rebuild costs 2.2 s of CPU
+ * (9.8 s cold) because it walks all 290 sessions and every aggregate over 680 000
+ * events — measured with the sidebar open that is a steady 1.2-1.7 cores on the host,
+ * plus the heap churn that keeps RSS oscillating. Half a minute of staleness is the
+ * same tolerance `cachedReport` already applies per session and is invisible in a
+ * table of checkpoint counts.
+ */
+let appSnapshot = { at: 0, body: null };
+
 /** Bumped when the persisted report shape changes; a mismatch is a cold start. */
 const REPORT_CACHE_VERSION = 1;
 
@@ -1200,6 +1212,10 @@ const vectorReadyForStats = resolved.enabled === true;
             sendJson(res, 405, { error: "GET only" });
             return;
           }
+          if (appSnapshot.body !== null && Date.now() - appSnapshot.at < RECHECK_INTERVAL_MS) {
+            sendJson(res, 200, appSnapshot.body);
+            return;
+          }
         try {
           const rollups = sidecarCounts(rollupDir);
           const assertions = sidecarCounts(assertionDir);
@@ -1314,6 +1330,7 @@ const vectorReadyForStats = resolved.enabled === true;
           // Persist after the response is composed: the write is a few hundred
           // kilobytes and must never delay the first paint of the panel.
           saveReportCache();
+          appSnapshot = { at: Date.now(), body };
           sendJson(res, 200, body);
         } catch (error) {
           // The stack, not just the message. "Cannot read properties of undefined
@@ -1434,6 +1451,8 @@ const vectorReadyForStats = resolved.enabled === true;
         }
         try {
           const result = applyLive(body);
+          // A config write must show up on the next poll, not after the snapshot expires.
+          appSnapshot = { at: 0, body: null };
           sendJson(res, 200, { ok: true, values: result.values });
         } catch (error) {
           // The row's own resolver message, verbatim: it names the key and the rule,
