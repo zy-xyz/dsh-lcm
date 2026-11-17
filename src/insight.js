@@ -473,7 +473,11 @@ export function coverageCandidates(events, vector) {
  * @returns `{ candidates, embedded, pending, coverage }`.
  */
 export function coverageFrom(digests, probe) {
-  if (digests === null) return { candidates: 0, embedded: 0, pending: 0, coverage: null };
+  // `Array.isArray`, not `=== null`: the coverage cache is persisted to disk and
+  // outlives a code change, so an entry written by an older shape arrives as an
+  // object with no `digests`. Treating that as "nothing measured" costs one
+  // re-measure; throwing made the whole panel a 500.
+  if (!Array.isArray(digests)) return { candidates: 0, embedded: 0, pending: 0, coverage: null };
   const candidates = digests.length;
   let embedded = 0;
   for (const digest of digests) if (probe.has(digest)) embedded += 1;
@@ -1071,10 +1075,15 @@ export async function warmReports(ctx, resolved) {
     if (titleDir !== null) sessionTitle(titleDir, entry.id);
     if (vector !== null && digestState !== null && !coverageCache.has(entry.file)) {
       const records = liveLog ?? readLog(entry.file) ?? [];
+      // The DIGESTS are stored, not a finished number: the count changes whenever a
+      // vector is written and the digests only when the log is. This site kept the
+      // old shape after the split, so the first poll found an entry with no
+      // `digests` and threw "Cannot read properties of undefined (reading 'length')".
       coverageCache.set(entry.file, {
         mtimeMs: entry.mtimeMs,
-        coverage: embeddingCoverage(records.filter((record) => Number.isSafeInteger(record.seq)), vector, digestState.probe)
+        digests: coverageCandidates(records.filter((record) => Number.isSafeInteger(record.seq)), vector)
       });
+      coverageCacheDirty = true;
     }
     await new Promise((resolve) => setImmediate(resolve));
   }

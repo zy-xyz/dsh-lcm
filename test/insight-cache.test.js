@@ -137,4 +137,24 @@ test("coverage for a held session uses its in-memory log", async () => {
   assert.match(source, /const records = liveLog \?\? readLog\(entry\.file\) \?\? \[\]/u, "and the file is only the fallback");
 });
 
+
+test("a coverage cache entry of an older shape degrades instead of throwing", async () => {
+  // Measured 2026-11-17: the panel answered 500 with "Cannot read properties of
+  // undefined (reading 'length')". The warm path still wrote { mtimeMs, coverage }
+  // after the split to per-digest entries, so the first poll found an entry with no
+  // `digests` and coverageFrom read .length off undefined.
+  const { coverageFrom } = await import("../src/insight.js");
+  const probe = { has: () => false };
+  for (const shape of [undefined, null, {}, { coverage: { candidates: 5 } }, "nope"]) {
+    const result = coverageFrom(shape, probe);
+    assert.deepEqual(
+      result,
+      { candidates: 0, embedded: 0, pending: 0, coverage: null },
+      "an entry of the wrong shape reads as nothing measured: " + JSON.stringify(shape)
+    );
+  }
+  // A real array still measures.
+  assert.equal(coverageFrom(["a", "b"], { has: (id) => id === "a" }).embedded, 1);
+});
+
 test.after(() => { fs.rmSync(home, { recursive: true, force: true }); });
