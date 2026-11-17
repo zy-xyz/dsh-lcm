@@ -413,6 +413,18 @@ function apply(ctx, config) {
   let lastSweepAt = 0;
   /** A full sweep walks every log, so it runs at most this often. */
   const EMBED_SWEEP_COOLDOWN_MS = 30 * 60_000;
+  /**
+   * Ceiling for ONE slice, watchdog included.
+   *
+   * `vectorTimeoutMs` bounds a single request, but a pass issues several batches and
+   * the abort has been observed not to fire: measured 2026-11-17, a chain embedded one
+   * text and then sat for nine minutes with no output, and the operator-run drain hung
+   * the same way at its tail. A slice that cannot settle must not park the chain, so it
+   * is raced against this ceiling and the sweep moves on. The abandoned pass keeps
+   * running in the background; writes are content-addressed, so a late write is a
+   * duplicate, not a corruption.
+   */
+  const EMBED_SLICE_CEILING_MS = 180_000;
 
   /**
    * A session-shaped view over one persisted log.
@@ -474,7 +486,7 @@ function apply(ctx, config) {
   function driveEmbed(trigger) {
     if (resolved.enabled !== true) return;
     if (embedJob !== null) return;
-    const job = { timer: null, stopped: false, queue: null, index: 0, embedded: 0, slices: 0 };
+    const job = { timer: null, stopped: false, queue: null, index: 0, embedded: 0, slices: 0, lastLogAt: Date.now() };
     embedJob = job;
 
     const schedule = (ms) => {
@@ -498,15 +510,27 @@ function apply(ctx, config) {
       }
       const started = Date.now();
       let report;
+      let watchdog;
       try {
-        ({ report } = await embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit }));
+        ({ report } = await Promise.race([
+          embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit }),
+          new Promise((_resolve, reject) => {
+            watchdog = setTimeout(
+              () => reject(new Error("slice watchdog: no result in " + EMBED_SLICE_CEILING_MS + " ms")),
+              EMBED_SLICE_CEILING_MS
+            );
+            if (typeof watchdog.unref === "function") watchdog.unref();
+          })
+        ]));
       } catch (error) {
+        if (watchdog !== undefined) clearTimeout(watchdog);
         // No turn to fail: the cache is the state, so moving on loses nothing.
         ctx.logger.warn(`lcm-embed maintenance skipped ${String(session.id).slice(0, 24)}: ${error instanceof Error ? error.message : String(error)}`);
         job.index += 1;
         schedule(EMBED_MIN_REST_MS);
         return;
       }
+      if (watchdog !== undefined) clearTimeout(watchdog);
       const active = Date.now() - started;
       job.slices += 1;
       job.embedded += report.embedded;
@@ -522,6 +546,15 @@ function apply(ctx, config) {
         );
       }
       if (job.stopped) return;
+      // A sweep over 290 sources runs for minutes and most of them have nothing to say,
+      // so it reports its position on a clock. Without this the chain is silent until
+      // it finishes, which is indistinguishable from a chain that died.
+      if (Date.now() - job.lastLogAt >= 60_000) {
+        job.lastLogAt = Date.now();
+        ctx.logger.info(
+          `lcm-embed maintenance: sweep ${job.index + 1}/${job.queue.length} sources, embedded ${job.embedded} text(s) over ${job.slices} slice(s)`
+        );
+      }
       // Drained, or this source stopped moving: advance. Retrying a no-progress pass
       // would spin on the same bytes forever.
       if (report.remaining === 0 || report.embedded === 0) job.index += 1;
@@ -536,6 +569,19 @@ function apply(ctx, config) {
     };
     void tick();
   }
+  // One sweep per activation, deferred so it never delays the row coming up.
+  //
+  // The chain also starts on `agent/status` and on a published checkpoint, but neither
+  // is guaranteed to reach a freshly loaded row: a restart happens mid-turn, the phase
+  // change already fired, and `agent/status` only announces CHANGES
+  // (dsh-agent-loop:565). Measured: after a boot the row sat silent for 50 minutes
+  // because no event ever arrived. Upstream has the same trigger and does not have this
+  // hole, because its worker starts with the process rather than with an event.
+  ctx.effect(() => {
+    const timer = setTimeout(() => { driveEmbed(undefined); }, 5_000);
+    if (typeof timer.unref === "function") timer.unref();
+    return () => clearTimeout(timer);
+  });
   ctx.effect(() => {
     const disposers = [
       ctx.tools.register(defineRecallTool(resolved, "lcm_expand")),
