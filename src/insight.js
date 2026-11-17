@@ -606,7 +606,7 @@ function firstExisting(candidates) {
  * @param file - absolute path to `session.v4.jsonl.zstd`.
  * @returns the parsed records, or null when the file cannot be read.
  */
-function readLog(file) {
+export function readLog(file) {
   let raw;
   try {
     if (fs.statSync(file).size > MAX_LOG_BYTES) return null;
@@ -630,7 +630,7 @@ function readLog(file) {
  * Every session log under the dsh home, newest first.
  * @returns `[{ id, file, mtimeMs }]`.
  */
-function sessionFiles() {
+export function sessionFiles() {
   const root = path.join(dshHome(), "sessions");
   let workspaces;
   try {

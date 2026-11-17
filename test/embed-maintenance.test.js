@@ -22,7 +22,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { apply as applyTool } from "../src/tool.js";
+// A private dsh home BEFORE the plugin is imported: the maintenance chain sweeps
+// every session log under `DSH_HOME`, and pointing it at the real home made this
+// file inflate 290 production logs (~15 s) and lean on state it does not own.
+process.env.DSH_HOME = await mkdtemp(join(tmpdir(), "lcm-maint-home-"));
+
+const { apply: applyTool } = await import("../src/tool.js");
 
 const DIM = 3;
 
@@ -234,5 +239,48 @@ test("[maint] a disabled layer never reaches the endpoint", async () => {
   } finally {
     await server.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("[maint] a sweep reaches a session that will never emit again", async () => {
+  // The backlog this exists for: finished sessions keep their compacted texts in the
+  // cache-less state forever, because a dead session fires no `agent/status` and
+  // publishes no checkpoint. Per-session draining cannot reach them by construction,
+  // so the chain walks every log under DSH_HOME.
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { zstdCompressSync } = await import("node:zlib");
+  const root = await scratch();
+  const server = await embeddingServer();
+  const home = process.env.DSH_HOME;
+  const logDir = join(home, "sessions", "--ws--", "session-dead");
+  try {
+    await mkdir(logDir, { recursive: true });
+    const records = [
+      { type: "session", seq: 0 },
+      { type: "user/message", seq: 1, data: { role: "user", id: "u1", content: [{ type: "text", text: "orphan one" }] } },
+      { type: "user/message", seq: 2, data: { role: "user", id: "u2", content: [{ type: "text", text: "orphan two" }] } }
+    ];
+    await writeFile(join(logDir, "session.v4.jsonl.zstd"), zstdCompressSync(Buffer.from(records.map((r) => JSON.stringify(r)).join("\n"))));
+
+    // The trigger is a DIFFERENT, empty session, so anything the stub receives beyond
+    // it came from the log sweep.
+    const h = harness(toolConfig(server, root, { embedMaintenanceLimit: 50 }));
+    h.emit("session/event", sessionWith("trigger", 0), { type: "compaction/summary" });
+
+    assert.equal(
+      await until(() => server.state.requests >= 1),
+      true,
+      "the sweep reached the dead session's log"
+    );
+    // Both orphan texts, one batch.
+    assert.deepEqual(
+      server.state.batches.reduce((total, size) => total + size, 0) >= 2,
+      true,
+      "and embedded the texts that log held"
+    );
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+    await rm(logDir, { recursive: true, force: true });
   }
 });

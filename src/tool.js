@@ -26,7 +26,8 @@ import { DEFAULT_MAX_SEARCH_HITS, HYBRID_RANK_MODES, InvalidSearchPatternError, 
 import { resolveVectorConfig } from "./vectors.js";
 import { hotKeysFor, overlayFor, registerLiveConsumer } from "./live.js";
 import { embedBackfill } from "./command.js";
-import { insightRoutes, warmReports } from "./insight.js";
+import { insightRoutes, readLog, sessionFiles, warmReports } from "./insight.js";
+import { deriveEventMessage } from "./events.js";
 import { readRollups } from "./rollup.js";
 
 const name = "tool-lcm-expand";
@@ -385,61 +386,135 @@ function apply(ctx, config) {
     ctx.effect(() => registerLiveConsumer("tool-lcm-expand", "vector", liveKeys, applyConfig, () => ({ ...resolved })));
   }
   // ── the embedding maintenance driver ──────────────────────────────────
-  // lcm-x does not gate this on an idle agent. `_schedule_embedding_maintenance`
-  // fires on session bind and after a leaf is published, runs one bounded pass, and
-  // re-arms itself at `_LOCAL_IDLE_MULTIPLIER x` the wall clock that pass took
-  // (`engine.py:3149,3165`, `embedding_maintenance.py:230`). The gate is
-  // `embeddings_enabled`; the pacing is that duty cycle.
+  // lcm-x does not gate this on an idle agent. `_schedule_embedding_maintenance` fires
+  // on session bind and after a leaf is published, runs one bounded pass, and re-arms
+  // at `_LOCAL_IDLE_MULTIPLIER x` the wall clock that pass took (`engine.py:3149,3165`,
+  // `embedding_maintenance.py:230`). The gate is `embeddings_enabled`; the pacing is
+  // that cycle.
   //
-  // This port had only the temporal gate: `agent/status === "idle"`. A session that
-  // never idled embedded nothing — measured 2026-11-17, eight minutes with 2 400
-  // texts pending and zero rows written while a conversation was active. The same
-  // duty cycle here, driven by timers instead of a worker thread (the harness has no
-  // background seam, only `agent/status`).
+  // Two things this port got wrong, both measured:
+  //
+  //   - it was gated on `agent/status === "idle"`, so an active conversation embedded
+  //     nothing: eight minutes, 2 400 texts pending, zero rows written.
+  //   - it drove ONE session, the one that happened to fire. Upstream's pass is keyed
+  //     by DATABASE and walks the whole corpus. Here the backlog sat in twelve
+  //     sessions, most of them finished subagent logs that never emit again, so
+  //     per-session draining could not reach them by construction.
+  //
+  // So the chain is process-wide and walks every session log, starting with the one
+  // that triggered it.
   /** Rest 0.82 x what the last pass spent. lcm-x's own constant (#1586). */
   const EMBED_DUTY_RATIO = 0.82;
   /** Never tighter than this, so a pass that returns instantly cannot spin. */
   const EMBED_MIN_REST_MS = 1_000;
-  /** session id -> { timer, stopped }. One driver per session, ever. */
-  const embedJobs = new Map();
+  /** The one chain. `{ timer, stopped, queue, index }` while running, else null. */
+  let embedJob = null;
+  /** When the last full-corpus sweep started; see `corpusQueue`. */
+  let lastSweepAt = 0;
+  /** A full sweep walks every log, so it runs at most this often. */
+  const EMBED_SWEEP_COOLDOWN_MS = 30 * 60_000;
 
   /**
-   * Drive one session's corpus down, paced the way lcm-x paces its worker.
+   * A session-shaped view over one persisted log.
    *
-   * Each pass is bounded by `embedMaintenanceLimit`; the next is scheduled at
-   * `EMBED_DUTY_RATIO x` the wall clock the last one took, and the chain stops when
-   * the corpus is drained or a pass moves nothing. Timers are unref'd so a pending
-   * pass never holds the process open.
-   * @param session - the session whose compacted texts to embed.
+   * The log is inflated on first read and kept for the life of this view, so the
+   * several slices a large corpus needs cost one inflate. `deriveEventMessage` is the
+   * harness's own: an approximation writes text no search route looks up.
+   * @param file - absolute path to `session.v4.jsonl.zstd`.
+   * @param id - the session id this log belongs to.
+   * @returns a session-shaped value `embedBackfill` accepts.
    */
-  function driveEmbed(session) {
+  function logSession(file, id) {
+    let cached;
+    return {
+      id,
+      snapshotEvents() {
+        if (cached === undefined) cached = readLog(file) ?? [];
+        return cached;
+      },
+      get seq() { return 0; },
+      eventAt: () => undefined,
+      deriveEventMessage
+    };
+  }
+
+  /**
+   * The queue one sweep walks: the triggering session first, then every log.
+   * @param trigger - the session that fired the chain, if any.
+   * @returns session-shaped sources in order.
+   */
+  function corpusQueue(trigger) {
+    const queue = [];
+    if (trigger !== undefined) queue.push(trigger);
+    // The full sweep is bounded by a cooldown, not run on every trigger. Walking 290
+    // logs means inflating them all — measured ~15 s of CPU for this deployment — and
+    // a session that goes idle every turn would pay it every turn. Once per window is
+    // enough: the corpus does not restock that fast, and a single sweep drains it.
+    if (Date.now() - lastSweepAt < EMBED_SWEEP_COOLDOWN_MS) return queue;
+    lastSweepAt = Date.now();
+    let files = [];
+    try { files = sessionFiles(); } catch { files = []; }
+    for (const entry of files) {
+      if (trigger !== undefined && entry.id === trigger.id) continue;
+      queue.push(logSession(entry.file, entry.id));
+    }
+    return queue;
+  }
+
+  /**
+   * Advance the corpus chain by one slice.
+   *
+   * A slice is one bounded `embedBackfill` pass on the current source; the source is
+   * left in place while it still has work, and the chain moves on when it drains or
+   * stops moving. The next slice is scheduled at `EMBED_DUTY_RATIO x` the wall clock
+   * the last one took, and the timer is unref'd so a pending pass never holds the
+   * process open.
+   * @param trigger - the session that fired the chain, if any.
+   */
+  function driveEmbed(trigger) {
     if (resolved.enabled !== true) return;
-    const id = session?.id;
-    if (id === undefined || embedJobs.has(id)) return;
-    const job = { timer: null, stopped: false };
-    embedJobs.set(id, job);
+    if (embedJob !== null) return;
+    const job = { timer: null, stopped: false, queue: null, index: 0, embedded: 0, slices: 0 };
+    embedJob = job;
+
+    const schedule = (ms) => {
+      job.timer = setTimeout(() => { void tick(); }, ms);
+      if (typeof job.timer.unref === "function") job.timer.unref();
+    };
 
     const tick = async () => {
       job.timer = null;
       if (job.stopped) return;
+      if (job.queue === null) job.queue = corpusQueue(trigger?.session ?? trigger);
+      const session = job.queue[job.index];
+      if (session === undefined) {
+        // A sweep always leaves one line, so silence can never again mean "it ran and
+        // had nothing to do" as well as "it never ran".
+        ctx.logger.info(
+          `lcm-embed maintenance: corpus sweep done, embedded ${job.embedded} text(s) across ${job.slices} slice(s), ${job.queue.length} source(s)`
+        );
+        embedJob = null;
+        return;
+      }
       const started = Date.now();
       let report;
       try {
         ({ report } = await embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit }));
       } catch (error) {
-        // No turn to fail: the next trigger starts the chain again, and the cache is
-        // the state, so nothing is lost by giving up here.
-        embedJobs.delete(id);
-        ctx.logger.warn(`lcm-embed maintenance skipped: ${error instanceof Error ? error.message : String(error)}`);
+        // No turn to fail: the cache is the state, so moving on loses nothing.
+        ctx.logger.warn(`lcm-embed maintenance skipped ${String(session.id).slice(0, 24)}: ${error instanceof Error ? error.message : String(error)}`);
+        job.index += 1;
+        schedule(EMBED_MIN_REST_MS);
         return;
       }
       const active = Date.now() - started;
+      job.slices += 1;
+      job.embedded += report.embedded;
       if (report.embedded > 0) {
         ctx.logger.info(`lcm-embed maintenance: embedded ${report.embedded} text(s), ${report.remaining} remaining, ${active} ms`);
       } else if (report.failed > 0) {
         // A pass that embeds nothing used to log NOTHING, which is how every batch
-        // timed out for two days without a single line to show for it. "Nothing to
-        // do" and "nothing worked" must not look the same.
+        // timed out for two days without a single line to show for it.
         ctx.logger.warn(
           `lcm-embed maintenance: embedded 0, failed ${report.failed}` +
           `${report.stopped === undefined || report.stopped === "" ? "" : `, stopped on ${report.stopped}`}` +
@@ -447,15 +522,17 @@ function apply(ctx, config) {
         );
       }
       if (job.stopped) return;
-      // Drained, or this pass made no progress: stop the chain and let the next
-      // trigger restart it. Retrying a pass that moved nothing would spin.
-      if (report.remaining === 0 || report.embedded === 0) {
-        embedJobs.delete(id);
+      // Drained, or this source stopped moving: advance. Retrying a no-progress pass
+      // would spin on the same bytes forever.
+      if (report.remaining === 0 || report.embedded === 0) job.index += 1;
+      if (job.index >= job.queue.length) {
+        ctx.logger.info(
+          `lcm-embed maintenance: corpus sweep done, embedded ${job.embedded} text(s) across ${job.slices} slice(s), ${job.queue.length} source(s)`
+        );
+        embedJob = null;
         return;
       }
-      const rest = Math.max(EMBED_MIN_REST_MS, Math.round(EMBED_DUTY_RATIO * active));
-      job.timer = setTimeout(() => { void tick(); }, rest);
-      if (typeof job.timer.unref === "function") job.timer.unref();
+      schedule(Math.max(EMBED_MIN_REST_MS, Math.round(EMBED_DUTY_RATIO * active)));
     };
     void tick();
   }
@@ -504,11 +581,11 @@ function apply(ctx, config) {
       // A scheduled pass is a timer, not a registration, so unloading the row has to
       // stop it explicitly. Without this the chain outlives its own ctx and the next
       // slice writes through a disposed row.
-      for (const job of embedJobs.values()) {
-        job.stopped = true;
-        if (job.timer !== null) clearTimeout(job.timer);
+      if (embedJob !== null) {
+        embedJob.stopped = true;
+        if (embedJob.timer !== null) clearTimeout(embedJob.timer);
+        embedJob = null;
       }
-      embedJobs.clear();
       for (const dispose of disposers) dispose();
     };
   });
