@@ -384,8 +384,81 @@ function apply(ctx, config) {
   if (typeof ctx.effect === "function") {
     ctx.effect(() => registerLiveConsumer("tool-lcm-expand", "vector", liveKeys, applyConfig, () => ({ ...resolved })));
   }
-  // Sessions with an incremental embedding pass in flight.
-  const embedPasses = new Set();
+  // ── the embedding maintenance driver ──────────────────────────────────
+  // lcm-x does not gate this on an idle agent. `_schedule_embedding_maintenance`
+  // fires on session bind and after a leaf is published, runs one bounded pass, and
+  // re-arms itself at `_LOCAL_IDLE_MULTIPLIER x` the wall clock that pass took
+  // (`engine.py:3149,3165`, `embedding_maintenance.py:230`). The gate is
+  // `embeddings_enabled`; the pacing is that duty cycle.
+  //
+  // This port had only the temporal gate: `agent/status === "idle"`. A session that
+  // never idled embedded nothing — measured 2026-11-17, eight minutes with 2 400
+  // texts pending and zero rows written while a conversation was active. The same
+  // duty cycle here, driven by timers instead of a worker thread (the harness has no
+  // background seam, only `agent/status`).
+  /** Rest 0.82 x what the last pass spent. lcm-x's own constant (#1586). */
+  const EMBED_DUTY_RATIO = 0.82;
+  /** Never tighter than this, so a pass that returns instantly cannot spin. */
+  const EMBED_MIN_REST_MS = 1_000;
+  /** session id -> { timer, stopped }. One driver per session, ever. */
+  const embedJobs = new Map();
+
+  /**
+   * Drive one session's corpus down, paced the way lcm-x paces its worker.
+   *
+   * Each pass is bounded by `embedMaintenanceLimit`; the next is scheduled at
+   * `EMBED_DUTY_RATIO x` the wall clock the last one took, and the chain stops when
+   * the corpus is drained or a pass moves nothing. Timers are unref'd so a pending
+   * pass never holds the process open.
+   * @param session - the session whose compacted texts to embed.
+   */
+  function driveEmbed(session) {
+    if (resolved.enabled !== true) return;
+    const id = session?.id;
+    if (id === undefined || embedJobs.has(id)) return;
+    const job = { timer: null, stopped: false };
+    embedJobs.set(id, job);
+
+    const tick = async () => {
+      job.timer = null;
+      if (job.stopped) return;
+      const started = Date.now();
+      let report;
+      try {
+        ({ report } = await embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit }));
+      } catch (error) {
+        // No turn to fail: the next trigger starts the chain again, and the cache is
+        // the state, so nothing is lost by giving up here.
+        embedJobs.delete(id);
+        ctx.logger.warn(`lcm-embed maintenance skipped: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      const active = Date.now() - started;
+      if (report.embedded > 0) {
+        ctx.logger.info(`lcm-embed maintenance: embedded ${report.embedded} text(s), ${report.remaining} remaining, ${active} ms`);
+      } else if (report.failed > 0) {
+        // A pass that embeds nothing used to log NOTHING, which is how every batch
+        // timed out for two days without a single line to show for it. "Nothing to
+        // do" and "nothing worked" must not look the same.
+        ctx.logger.warn(
+          `lcm-embed maintenance: embedded 0, failed ${report.failed}` +
+          `${report.stopped === undefined || report.stopped === "" ? "" : `, stopped on ${report.stopped}`}` +
+          " — check vectorTimeoutMs against the endpoint's per-text latency"
+        );
+      }
+      if (job.stopped) return;
+      // Drained, or this pass made no progress: stop the chain and let the next
+      // trigger restart it. Retrying a pass that moved nothing would spin.
+      if (report.remaining === 0 || report.embedded === 0) {
+        embedJobs.delete(id);
+        return;
+      }
+      const rest = Math.max(EMBED_MIN_REST_MS, Math.round(EMBED_DUTY_RATIO * active));
+      job.timer = setTimeout(() => { void tick(); }, rest);
+      if (typeof job.timer.unref === "function") job.timer.unref();
+    };
+    void tick();
+  }
   ctx.effect(() => {
     const disposers = [
       ctx.tools.register(defineRecallTool(resolved, "lcm_expand")),
@@ -394,51 +467,31 @@ function apply(ctx, config) {
       // reach, which made every idle's model calls unread output.
       ctx.tools.register(defineTimelineTool(resolved, "lcm_timeline")),
       // ── incremental embedding maintenance ────────────────────────────────
-      // lcm-x schedules one bounded pass per corpus in the background after a leaf
-      // is published and on session bind, "active exactly when embeddings_enabled".
-      // The gate here is the same switch that turns the semantic route on, and the
-      // bound is `embedMaintenanceLimit` — one or two batches, not a corpus drain.
+      // lcm-x triggers a bounded pass on session BIND and after a LEAF IS
+      // PUBLISHED (`engine.py:3149`, `engine.py:3165`), not on an idle agent, and it
+      // paces the chain with a duty cycle rather than a temporal gate. Both triggers
+      // are reproduced here; `driveEmbed` owns the pacing.
       //
-      // Why it belongs on THIS row: the engine row deliberately carries no vector
-      // keys (nothing in the compaction path reads them), so the row that owns the
+      // It belongs on THIS row because the engine row deliberately carries no vector
+      // keys — nothing in the compaction path reads one, so the row that owns the
       // embedding configuration is the only one that can decide this.
-      //
-      // Why idle: a pass embeds texts the search route may look up, and doing that
-      // mid-turn would compete with the request for the endpoint.
-      ctx.on("agent/status", ({ agent, status }) => {
-        if (status !== "idle") return;
-        // resolveVectorConfig renames the switch to `enabled` when it freezes the
-        // record, so the resolved field is not `vectorEnabled`. Reading the wrong one
-        // here would make the pass dead code that still logs nothing.
-        if (resolved.enabled !== true) return;
-        // The dispatcher fuses the subject in (`{ ...payload, agent }`), so `agent`
-        // is present even though the emit site sends only `{ status }`.
+      ctx.on("agent/status", ({ agent }) => {
+        // BIND: the agent exists, so its compacted corpus is now addressable. This is
+        // the closest analogue of lcm-x's bind-time trigger; it fires once per turn
+        // boundary in practice and `driveEmbed` dedupes by session.
         const session = agent?.session;
         if (session === undefined) return;
-        if (embedPasses.has(session.id)) return;
-        embedPasses.add(session.id);
-        void (async () => {
-          try {
-            const { report } = await embedBackfill(session, resolved, { apply: true, limit: resolved.embedMaintenanceLimit });
-            if (report.embedded > 0) {
-              ctx.logger.info(`lcm-embed maintenance: embedded ${report.embedded} text(s), ${report.remaining} remaining`);
-            } else if (report.failed > 0) {
-              // A pass that embeds nothing used to log NOTHING, which is how every
-              // batch timed out for two days without a single line to show for it.
-              // "Nothing to do" and "nothing worked" must not look the same.
-              ctx.logger.warn(
-                `lcm-embed maintenance: embedded 0, failed ${report.failed}` +
-                `${report.stopped === undefined || report.stopped === "" ? "" : `, stopped on ${report.stopped}`}` +
-                ` — check vectorTimeoutMs against the endpoint's per-text latency`
-              );
-            }
-          } catch (error) {
-            // No turn to fail: the next idle tries again, and the cache is the state.
-            ctx.logger.warn(`lcm-embed maintenance skipped: ${error instanceof Error ? error.message : String(error)}`);
-          } finally {
-            embedPasses.delete(session.id);
-          }
-        })();
+        driveEmbed(session);
+      }),
+      ctx.on("session/event", (session, event) => {
+        // PUBLICATION: a checkpoint is what makes new texts embeddable, and it is
+        // lcm-x's primary trigger (`engine.py:3165`). Upstream filters to leaves
+        // (`node.depth === 0`) because a condensation's body is derived from
+        // checkpoints already embedded. This fires on both: telling them apart needs
+        // the surface fold, and a condensation that yields nothing makes the pass
+        // embed 0 and the chain stop, so the extra trigger costs one no-op.
+        if (event?.type !== "compaction/summary") return;
+        driveEmbed(session);
       })
     ];
     // The original backend's names stay available so anything already written
@@ -448,6 +501,14 @@ function apply(ctx, config) {
       disposers.push(ctx.tools.register(defineSearchTool(resolved, "search")));
     }
     return () => {
+      // A scheduled pass is a timer, not a registration, so unloading the row has to
+      // stop it explicitly. Without this the chain outlives its own ctx and the next
+      // slice writes through a disposed row.
+      for (const job of embedJobs.values()) {
+        job.stopped = true;
+        if (job.timer !== null) clearTimeout(job.timer);
+      }
+      embedJobs.clear();
       for (const dispose of disposers) dispose();
     };
   });
