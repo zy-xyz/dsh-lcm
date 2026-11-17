@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { sessionEvents } from "../src/events.js";
+import { collectVectorItems } from "../src/search.js";
 import { planDayRollups } from "../src/rollup.js";
 import { unminedCheckpoints } from "../src/assertion.js";
 
@@ -58,4 +59,28 @@ test("the assertion planner sees a real-shaped session too", () => {
   const session = snapshotSession(events);
   assert.equal(unminedCheckpoints(session.events ?? [], new Set()).length, 0, "the defect");
   assert.equal(unminedCheckpoints(sessionEvents(session), new Set()).length, 1, "the fix");
+});
+
+test("the vector collector reads a real-shaped session, and the fixture shape agrees", () => {
+  // An audit flagged the vector matrix files for building sessions out of an `events`
+  // array. That fixture path is supported on purpose (events.js keeps it first so
+  // older callers work), but it means those files never exercise `snapshotEvents()`
+  // — a real Session has no `events` property at all. This pins the parity once, so
+  // the collector's real path is covered without rewriting eight fixtures.
+  const events = [
+    { seq: 0, type: "user/message", data: { content: [{ type: "text", text: "alpha note" }] } },
+    { seq: 1, type: "user/message", data: { content: [{ type: "text", text: "beta note" }] } }
+  ];
+  const bounds = { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER };
+  const real = snapshotSession(events);
+  const fixture = { ...real, events, snapshotEvents: undefined };
+
+  const fromReal = collectVectorItems(real, bounds).items;
+  const fromFixture = collectVectorItems(fixture, bounds).items;
+  assert.equal(fromReal.length, 2, "the real accessor yields both candidates");
+  assert.deepEqual(
+    fromReal.map((item) => item.text),
+    fromFixture.map((item) => item.text),
+    "both session shapes must rank the same bytes"
+  );
 });
