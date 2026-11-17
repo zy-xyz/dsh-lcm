@@ -116,13 +116,13 @@ function harness(config) {
 
 test("going idle starts the rollup pass", async () => {
   const dir = await scratch();
-  const { engine, listeners, calls, release, registry } = harness({ rollupDir: dir });
+  const { engine, listeners, calls, release } = harness({ rollupDir: dir });
   const session = sessionShape();
   const handler = listeners.get("agent/status");
   assert.equal(typeof handler, "function", "apply() must subscribe to agent/status");
 
-  registry.push({ session, options: {} });
-  handler({ status: "idle" });
+  // The real dispatcher fuses the subject in: `{ ...payload, agent }`.
+  handler({ status: "idle", agent: { session, options: {} } });
   // The pass is detached, so the guard is the observable proof it started.
   assert.equal(engine.rollupPasses.size, 1, "the rollup guard was taken");
 
@@ -141,7 +141,7 @@ test("a non-idle status starts nothing", async () => {
   const { engine, listeners } = harness({ rollupDir: dir });
   const session = sessionShape();
   const handler = listeners.get("agent/status");
-  handler({ status: "running" });
+  handler({ status: "running", agent: { session, options: {} } });
   assert.equal(engine.rollupPasses.size, 0, "running is not the trigger");
   assert.equal(engine.idlePasses.size, 0);
   assert.equal(engine.prepPasses.size, 0);

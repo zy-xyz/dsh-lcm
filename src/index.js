@@ -387,10 +387,7 @@ export class LcmCompactionEngine extends CompactionEngine {
   static inject = [
     "llm",
     "tokenMeter",
-    "sessions",
-    // The idle listeners find their agent through this registry: `agent/status`
-    // carries only `{ status }`, so without it every idle pass is a silent no-op.
-    "agents"
+    "sessions"
   ];
   static Config = z.object({
     thresholdRatio: thresholdRatioSchema,
@@ -630,13 +627,18 @@ export class LcmCompactionEngine extends CompactionEngine {
       }
       return next();
     }));
-    // The event payload is ONLY `{ status }`. Destructuring `agent` out of it gave
-    // undefined, so every idle pass below was a no-op that threw nothing: the idle
-    // continuation, the leaf preparation, the rollup maintenance and the assertion
-    // extraction had never run in any boot. The registry is the way in.
-    disposers.push(ctx.on("agent/status", ({ status }) => {
+    // The dispatcher is `agentEvents`, which fuses the subject into the payload:
+    // `{ ...payload, agent }` (dsh-agent/lib/index.js:358-376). The emit site passes
+    // only `{ status }`, so `agent` is injected here and destructuring it is correct.
+    //
+    // Do not reach for `ctx.agents.roots()` instead. It filters on
+    // `entry.owner === undefined` (dsh-agent/lib/index.js:752), so it drops every
+    // agent that has an owner — i.e. essentially all of them. Wrapping this block in
+    // a `roots()` loop made four idle passes that were merely suspect into passes
+    // that provably never ran, and the `?? []` swallowed the difference.
+    disposers.push(ctx.on("agent/status", ({ agent, status }) => {
       if (status !== "idle") return;
-      for (const agent of ctx.agents?.roots?.() ?? []) {
+      if (agent === undefined) return;
       this.overflowRetries.delete(agent);
       // ── the idle continuation ───────────────────────────────────────────
       // A sweep that stops on its soft target leaves the session still over
@@ -666,7 +668,6 @@ export class LcmCompactionEngine extends CompactionEngine {
       // Assertions are derived from checkpoints, so they run after the rollup pass and
       // never compete with it: both are idle-only and both are bounded.
       this._extractAssertions(agent);
-      }
     }));
     // A model switch is a pressure event: the next request runs on a DIFFERENT
     // window, and if the new one is smaller the history that comfortably fit the

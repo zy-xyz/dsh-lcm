@@ -33,7 +33,7 @@ const name = "tool-lcm-expand";
 // `webServer` carries the insight endpoints. Declaring it here rather than adding a
 // second bundle keeps the read-only panel in the package it reads: one install, one
 // row, and the panel cannot drift from the engine it reports on.
-const inject = ["tools", "webServer", "agents"];
+const inject = ["tools", "webServer"];
 /**
  * Texts one incremental embedding pass may embed. Two batches of 32.
  *
@@ -411,11 +411,8 @@ function apply(ctx, config) {
         // record, so the resolved field is not `vectorEnabled`. Reading the wrong one
         // here would make the pass dead code that still logs nothing.
         if (resolved.enabled !== true) return;
-        // `agent/status` is dispatched through `agentEvents`, whose fused payload is
-        // `{ ...payload, agent }` — the emit site passes only `{ status }`, the
-        // dispatcher adds the subject. Destructuring `agent` here is therefore
-        // correct; reading `ctx.agents.roots()` instead is what breaks it, because
-        // roots() drops every agent that has an owner.
+        // The dispatcher fuses the subject in (`{ ...payload, agent }`), so `agent`
+        // is present even though the emit site sends only `{ status }`.
         const session = agent?.session;
         if (session === undefined) return;
         if (embedPasses.has(session.id)) return;
