@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.39.0 — 2026-11-17 — the structure view says which boxes are still in the window
+
+A checkpoint is not context. A root checkpoint still stands on the surface and its kept
+tokens come out of the window; a child was folded into its parent and takes no room at
+all. Both were drawn the same way, so the one question the graph exists to answer — what
+is in the context window right now — could not be read off it.
+
+Roots (depth 0) now carry a solid left edge at full opacity; absorbed nodes drop to 45 %
+with their track and fill at 30 %. The state is also in each node's `aria-label` and in
+the selected-node detail row, and the legend sits OUTSIDE the scroll container so the two
+states stay visible while the graph scrolls. A dash pattern was not an option: it already
+means "degraded" on this graph (0.32.0), and opacity alone is easy to miss on a 118x26 box.
+
 ## 0.38.0 — 2026-11-15 — the panel becomes a control surface, and stops costing 16 s to open
 
 Two things the sidebar panel could not do: change anything, and open quickly.

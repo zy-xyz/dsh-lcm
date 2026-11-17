@@ -38,8 +38,10 @@ window.__ModuleLoader__.load({
         live: 'live',
         stale: 'stale',
         refresh: 'Refresh',
-        graphHint: 'Each box is a checkpoint; a box with several lines into it is a rollup of those checkpoints.',
+        graphHint: 'Each box is a checkpoint; a box with several lines into it is a rollup of those checkpoints. A box with a solid left edge is still in the context window; a dimmed one was folded into the box on its left and takes no room any more.',
         depth: 'depth',
+        inWindow: 'in window',
+        absorbed: 'compacted away',
         children: 'children',
         close: 'Close',
         session: 'This session',
@@ -112,8 +114,10 @@ window.__ModuleLoader__.load({
         live: '实时',
         stale: '已断开',
         refresh: '刷新',
-        graphHint: '每个方块是一个检查点；多条线汇入的方块是把它们合并的凝聚节点。',
+        graphHint: '每个方块是一个检查点；多条线汇入的方块是把它们合并的凝聚节点。带左侧竖条的是仍在上下文窗口里的节点，变暗的已被左侧节点吸收、不再占位置。',
         depth: '深度',
+        inWindow: '窗口中',
+        absorbed: '已压缩',
         children: '子节点',
         close: '关闭',
         session: '本会话',
@@ -443,6 +447,17 @@ window.__ModuleLoader__.load({
       .lcmi-gnode-meta { fill: var(--dsw-alias-label-secondary); font-size: 9px; font-variant-numeric: tabular-nums; }
       .lcmi-gnode-track { fill: var(--dsw-alias-bg-layer-2); }
       .lcmi-gnode-fill { fill: var(--dsw-alias-brand-primary); opacity: .75; }
+      .lcmi-gnode-mark { fill: var(--dsw-alias-brand-primary); }
+      .lcmi-gnode.is-absorbed .lcmi-gnode-box { opacity: .45; }
+      .lcmi-gnode.is-absorbed .lcmi-gnode-seq,
+      .lcmi-gnode.is-absorbed .lcmi-gnode-meta { opacity: .55; }
+      .lcmi-gnode.is-absorbed .lcmi-gnode-track,
+      .lcmi-gnode.is-absorbed .lcmi-gnode-fill { opacity: .3; }
+      .lcmi-glegend { display: flex; gap: 12px; align-items: center; padding: 0 0 6px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+      .lcmi-glegend span { display: inline-flex; align-items: center; gap: 4px; }
+      .lcmi-glegend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+      .lcmi-glegend i.is-in-window { background: var(--dsw-alias-brand-primary); }
+      .lcmi-glegend i.is-absorbed { border: 1px solid var(--dsw-alias-border-l2); opacity: .55; }
       .lcmi-gdetail {
         display: flex; align-items: center; justify-content: space-between; gap: 10px;
         border: var(--lcmi-line); border-radius: var(--lcmi-radius-tile);
@@ -718,7 +733,10 @@ window.__ModuleLoader__.load({
         const y = childRows.length === 0
           ? row++
           : (childRows[0] + childRows[childRows.length - 1]) / 2;
-        const placed = { ...node, depth, row: y };
+        // A root is a checkpoint nothing absorbed: it is still standing on the
+        // surface, i.e. inside the context window. Everything below it was folded
+        // into a parent and takes no room any more.
+        const placed = { ...node, depth, row: y, inWindow: depth === 0 };
         nodes.push(placed);
         for (const child of children) {
           edges.push({ from: placed, to: nodes.find((candidate) => candidate.seq === child.seq) });
@@ -744,12 +762,15 @@ window.__ModuleLoader__.load({
     function GraphNode({ node, x, y, selected, onSelect, t }) {
       const saved = Math.max(0, node.span - node.kept);
       const ratio = node.kept === 0 ? 1 : Math.min(1, node.kept / Math.max(1, node.span));
+      // The state is spelled out for assistive tech as well as drawn: dimming alone
+      // would carry it for sighted readers only.
+      const state = node.inWindow ? ' is-in-window' : ' is-absorbed';
       return h('g', {
         transform: 'translate(' + x + ',' + y + ')',
-        className: 'lcmi-gnode' + (selected ? ' is-selected' : ''),
+        className: 'lcmi-gnode' + (selected ? ' is-selected' : '') + state,
         role: 'button',
         tabIndex: 0,
-        'aria-label': 'seq ' + node.seq + ', ' + t('depth') + ' ' + node.depth,
+        'aria-label': 'seq ' + node.seq + ', ' + t('depth') + ' ' + node.depth + ', ' + t(node.inWindow ? 'inWindow' : 'absorbed'),
         onClick: () => onSelect(node.seq),
         onKeyDown: (event) => {
           if (event.key === 'Enter' || event.key === ' ') {
@@ -758,6 +779,11 @@ window.__ModuleLoader__.load({
           }
         }
       },
+        // A left edge only the in-window nodes carry. A dash pattern is already the
+        // degraded marker here, and opacity alone is easy to miss at this box size.
+        node.inWindow
+          ? h('rect', { className: 'lcmi-gnode-mark', x: 0, y: 4, width: 2.5, height: NODE.h - 8, rx: 1.25 })
+          : null,
         h('rect', {
           className: 'lcmi-gnode-box',
           width: NODE.w, height: NODE.h, rx: NODE.r, ry: NODE.r,
@@ -794,6 +820,12 @@ window.__ModuleLoader__.load({
       const yOf = (row) => NODE.padY + row * (NODE.h + NODE.gapY);
 
       return h('div', { className: 'lcmi-graph-wrap' },
+        // The legend sits outside the scroll container so it cannot scroll away: the
+        // two states are the whole point of the view.
+        h('div', { className: 'lcmi-glegend' },
+          h('span', null, h('i', { className: 'is-in-window', 'aria-hidden': 'true' }), t('inWindow')),
+          h('span', null, h('i', { className: 'is-absorbed', 'aria-hidden': 'true' }), t('absorbed'))
+        ),
         // The scroll container is this DIV, not the `svg`: an SVG element with
         // `overflow: auto` does not scroll its own content, it clips it.
         h('div', { className: 'lcmi-graph-scroll' },
@@ -850,6 +882,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'lcmi-gdetail-row' },
           h('b', null, 'seq ' + node.seq),
           h('span', null, t('depth') + ' ' + node.depth),
+          h('span', null, t(node.inWindow ? 'inWindow' : 'absorbed')),
           h('span', null, tok(node.span) + ' → ' + tok(node.kept)),
           h('span', null, t('rawMessages') + ' ' + node.rawMessages),
           h('span', null, node.children.length + ' ' + t('children')),
