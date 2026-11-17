@@ -965,6 +965,37 @@ function readJsonBody(req, limitBytes = 1 << 20) {
   });
 }
 
+/**
+ * Log a route failure with its stack.
+ *
+ * The panels show only `error.message`, and a TypeError message names neither the
+ * file nor the line. The stack goes to a file AND to the host logger: the logger's
+ * level for this route was silent, and a restart-and-guess cycle is worse.
+ *
+ * This never replaces the original failure — a throw from here would hide the
+ * error it was called to report, which is exactly what happened when the calls
+ * landed before this definition did: two ReferenceErrors turned every route 500
+ * into a bare `400 Bad Request` with no body.
+ * @param ctx - the plugin context, for its logger.
+ * @param route - which route failed.
+ * @param error - the thrown value.
+ */
+function reportRouteFailure(ctx, route, error) {
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  try {
+    fs.appendFileSync("/tmp/lcm-insight-route-errors.log", new Date().toISOString() + " [" + route + "] " + detail + "\n\n");
+  } catch {
+    // The file is a diagnostic; losing it must not lose the error.
+  }
+  try {
+    const logger = ctx === undefined || ctx === null ? undefined : ctx.logger;
+    if (typeof logger?.warn === "function") logger.warn(`lcm-insight ${route} route failed: ${detail}`);
+    else console.error(`lcm-insight ${route} route failed: ${detail}`);
+  } catch {
+    // Reporting must never replace the original failure.
+  }
+}
+
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
