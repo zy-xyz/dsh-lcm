@@ -272,7 +272,9 @@ test("compactNow compacts an idle session and returns a durable result", { skip 
   // `condensationFanin` and `fullSweepMaxSeconds`. A bare object left those
   // undefined and the second iteration selected a range over seqs the first
   // compaction had already removed.
-  engine.config = resolveConfig({ auto: false });
+  // The manual path now prices the fresh tail it must keep, and this world has no
+  // routed header to price it from; the budget is declared absolutely instead.
+  engine.config = resolveConfig({ auto: false, retainTokens: 100 });
   engine.ctx = {
     tokenMeter: {
       measure: (s) => ({ nodes: s.surface.nodes.map((seq) => ({ seq, tokens: 100 })), totalTokens: s.surface.nodes.length * 100 }),

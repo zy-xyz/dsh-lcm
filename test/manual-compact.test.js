@@ -120,7 +120,7 @@ async function* textStream(text) {
  * @param contextWindow - routed model window the automatic path prices against.
  * @returns the world plus its observation points.
  */
-function buildWorld(seed, contextWindow) {
+function buildWorld(seed, contextWindow, config = { auto: false, retainTokens: 1 }) {
   const { Session, Context, TokenMeter, LcmCompactionEngine } = harnessPackages;
   const session = Session.create("manual-compact-" + seed.length, seed);
   const ctx = new Context();
@@ -147,7 +147,7 @@ function buildWorld(seed, contextWindow) {
     }
   });
   const meter = new TokenMeter(ctx, {});
-  const engine = new LcmCompactionEngine(ctx, { auto: false });
+  const engine = new LcmCompactionEngine(ctx, config);
   const agent = {
     session: session,
     options: {},
@@ -397,6 +397,45 @@ test("a second manual /compact no longer absorbs the first checkpoint", { skip }
     checkpointRecords(session).map((event) => event.seq),
     afterSecond.map((entry) => entry.seq),
     "each replacement record is still on the surface"
+  );
+});
+
+// ── the fresh tail a manual pass must leave alone ──────────────────────────
+
+test("a manual /compact keeps the fresh tail it priced, and never swallows it", { skip }, async () => {
+  // lcm-x protects the fresh tail unconditionally: `force` clears only the SOFT
+  // TIME clock, while the candidate window stays everything BEFORE
+  // `fresh_tail_start`. We passed retain 0 into the manual selector, which made
+  // /compact the one path that could swallow the newest context. This test is the
+  // defect: the priced tail must still be raw after the command.
+  const contextWindow = 40000;
+  const reserved = 1024; // the seeded request/header's own maxTokens
+  const expectedTailTokens = Math.floor((contextWindow - reserved) * 0.05); // DEFAULT_RETAIN_RATIO
+  // headroom must be smaller than the window, or the pressure budget is empty.
+  const { session, engine, agent, meter } = buildWorld(seedFor(20), contextWindow, { auto: false, headroomTokens: 2000 });
+
+  const before = meter.measure(session);
+  assert.ok(before.totalTokens > expectedTailTokens, "the seed must exceed the tail, or there is nothing to prove");
+
+  const result = await engine.compactNow(agent, new AbortController().signal, "cmd-tail");
+  assert.ok(result !== null, "a session over its tail has something to compact");
+
+  const checkpoints = surfaceCheckpoints(session);
+  assert.equal(checkpoints.length, 1, "one leaf over the prefix");
+  const kept = before.nodes.filter((node) => node.seq > result.shadowedRange.end);
+  const keptTokens = kept.reduce((sum, node) => sum + node.tokens, 0);
+  assert.ok(
+    keptTokens >= expectedTailTokens,
+    "the retained tail must cover the priced budget: kept " + keptTokens + " < " + expectedTailTokens
+  );
+  assert.deepEqual(
+    session.surface.nodes.slice(-kept.length),
+    kept.map((node) => node.seq),
+    "every kept node is still raw on the surface, in order"
+  );
+  assert.ok(
+    result.shadowedRange.end < kept[0].seq,
+    "the checkpoint must end before the first kept node"
   );
 });
 

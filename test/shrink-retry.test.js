@@ -338,7 +338,9 @@ function reasoningOnlyWorld(turns) {
   ctx.set("sessions", { flush: async () => {} });
   new TokenMeter(ctx, {});
   // emptySummaryRetries 0: one attempt, then the ladder's level-3 rung.
-  const engine = new LcmCompactionEngine(ctx, { auto: false, emptySummaryRetries: 0 });
+  // retainTokens is declared because the manual path prices the fresh tail it keeps,
+  // and this world's routed header prices a tail larger than the whole seeded session.
+  const engine = new LcmCompactionEngine(ctx, { auto: false, emptySummaryRetries: 0, retainTokens: 1 });
   const agent = { session, options: {}, runMaintenance: (task) => task(new AbortController().signal) };
   return { session, engine, agent, calls };
 }

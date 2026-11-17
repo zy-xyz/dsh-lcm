@@ -1600,9 +1600,42 @@ export class LcmCompactionEngine extends CompactionEngine {
           // left for output.
           //
           // So: leaves, and the hard clock bounds the pass. The soft target is 0
-          // because the operator asked for this explicitly, and `retain 0` because
-          // "compact what you can" is the whole meaning of the command.
+          // because the operator asked for this explicitly.
           //
+          // The fresh tail is NOT zero. lcm-x protects it unconditionally: `force`
+          // clears only the SOFT TIME clock (`compaction.py:2250-2251`), while the
+          // candidate window stays `messages[leading_anchor_count:fresh_tail_start]`
+          // (`:626-633`). We passed retain 0 here, which made /compact the one path
+          // that could swallow the newest context — the opposite of what a manual
+          // pass is for, and what left a compacted session with nothing raw to read.
+          //
+          // The amount is the retention the automatic path prices: the target
+          // policy's own `retainTokens`, else floor(messageBudget × retainRatio).
+          // Manual compaction carries no routed request envelope to reserve the
+          // completion budget from, so nothing is reserved here.
+          // A manual pass carries no request envelope of its own, so it prices the
+          // retention off the session's durable routed header — the same envelope the
+          // automatic path prices — and falls back to the agent's selected route.
+          const header = agent.session.requestHeader();
+          const options = agent.options ?? {};
+          const routed = routedTarget(agent.session) ?? (
+            typeof options.provider === "string" && options.provider.length > 0 &&
+            typeof options.model === "string" && options.model.length > 0
+              ? { provider: options.provider, model: options.model }
+              : undefined
+          );
+          const manualPolicy = resolveTargetPolicy(this.config, routed ?? {});
+          let retainTokens = manualPolicy.retainTokens;
+          if (retainTokens === undefined) {
+            if (routed === undefined) {
+              throw new TargetPressureConfigError(
+                "manual /compact",
+                "compaction-lcm: cannot price the fresh tail a manual pass must keep, because the session has no routed request header and the agent has no selected route; set retainTokens to an absolute budget"
+              );
+            }
+            const info = await this.ctx.llm.resolveModelInfo(routed.provider, routed.model, operationSignal);
+            retainTokens = resolveCompactSpec(manualPolicy, info?.context?.contextWindow, reservedCompletionTokens(header, info?.defaultMaxTokens)).retainTokens;
+          }
           // The fanin is the one shape knob manual compaction keeps, and passing it is
           // not cosmetic: `fanin > 1` is the only branch in ./region.js that skips the
           // checkpoints already on the surface. With fanin 0 every manual run started
@@ -1614,7 +1647,9 @@ export class LcmCompactionEngine extends CompactionEngine {
           for (;;) {
             operationSignal.throwIfAborted();
             const current = this.ctx.tokenMeter.measure(agent.session);
-            const range = selectCompactableRange(agent.session, current, 0, 0, this.config.leafSpanTokens, this.config.condensationFanin);
+            // minTokens stays 0: the operator asked for this pass explicitly, and a
+            // prefix shorter than the summary floor is still theirs to compact.
+            const range = selectCompactableRange(agent.session, current, retainTokens, 0, this.config.leafSpanTokens, this.config.condensationFanin);
             if (range === null) return result;
             result = await compactSurfaceRegion(this.regionDependencies(), agent.session, range.start, range.end, agent, {
               owner: null,
