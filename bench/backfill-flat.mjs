@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { resolveConfig } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/tool.js";
 import { groupIntoRequests, resolveVectorConfig, embedTextsTolerant, vectorCache, vectorCacheStats } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/vectors.js";
 import { collectVectorItems } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/search.js";
+import { deriveEventMessage } from "/home/agent/workspaces/lcmx-study/dsh-lcm/src/events.js";
 
 process.env.DSH_HOME = "/home/agent/.dsh";
 const cfg = resolveConfig({
@@ -59,8 +60,14 @@ probe.db.close();
 const keyOf = cache.key;
 
 const pending = [];
+// Dedupe ACROSS sessions. The same bytes recur in many logs — a workspace copy, a
+// forked session, a repeated tool result — and the cache is content-addressed, so a
+// second request for text already queued buys nothing. Measured mid-run: 4 241
+// embeddings produced 2 413 new rows, i.e. ~43% of the requests were duplicates.
+const queued = new Set();
 let scannedSessions = 0;
 let alreadyCached = 0;
+let duplicates = 0;
 for (const entry of sessions) {
   let ev;
   try {
@@ -68,7 +75,11 @@ for (const entry of sessions) {
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
       .filter((x) => x && Number.isSafeInteger(x.seq));
   } catch { continue; }
-  const session = { id: entry.id, snapshotEvents: () => ev, get seq() { return ev.length; }, eventAt: () => undefined, deriveEventMessage: (x) => x?.data?.message ?? null };
+  // The harness's own projection. An approximation here writes the WRONG bytes:
+  // `(x) => x?.data?.message ?? null` is null for every user/message, so
+  // renderEventBody falls back to a JSON dump and the cache fills with text no
+  // search route would ever look up.
+  const session = { id: entry.id, snapshotEvents: () => ev, get seq() { return ev.length; }, eventAt: () => undefined, deriveEventMessage };
   let items;
   try { items = collectVectorItems(session, { events: Number.MAX_SAFE_INTEGER, tokens: Number.MAX_SAFE_INTEGER }).items ?? []; } catch { continue; }
   scannedSessions += 1;
@@ -76,6 +87,8 @@ for (const entry of sessions) {
     const text = String(item.text ?? "").slice(0, 4000);
     if (!text.trim()) continue;
     if (digests.has(keyOf(text))) { alreadyCached += 1; continue; }
+    if (queued.has(text)) { duplicates += 1; continue; }
+    queued.add(text);
     pending.push(text);
   }
 }
@@ -88,7 +101,7 @@ for (const entry of sessions) {
 // anywhere from 2.8 s to 36 s).
 const GROUPS_PER_REQUEST_TOKENS = Number(process.env.LCM_BACKFILL_REQUEST_TOKENS ?? 12_000);
 const groups = groupIntoRequests(pending, GROUPS_PER_REQUEST_TOKENS);
-log("queue: " + scannedSessions + " sessions | pending " + pending.length + " texts | " + groups.length + " groups | already cached " + alreadyCached);
+log("queue: " + scannedSessions + " sessions | pending " + pending.length + " unique texts | " + groups.length + " groups | already cached " + alreadyCached + " | duplicates dropped " + duplicates);
 log("workers " + rv.concurrency + " | " + GROUPS_PER_REQUEST_TOKENS + " tokens/request | store " + (await countCache()) + " rows");
 
 // ── drain the queue with a fixed worker pool ─────────────────────────────
@@ -116,59 +129,50 @@ const worker = async () => {
     const batch = groups[index];
     let attempt = 0;
     let result;
-    try {
-      result = await embedTextsTolerant(cfg, batch);
-      successesSinceFailure += 1;
-      consecutiveFailures = 0;
-      if (rateLimited > 0) rateLimited = Math.max(0, rateLimited - 1);
-    } catch (error) {
-      const message = String(error?.message ?? error);
-      // A 429 is the endpoint asking for a slower pace, not a dead endpoint. The
-      // breaker must not read it as one: measured, a run stopped 4 minutes in with
-      // "HTTP 429" after embedding 422 texts, while a direct probe minutes later
-      // answered 8/8. So a rate limit backs off, retries the SAME batch, and never
-      // counts toward the breaker.
-      if (message.includes("HTTP 429")) {
-        rateLimited += 1;
-        const wait = Math.min(60_000, 2_000 * 2 ** Math.min(rateLimited, 5));
-        log("429 on a batch of " + batch.length + ", waiting " + (wait / 1000).toFixed(0) + "s (rate limit #" + rateLimited + ")");
-        await new Promise((r) => setTimeout(r, wait));
-        cursor = index;      // put this batch back at the front of the queue
-        continue;
+    // Retry IN PLACE. Rewinding the shared `cursor` (the previous shape) re-handed
+    // batches already claimed by other workers: with 19 in flight a single failure
+    // re-ran up to 18 finished batches, which is why a 5 807-text queue reported
+    // 8 331 embeddings. The count was inflated; the writes were duplicates the
+    // content-addressed store collapsed.
+    for (;;) {
+      try {
+        result = await embedTextsTolerant(cfg, batch);
+        successesSinceFailure += 1;
+        consecutiveFailures = 0;
+        if (rateLimited > 0) rateLimited = Math.max(0, rateLimited - 1);
+        break;
+      } catch (error) {
+        const message = String(error?.message ?? error);
+        // A 429 is the endpoint asking for a slower pace, not a dead endpoint.
+        if (message.includes("HTTP 429")) {
+          rateLimited += 1;
+          const wait = Math.min(60_000, 2_000 * 2 ** Math.min(rateLimited, 5));
+          log("429 on a batch of " + batch.length + ", waiting " + (wait / 1000).toFixed(0) + "s (rate limit #" + rateLimited + ")");
+          await new Promise((r) => setTimeout(r, wait));
+          continue;
+        }
+        // A timeout or a 5xx is the corridor, not a verdict on these bytes.
+        const transient =
+          message.includes("timed out") ||
+          message.includes("aborted") ||
+          message.includes("unreachable") ||
+          /returned HTTP 5\d\d/u.test(message);
+        if (transient && attempt < MAX_TRANSIENT_ATTEMPTS) {
+          attempt += 1;
+          transientRetries += 1;
+          await new Promise((r) => setTimeout(r, 3_000 * attempt));
+          continue;
+        }
+        failed += batch.length;
+        consecutiveFailures += 1;
+        // A failure only counts when nothing has succeeded since the previous one.
+        const tripped = successesSinceFailure === 0 && consecutiveFailures >= 2;
+        successesSinceFailure = 0;
+        if (tripped) { stopped = "failures: " + message.slice(0, 80); return; }
+        break;
       }
-      // A TIMEOUT is not a verdict on these bytes, and treating it as one loses
-      // them permanently: the driver moves on and the texts never come back. The
-      // endpoint measured 7.1 s, 40.3 s and two 90 s timeouts on five one-text
-      // probes within the same minute, so this is the corridor, not the payload.
-      // Retry the same batch a bounded number of times before counting it.
-      // What counts as "this corridor is having a moment" rather than "these bytes
-      // are unacceptable". A 5xx is the server failing, not a verdict on the payload:
-      // measured 2026-11-16, a run stopped with "returned HTTP 500" after embedding
-      // 1 637 texts, and the same texts embedded 35/35 minutes later. 429 is the same
-      // family and is handled above with its own backoff.
-      const transient =
-        message.includes("timed out") ||
-        message.includes("aborted") ||
-        message.includes("unreachable") ||
-        /returned HTTP 5\d\d/u.test(message) ||
-        message.includes("HTTP 429");
-      if (transient && attempt < MAX_TRANSIENT_ATTEMPTS) {
-        attempt += 1;
-        transientRetries += 1;
-        const wait = 3_000 * attempt;
-        await new Promise((r) => setTimeout(r, wait));
-        cursor = index;      // same batch, back at the front
-        continue;
-      }
-      failed += batch.length;
-      consecutiveFailures += 1;
-      // Same rule as the engine: a failure only counts when nothing has succeeded
-      // since the previous one, so a live endpoint that drops a batch continues.
-      const tripped = successesSinceFailure === 0 && consecutiveFailures >= 2;
-      successesSinceFailure = 0;
-      if (tripped) { stopped = "failures: " + message.slice(0, 80); return; }
-      continue;
     }
+    if (result === undefined) continue;
     for (let i = 0; i < batch.length; i += 1) {
       const vector = result.vectors[i];
       if (vector === undefined) { failed += 1; continue; }
