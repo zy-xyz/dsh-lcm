@@ -1053,6 +1053,9 @@ export async function vectorCacheStats(cfg) {
     if (cacheStatsCache.key === key && cacheStatsCache.version === version) {
       return { ...cacheStatsCache.value, dir: resolved.cacheDir };
     }
+    // Exact, not stale-while-revalidate. COUNT(*) is 400 ms now that SUM(LENGTH(vec))
+    // is gone, and this is a management figure a caller may act on — answering with a
+    // number from before the write that just happened read as a bug in a test.
     const stats = storeStats(store);
     const value = { dir: resolved.cacheDir, model: resolved.model, dim: resolved.dim, files: stats.entries, bytes: stats.bytes, identity: store.identity };
     cacheStatsCache = { key, version, value };
@@ -1064,6 +1067,7 @@ export async function vectorCacheStats(cfg) {
 
 /** The last cache-stats answer, keyed by identity and the store's data_version. */
 let cacheStatsCache = { key: null, version: -1, value: null };
+
 
 /**
  * Delete every sibling cache directory that belongs to another model.

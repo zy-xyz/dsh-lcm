@@ -135,7 +135,7 @@ export function openVectorStore(cfg) {
     VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, 1)
     ON CONFLICT(identity_hash) DO UPDATE SET active = 1, archived_at = NULL
   `).run(identity, "", cfg.model, cfg.dim, DTYPE, BYTEORDER, TASK, new Date().toISOString());
-  return { db, file, identity };
+  return { db, file, identity, dim: cfg.dim };
 }
 
 /**
@@ -190,10 +190,13 @@ export function writeVector(store, text, vector, tokenCount) {
  * @returns `{ entries, bytes }`.
  */
 export function storeStats(store) {
+  // COUNT only. SUM(LENGTH(vec)) measured 1 271 ms because it walks every blob, to
+  // report a number that is exact by construction: every row stores `dim * 4` bytes.
   const row = store.db.prepare(
-    "SELECT COUNT(*) AS entries, COALESCE(SUM(LENGTH(vec)), 0) AS bytes FROM lcm_embedding_vectors WHERE identity_hash = ?"
+    "SELECT COUNT(*) AS entries FROM lcm_embedding_vectors WHERE identity_hash = ?"
   ).get(store.identity);
-  return { entries: Number(row?.entries ?? 0), bytes: Number(row?.bytes ?? 0) };
+  const entries = Number(row?.entries ?? 0);
+  return { entries, bytes: entries * store.dim * 4 };
 }
 
 /** Every vector's embedded_id for one identity, for the panel's coverage test. */
