@@ -972,7 +972,7 @@ function decodeEmbeddings(payload, cfg, url, expected) {
  * by callers.
  *
  * @param cfg - vector settings (raw or resolved).
- * @returns `{ dir, model, key, path, get, set, getMany, setMany }` — `dir` is
+ * @returns `{ dir, model, key, path, get, knownIds, set, getMany, setMany }` — `dir` is
  *   the model's own directory, not the shared root.
  */
 export function vectorCache(cfg) {
@@ -986,6 +986,20 @@ export function vectorCache(cfg) {
   /** Read one cached vector, or null on a miss. */
   async function get(text) {
     return readVector(store, text);
+  }
+
+  /**
+   * Every embedded text id for this identity, in ONE query.
+   *
+   * `get()` per candidate is a primary-key hit each, but a backfill asks it about
+   * ~150 000 texts per pass and the awaits alone dominate the slice: measured on the
+   * live host the maintenance chain sat at 1.1 cores while writing three rows a
+   * minute. The panel made the same switch earlier (144 096 lookups 15.9 s -> one
+   * SELECT 504 ms).
+   * @returns {Promise<Set<string>>} `embeddedIdOf(text)` for every stored vector.
+   */
+  async function knownIds() {
+    return allEmbeddedIds(store);
   }
 
   /** Store one vector. */
@@ -1020,6 +1034,7 @@ export function vectorCache(cfg) {
     // rather than two keys.
     key: embeddedIdOf,
     get,
+    knownIds,
     set,
     getMany,
     setMany,

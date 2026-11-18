@@ -411,6 +411,9 @@ function apply(ctx, config) {
   let embedJob = null;
   /** When the last full-corpus sweep started; see `corpusQueue`. */
   let lastSweepAt = 0;
+
+  /** File -> mtimeMs at which the sweep last DRAINED it. */
+  const seenFiles = new Map();
   /** A full sweep walks every log, so it runs at most this often. */
   const EMBED_SWEEP_COOLDOWN_MS = 30 * 60_000;
   /**
@@ -436,10 +439,14 @@ function apply(ctx, config) {
    * @param id - the session id this log belongs to.
    * @returns a session-shaped value `embedBackfill` accepts.
    */
-  function logSession(file, id) {
+  function logSession(file, id, stamp) {
     let cached;
     return {
       id,
+      // Where this source came from, so the sweep can remember it was drained at
+      // this revision. A live session passed in by a trigger has neither.
+      file,
+      stamp,
       snapshotEvents() {
         if (cached === undefined) cached = readLog(file) ?? [];
         return cached;
@@ -458,6 +465,12 @@ function apply(ctx, config) {
   function corpusQueue(trigger) {
     const queue = [];
     if (trigger !== undefined) queue.push(trigger);
+    // A source that has not been written since it was last DRAINED cannot have new
+    // text. Without this every walk re-derived and re-hashed all 290 logs (426 MB)
+    // to find the handful of new messages, which is what held the host at ~1 core
+    // with three rows a minute to show for it. Only a source that reported
+    // `remaining === 0` is remembered, so an unfinished one is always retried.
+    const seen = (file, stamp) => stamp !== undefined && seenFiles.get(file) === stamp;
     // The full sweep is bounded by a cooldown, not run on every trigger. Walking 290
     // logs means inflating them all — measured ~15 s of CPU for this deployment — and
     // a session that goes idle every turn would pay it every turn. Once per window is
@@ -468,7 +481,8 @@ function apply(ctx, config) {
     try { files = sessionFiles(); } catch { files = []; }
     for (const entry of files) {
       if (trigger !== undefined && entry.id === trigger.id) continue;
-      queue.push(logSession(entry.file, entry.id));
+      if (seen(entry.file, entry.mtimeMs)) continue;
+      queue.push(logSession(entry.file, entry.id, entry.mtimeMs));
     }
     return queue;
   }
@@ -556,7 +570,9 @@ function apply(ctx, config) {
         );
       }
       // Drained, or this source stopped moving: advance. Retrying a no-progress pass
-      // would spin on the same bytes forever.
+      // would spin on the same bytes forever. A source that drained at this revision
+      // is remembered so the next walk skips the inflate entirely.
+      if (report.remaining === 0 && session.file !== undefined) seenFiles.set(session.file, session.stamp);
       if (report.remaining === 0 || report.embedded === 0) job.index += 1;
       if (job.index >= job.queue.length) {
         ctx.logger.info(

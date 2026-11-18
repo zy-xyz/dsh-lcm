@@ -582,11 +582,18 @@ async function embedBackfill(session, cfg, options = {}) {
   //
   // Newest-first ordering is kept, so a capped pass still spends its calls on
   // the likeliest-needed half; the difference is that each pass advances.
+  // Membership comes from ONE query, not one await per candidate.
+  //
+  // `await cache.get(text)` is a primary-key hit, but a corpus pass asks it about
+  // ~150 000 texts, and the awaits alone dominated the slice: measured on the live
+  // host the maintenance chain held 1.1 cores while writing three rows a minute. The
+  // panel made the same switch earlier (144 096 lookups 15.9 s -> one SELECT 504 ms).
+  const known = await cache.knownIds();
   const pendingAll = [];
   let alreadyCached = 0;
   for (let index = candidates.length - 1; index >= 0; index -= 1) {
     const candidate = candidates[index];
-    if (await cache.get(candidate.text) !== null) alreadyCached += 1;
+    if (known.has(cache.key(candidate.text))) alreadyCached += 1;
     else pendingAll.push(candidate.text);
   }
   const pending = pendingAll.slice(0, limit);
