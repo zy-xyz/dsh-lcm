@@ -512,7 +512,11 @@ function apply(ctx, config) {
     embedJob = job;
 
     const schedule = (ms) => {
-      job.timer = setTimeout(() => { void tick(); }, ms);
+      job.timer = setTimeout(() => {
+       // A rejected tick used to end the chain with nothing written anywhere: the boot
+       // walk stopped after 90 texts with no `done` line and no log to read.
+       tick().catch((error) => noteSweep("error " + String(error instanceof Error ? error.message : error)));
+     }, ms);
       if (typeof job.timer.unref === "function") job.timer.unref();
     };
 
@@ -602,7 +606,7 @@ function apply(ctx, config) {
       }
       schedule(Math.max(EMBED_MIN_REST_MS, Math.round(EMBED_DUTY_RATIO * active)));
     };
-    void tick();
+    tick().catch((error) => noteSweep("error " + String(error instanceof Error ? error.message : error)));
   }
   // One sweep per activation, deferred so it never delays the row coming up.
   //
