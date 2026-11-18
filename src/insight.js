@@ -689,6 +689,20 @@ const RECHECK_INTERVAL_MS = 30_000;
  */
 let appSnapshot = { at: 0, body: null };
 
+/**
+ * Snapshots for the one-session view, keyed by session id.
+ *
+ * The live session's log grows on every turn, so `cachedReport` keys it by log length
+ * and re-analyses the whole log on every poll — measured 1.7-6.4 s of CPU per call
+ * (1.8-9.7 s of CPU time), which is the main reason an idle host with the panel open
+ * sat at 1.2 cores even after the app report was cached. Same half-minute tolerance:
+ * the numbers this view shows move on a compaction, not on a keystroke.
+ */
+const sessionSnapshots = new Map();
+
+/** How many session snapshots to keep; the panel shows one at a time. */
+const SESSION_SNAPSHOT_MAX = 8;
+
 /** Bumped when the persisted report shape changes; a mismatch is a cold start. */
 const REPORT_CACHE_VERSION = 1;
 
@@ -1375,6 +1389,11 @@ const vectorReadyForStats = resolved.enabled === true;
           sendJson(res, 400, { error: "id must be a session id" });
           return;
         }
+        const snapshot = sessionSnapshots.get(id);
+        if (snapshot !== undefined && Date.now() - snapshot.at < RECHECK_INTERVAL_MS) {
+          sendJson(res, 200, snapshot.body);
+          return;
+        }
         const entry = sessionFiles().find((candidate) => candidate.id === id);
         if (entry === undefined) {
           sendJson(res, 404, { error: "no log for " + id });
@@ -1407,7 +1426,7 @@ const vectorReadyForStats = resolved.enabled === true;
             coverageCacheDirty = true;
           }
         }
-        sendJson(res, 200, {
+        const body = {
           id,
           title: sessionTitle(titleDir, id),
           updatedAt: entry.mtimeMs,
@@ -1421,7 +1440,12 @@ const vectorReadyForStats = resolved.enabled === true;
           vectorDim: vector?.dim ?? null,
           rollups: rollups.get(id) ?? 0,
           assertions: assertions.get(id) ?? 0
-        });
+        };
+        if (sessionSnapshots.size >= SESSION_SNAPSHOT_MAX) {
+          sessionSnapshots.delete(sessionSnapshots.keys().next().value);
+        }
+        sessionSnapshots.set(id, { at: Date.now(), body });
+        sendJson(res, 200, body);
       }
     },
     // ── live configuration ────────────────────────────────────────────────
@@ -1453,6 +1477,7 @@ const vectorReadyForStats = resolved.enabled === true;
           const result = applyLive(body);
           // A config write must show up on the next poll, not after the snapshot expires.
           appSnapshot = { at: 0, body: null };
+          sessionSnapshots.clear();
           sendJson(res, 200, { ok: true, values: result.values });
         } catch (error) {
           // The row's own resolver message, verbatim: it names the key and the rule,
