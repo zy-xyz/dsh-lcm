@@ -18,6 +18,8 @@
  * `tools`.
  * @module dsh-lcm/tool
  */
+import fs from "node:fs";
+import os from "node:os";
 import z from "@deepseek-ai/schemastery";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -412,6 +414,12 @@ function apply(ctx, config) {
   /** When the last full-corpus sweep started; see `corpusQueue`. */
   let lastSweepAt = 0;
 
+  /** Where a walk's boundaries are recorded. The maintenance lines go to stdout,
+   *  which nothing in this profile can read back, so "is it walking or spinning"
+   *  was unanswerable from outside. */
+  const sweepLogPath = (process.env.DSH_HOME ?? os.homedir() + "/.dsh") + "/lcm-sweep.log";
+  const noteSweep = (line) => fs.appendFileSync(sweepLogPath, new Date().toISOString() + " " + line + "\n");
+
   /** File -> mtimeMs at which the sweep last DRAINED it. */
   const seenFiles = new Map();
   /** A full sweep walks every log, so it runs at most this often. */
@@ -500,7 +508,7 @@ function apply(ctx, config) {
   function driveEmbed(trigger) {
     if (resolved.enabled !== true) return;
     if (embedJob !== null) return;
-    const job = { timer: null, stopped: false, queue: null, index: 0, embedded: 0, slices: 0, lastLogAt: Date.now() };
+    const job = { timer: null, stopped: false, queue: null, index: 0, embedded: 0, slices: 0, lastLogAt: Date.now(), at: Date.now() };
     embedJob = job;
 
     const schedule = (ms) => {
@@ -511,7 +519,10 @@ function apply(ctx, config) {
     const tick = async () => {
       job.timer = null;
       if (job.stopped) return;
-      if (job.queue === null) job.queue = corpusQueue(trigger?.session ?? trigger);
+      if (job.queue === null) {
+        job.queue = corpusQueue(trigger?.session ?? trigger);
+        noteSweep("start sources=" + job.queue.length);
+      }
       const session = job.queue[job.index];
       if (session === undefined) {
         // A sweep always leaves one line, so silence can never again mean "it ran and
@@ -519,6 +530,7 @@ function apply(ctx, config) {
         ctx.logger.info(
           `lcm-embed maintenance: corpus sweep done, embedded ${job.embedded} text(s) across ${job.slices} slice(s), ${job.queue.length} source(s)`
         );
+        noteSweep("done embedded=" + job.embedded + " slices=" + job.slices + " sources=" + job.queue.length + " ms=" + (Date.now() - job.at));
         embedJob = null;
         return;
       }
@@ -584,6 +596,7 @@ function apply(ctx, config) {
         ctx.logger.info(
           `lcm-embed maintenance: corpus sweep done, embedded ${job.embedded} text(s) across ${job.slices} slice(s), ${job.queue.length} source(s)`
         );
+        noteSweep("done embedded=" + job.embedded + " slices=" + job.slices + " sources=" + job.queue.length + " ms=" + (Date.now() - job.at));
         embedJob = null;
         return;
       }
