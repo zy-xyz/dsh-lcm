@@ -1566,15 +1566,19 @@ export class LcmCompactionEngine extends CompactionEngine {
    * Force one useful idle-session compaction below the pressure threshold, and
    * resolve only after its standalone marker pair is durably checkpointed.
    * @param agent - idle agent whose next-turn admission this call reserves.
-   * @param signal - cancellation scoped to this compaction request.
+   * @param signal - the caller's request signal; deliberately NOT wired into the pass.
+   *   `/compact` is handed the UI request signal (`dsh-commands/lib/index.js:323`:
+   *   "cancellation signal owned by the UI request"), so honouring it meant a
+   *   browser reload, model switch or dropped stream killed a multi-minute sweep
+   *   that had already paid for its leaves. Agent teardown still cancels through
+   *   `agentSignal`.
    * @param sourceCommandId - initiating command identity for presentation correlation.
    * @returns the committed result, or `null` when no safe useful range exists.
    */
   compactNow(agent, signal, sourceCommandId) {
-    signal.throwIfAborted();
     try {
       return agent.runMaintenance(async (agentSignal) => {
-        const operationSignal = AbortSignal.any([agentSignal, signal]);
+        const operationSignal = agentSignal;
         try {
           operationSignal.throwIfAborted();
           const measurement = this.ctx.tokenMeter.measure(agent.session);
